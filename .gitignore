@@ -53,6 +53,12 @@ m4/lt~obsolete.m4
 # (which is called by configure script))
 Makefile
 
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
 # BMad
 _bmad/
 _bmad-output/
