@@ -52,3 +52,11 @@ m4/lt~obsolete.m4
 # can automatically generate from config.status script
 # (which is called by configure script))
 Makefile
+
+# BMad
+_bmad/
+_bmad-output/
+.claude/skills/bmad-*
+
+# Local agent collaboration protocol and handoffs
+.agent-collab/

@@ -1,0 +1,12 @@
+[importlinter]
+root_package = sts2_autotest
+
+[importlinter:contract:1]
+name = common layer isolation
+type = layers
+containers = sts2_autotest
+layers =
+    evidence | dsl | pytest_plugin | cli | config
+    core
+    adapters
+    common

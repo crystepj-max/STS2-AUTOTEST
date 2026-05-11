@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sts2-autotest"
+version = "0.1.0"
+description = "End-to-end automated testing framework for Slay the Spire 2 mods"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=7.0",
+    "pydantic>=2.0,<3.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "psutil>=5.9",
+    "mss>=9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.0",
+    "import-linter>=2.0",
+    "pytest-mock>=3.0",
+]
+
+[project.scripts]
+autotest = "sts2_autotest.cli.main:cli"
+
+[project.entry-points.pytest11]
+sts2_autotest = "sts2_autotest.pytest_plugin.plugin"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--ignore=src"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sts2_autotest"]
