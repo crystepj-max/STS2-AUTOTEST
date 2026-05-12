@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sts2_autotest.common.evidence import (
+    SCHEMA_VERSION,
     ArtifactsInfo,
     EnvironmentInfo,
     EvidencePack,
@@ -19,6 +20,7 @@ from sts2_autotest.common.evidence import (
     SummaryJson,
 )
 from sts2_autotest.common.logging import get_logger
+from sts2_autotest.common.types import EvidencePackagerSettings
 
 logger = get_logger("evidence.packager")
 
@@ -95,6 +97,9 @@ class EvidencePackager:
         summary_path = pack_dir / "summary.json"
         self._write_json(summary_path, summary.model_dump(mode="json"))
 
+        # AC6: automatically generate summary.md on pack creation
+        self._generate_report_for(pack_id, summary)
+
         self._enforce_retention()
 
         logger.info("Evidence pack created: %s", pack_dir)
@@ -131,6 +136,8 @@ class EvidencePackager:
                 ),
             })
             self._write_json(pack_dir / "summary.json", updated.model_dump(mode="json"))
+            # Refresh summary.md after artifacts update
+            self._generate_report_for(pack_id, updated)
 
     def read_summary(self, pack_id: str) -> SummaryJson | None:
         """Read and parse summary.json from an evidence pack."""
@@ -143,6 +150,144 @@ class EvidencePackager:
         except (json.JSONDecodeError, Exception) as exc:
             logger.warning("Cannot read summary.json for %s: %s", pack_id, exc)
             return None
+
+    def load_pack(self, pack_id: str) -> SummaryJson:
+        """Load and validate an evidence pack with schema version negotiation (FR64/AC3).
+
+        Reads summary.json, checks schema_version major version against
+        the framework's SCHEMA_VERSION. Rejects packs with a higher major
+        version to prevent silent data loss from unrecognized fields.
+
+        Raises:
+            FileNotFoundError: Pack or summary.json does not exist.
+            ValueError: Pack has a higher major schema version.
+        """
+        summary_path = self._evidence_dir / pack_id / "summary.json"
+        if not summary_path.is_file():
+            raise FileNotFoundError(f"Evidence pack not found: {pack_id}")
+
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        pack_version = data.get("schema_version", "0.0.0")
+        try:
+            pack_major = int(str(pack_version).split(".")[0])
+        except (ValueError, IndexError):
+            pack_major = 0
+
+        framework_major = int(SCHEMA_VERSION.split(".")[0])
+
+        if pack_major > framework_major:
+            raise ValueError(
+                f"Evidence pack '{pack_id}' has schema_version={pack_version} "
+                f"which is newer than framework's {SCHEMA_VERSION}. "
+                f"Please upgrade the framework."
+            )
+
+        return SummaryJson.model_validate(data)
+
+    def generate_report(self, pack_id: str) -> Path:
+        """Generate human-readable summary.md from summary.json (FR24/AC6).
+
+        Reads summary.json via load_pack() (schema negotiation), then
+        generates a markdown report. Also called automatically by
+        create_pack() and copy_artifacts() so callers do not need
+        to invoke it separately.
+
+        Uses atomic write to ensure complete-or-nothing.
+        """
+        summary = self.load_pack(pack_id)
+        return self._generate_report_for(pack_id, summary)
+
+    def _generate_report_for(self, pack_id: str, summary: SummaryJson) -> Path:
+        """Internal: generate summary.md from an already-loaded SummaryJson."""
+        pack_dir = self._evidence_dir / pack_id
+
+        lines: list[str] = []
+        lines.append(f"# Evidence Report: {summary.pack_id}")
+        lines.append("")
+
+        # Test run
+        run = summary.test_run
+        result_marker = {
+            "passed": "PASS",
+            "failed": "FAIL",
+        }.get(run.result, run.result.upper())
+        lines.append(f"## Test Run")
+        lines.append("")
+        lines.append(f"- **Result:** {result_marker}")
+        lines.append(f"- **Duration:** {run.duration_ms} ms")
+        lines.append(f"- **Run ID:** {run.run_id}")
+        lines.append("")
+
+        # Environment
+        env = summary.environment
+        lines.append("## Environment")
+        lines.append("")
+        lines.append(f"- **Framework:** {env.framework}")
+        lines.append(f"- **Adapter:** {env.adapter}")
+        lines.append(f"- **Game:** {env.game}")
+        lines.append(f"- **OS:** {env.os}")
+        lines.append(f"- **Python:** {env.python}")
+        lines.append("")
+
+        # Artifacts
+        arts = summary.artifacts
+        if arts.screenshots or arts.logs:
+            lines.append("## Artifacts")
+            lines.append("")
+            if arts.screenshots:
+                lines.append("### Screenshots")
+                for s in arts.screenshots:
+                    lines.append(f"- `{s}`")
+                lines.append("")
+            if arts.logs:
+                lines.append("### Logs")
+                for lg in arts.logs:
+                    lines.append(f"- `{lg}`")
+                lines.append("")
+
+        # Failure details with expected/actual comparison (AC6)
+        if summary.failure is not None:
+            fail = summary.failure
+            lines.append("## Failure Details")
+            lines.append("")
+            lines.append(f"- **Type:** `{fail.type}`")
+            lines.append(f"- **Message:** {fail.message}")
+            if fail.expected is not None or fail.actual is not None:
+                lines.append("")
+                lines.append("| | Value |")
+                lines.append("|---|---|")
+                lines.append(f"| **Expected** | `{fail.expected or ''}` |")
+                lines.append(f"| **Actual** | `{fail.actual or ''}` |")
+            if fail.stack_trace:
+                lines.append("")
+                lines.append("```")
+                lines.append(fail.stack_trace)
+                lines.append("```")
+            lines.append("")
+
+        report_path = pack_dir / "summary.md"
+        tmp = report_path.with_suffix(".md.tmp")
+        try:
+            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            os.replace(str(tmp), str(report_path))
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+        logger.info("Generated report: %s", report_path)
+        return report_path
+
+    @classmethod
+    def from_config(cls, settings: EvidencePackagerSettings) -> EvidencePackager:
+        """Construct EvidencePackager from an EvidencePackagerSettings protocol instance."""
+        return cls(
+            evidence_dir=Path(settings.evidence_dir),
+            retention=settings.evidence_retention,
+        )
 
     def list_packs(self) -> list[str]:
         """List all pack IDs in the evidence directory."""

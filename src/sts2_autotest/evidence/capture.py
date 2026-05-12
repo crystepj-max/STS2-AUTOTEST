@@ -14,7 +14,7 @@ import mss
 import mss.tools
 
 from sts2_autotest.common.logging import get_logger
-from sts2_autotest.common.types import CaptureResult
+from sts2_autotest.common.types import CaptureResult, ScreenCaptureSettings
 
 logger = get_logger("evidence.capture")
 
@@ -68,6 +68,22 @@ class ScreenCapture:
         self._min_file_bytes = min_file_bytes
         self._max_retries = max_retries
 
+    @classmethod
+    def from_config(cls, output_dir: Path, settings: ScreenCaptureSettings) -> "ScreenCapture":
+        """Construct ScreenCapture from a ScreenCaptureSettings protocol instance.
+
+        The settings protocol is implemented by FrameworkConfig, allowing
+        config-driven construction without evidence/ importing config/.
+        """
+        return cls(
+            output_dir,
+            rgb_threshold=settings.screenshot_rgb_threshold,
+            target_resolution=settings.screenshot_target_resolution,
+            resolution_tolerance=settings.screenshot_resolution_tolerance,
+            min_file_bytes=settings.screenshot_min_file_bytes,
+            max_retries=settings.screenshot_max_retries,
+        )
+
     # ── public API ──────────────────────────────────────────
 
     def capture_with_validation(
@@ -76,17 +92,37 @@ class ScreenCapture:
         """Full capture flow: foreground → capture → validate → retry.
 
         Returns CaptureResult with status ok/error/skipped.
+        AC5: If the window is not found (not visible, minimized, crashed),
+        returns SKIPPED immediately without blocking the test.
         """
-        foreground_ok = self._foreground_window(window_title)
-        if not foreground_ok:
+        foreground_result = self._foreground_window(window_title)
+        if foreground_result == "not_found":
             logger.warning(
-                "Window '%s' not found or cannot be foregrounded — "
+                "Window '%s' not found — skipping capture (AC5)",
+                window_title,
+            )
+            return CaptureResult(
+                status="skipped",
+                message=f"Window '{window_title}' not found or not visible",
+            )
+
+        if foreground_result == "foreground_failed":
+            logger.warning(
+                "Window '%s' found but foreground failed — "
                 "attempting capture anyway",
                 window_title,
             )
 
         for attempt in range(self._max_retries):
-            raw = self._raw_capture()
+            try:
+                raw = self._raw_capture()
+            except OSError as exc:
+                logger.warning("Capture failed with OSError: %s", exc)
+                return CaptureResult(
+                    status="skipped",
+                    message=f"Capture error: {exc}",
+                )
+
             if raw is None:
                 return CaptureResult(
                     status="skipped",
@@ -101,8 +137,17 @@ class ScreenCapture:
             # RGB validation on raw pixel data
             rgb_ok, rgb_count = self._count_distinct_rgb(bgra_data)
             res_ok = self._check_resolution(resolution)
+
             # Save to file for size check and persistence
-            path = self._save_screenshot(bgra_data, width, height, case_id)
+            try:
+                path = self._save_screenshot(bgra_data, width, height, case_id)
+            except OSError as exc:
+                logger.warning("Screenshot save failed: %s", exc)
+                return CaptureResult(
+                    status="skipped",
+                    message=f"Failed to save screenshot: {exc}",
+                )
+
             size_ok = path.stat().st_size >= self._min_file_bytes
 
             if rgb_ok and res_ok and size_ok:
@@ -158,7 +203,15 @@ class ScreenCapture:
 
         Returns CaptureResult. If mss fails, returns SKIPPED.
         """
-        raw = self._raw_capture()
+        try:
+            raw = self._raw_capture()
+        except OSError as exc:
+            logger.warning("Capture failed with OSError: %s", exc)
+            return CaptureResult(
+                status="skipped",
+                message=f"Capture error: {exc}",
+            )
+
         if raw is None:
             return CaptureResult(
                 status="skipped",
@@ -168,7 +221,14 @@ class ScreenCapture:
         bgra_data = raw.bgra
         width = raw.width
         height = raw.height
-        path = self._save_screenshot(bgra_data, width, height, case_id)
+        try:
+            path = self._save_screenshot(bgra_data, width, height, case_id)
+        except OSError as exc:
+            logger.warning("Screenshot save failed: %s", exc)
+            return CaptureResult(
+                status="skipped",
+                message=f"Failed to save screenshot: {exc}",
+            )
         return CaptureResult(
             status="ok",
             path=path,
@@ -198,20 +258,18 @@ class ScreenCapture:
     # ── internal: validation ────────────────────────────────
 
     def _count_distinct_rgb(self, bgra_data: bytes) -> tuple[bool, int]:
-        """Count distinct RGB values in raw BGRA pixel data.
+        """Count distinct RGB values across ALL pixels in BGRA data.
 
         BGRA format: each pixel is 4 bytes (B, G, R, A).
+        Traverses every pixel as required by AC2.
         Returns (is_valid, distinct_color_count).
+        Early-exits once threshold is met.
         """
         rgb_values: set[int] = set()
         pixel_count = len(bgra_data) // 4
 
-        # Sample pixels for efficiency: check every Nth pixel
-        step = max(1, pixel_count // 10000)
-        for i in range(0, pixel_count, step):
+        for i in range(pixel_count):
             offset = i * 4
-            if offset + 3 >= len(bgra_data):
-                break
             b = bgra_data[offset]
             g = bgra_data[offset + 1]
             r = bgra_data[offset + 2]
@@ -265,17 +323,23 @@ class ScreenCapture:
 
     # ── internal: window foreground ─────────────────────────
 
-    def _foreground_window(self, window_title: str) -> bool:
-        """Bring window to foreground and maximize via Win32 API."""
+    def _foreground_window(self, window_title: str) -> str:
+        """Bring window to foreground and maximize via Win32 API.
+
+        Returns:
+            "ok" — window found and foregrounded
+            "foreground_failed" — window found but foreground failed
+            "not_found" — window not found (AC5: SKIPPED)
+        """
         try:
             user32 = ctypes.windll.user32
             hwnd = user32.FindWindowW(None, window_title)
             if not hwnd:
-                return False
+                return "not_found"
             user32.ShowWindow(hwnd, _SW_RESTORE)
             user32.SetForegroundWindow(hwnd)
             user32.ShowWindow(hwnd, _SW_MAXIMIZE)
-            return True
+            return "ok"
         except Exception as exc:
             logger.warning("Win32 foreground failed: %s", exc)
-            return False
+            return "not_found"

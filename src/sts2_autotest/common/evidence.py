@@ -45,6 +45,8 @@ class FailureInfo(BaseModel):
     type: str
     message: str
     stack_trace: str | None = None
+    expected: str | None = None
+    actual: str | None = None
 
 
 class SummaryJson(BaseModel):

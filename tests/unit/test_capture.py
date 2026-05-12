@@ -41,6 +41,30 @@ def _make_bgra_varied(
     return bytes(pixels)
 
 
+def _make_bgra_small_region(
+    width: int = 1920, height: int = 1080
+) -> bytes:
+    """Create BGRA data that is mostly black but has a small colored region.
+
+    This tests that full-pixel traversal catches small colored areas
+    that sparse sampling would miss.
+    """
+    # Start with all black
+    pixels = bytearray(_make_bgra_data(width, height, color=(0, 0, 0)))
+    # Paint a 5x5 region with distinct colors in the middle
+    for dy in range(5):
+        for dx in range(5):
+            row = (height // 2) + dy
+            col = (width // 2) + dx
+            offset = (row * width + col) * 4
+            # Assign distinct colors: (r*50, g*30, b*20)
+            pixels[offset] = (dx * 20) % 256       # B
+            pixels[offset + 1] = (dy * 30) % 256   # G
+            pixels[offset + 2] = ((dx + dy) * 50) % 256  # R
+            pixels[offset + 3] = 255                # A
+    return bytes(pixels)
+
+
 def _make_screenshot_mock(
     bgra_data: bytes, width: int, height: int
 ) -> MagicMock:
@@ -50,6 +74,19 @@ def _make_screenshot_mock(
     shot.width = width
     shot.height = height
     return shot
+
+
+def _make_mss_mock(
+    bgra_data: bytes, width: int, height: int
+) -> MagicMock:
+    """Create a complete mock mss context manager."""
+    shot = _make_screenshot_mock(bgra_data, width, height)
+    sct = MagicMock()
+    sct.monitors = [{}, {"left": 0, "top": 0, "width": width, "height": height}]
+    sct.grab.return_value = shot
+    sct.__enter__ = MagicMock(return_value=sct)
+    sct.__exit__ = MagicMock(return_value=False)
+    return sct
 
 
 # ── _parse_resolution ────────────────────────────────────────
@@ -116,6 +153,66 @@ class TestScreenCaptureInit:
         assert sc._max_retries == 5
 
 
+# ── ScreenCapture.from_config ────────────────────────────────
+
+
+class TestScreenCaptureFromConfig:
+    def test_from_config_with_framework_config(self, tmp_path: Path) -> None:
+        from sts2_autotest.config.schema import FrameworkConfig
+
+        cfg = FrameworkConfig(
+            screenshot_rgb_threshold=7,
+            screenshot_target_resolution="1280x720",
+            screenshot_resolution_tolerance=5,
+            screenshot_min_file_bytes=2048,
+            screenshot_max_retries=1,
+        )
+        sc = ScreenCapture.from_config(tmp_path, cfg)
+        assert sc._rgb_threshold == 7
+        assert sc._target_resolution == (1280, 720)
+        assert sc._resolution_tolerance == 5
+        assert sc._min_file_bytes == 2048
+        assert sc._max_retries == 1
+
+    def test_from_config_defaults(self, tmp_path: Path) -> None:
+        from sts2_autotest.config.schema import FrameworkConfig
+
+        cfg = FrameworkConfig()
+        sc = ScreenCapture.from_config(tmp_path, cfg)
+        assert sc._rgb_threshold == 3
+        assert sc._target_resolution == (1920, 1080)
+        assert sc._resolution_tolerance == 2
+        assert sc._min_file_bytes == 1024
+        assert sc._max_retries == 3
+
+    def test_custom_config_affects_validation(self, tmp_path: Path) -> None:
+        """Prove custom FrameworkConfig values affect validation behavior."""
+        from sts2_autotest.config.schema import FrameworkConfig
+
+        # Use a high RGB threshold — 3-color image should fail
+        cfg_strict = FrameworkConfig(screenshot_rgb_threshold=10)
+        sc = ScreenCapture.from_config(tmp_path, cfg_strict)
+        bgra = _make_bgra_varied(num_colors=3)
+        ok, count = sc._count_distinct_rgb(bgra)
+        assert not ok  # 3 distinct colors < threshold 10
+
+        # Use default threshold — same image should pass
+        cfg_default = FrameworkConfig()
+        sc2 = ScreenCapture.from_config(tmp_path, cfg_default)
+        ok2, count2 = sc2._count_distinct_rgb(bgra)
+        assert ok2  # 3 distinct colors >= threshold 3
+
+    def test_custom_resolution_affects_check(self, tmp_path: Path) -> None:
+        """Prove custom resolution config affects resolution check."""
+        from sts2_autotest.config.schema import FrameworkConfig
+
+        # 1280x720 target — 1920x1080 should fail
+        cfg = FrameworkConfig(screenshot_target_resolution="1280x720")
+        sc = ScreenCapture.from_config(tmp_path, cfg)
+        assert not sc._check_resolution((1920, 1080))
+        assert sc._check_resolution((1280, 720))
+
+
 # ── _count_distinct_rgb ──────────────────────────────────────
 
 
@@ -143,7 +240,6 @@ class TestCountDistinctRgb:
 
     def test_threshold_exactly_met(self, tmp_path: Path) -> None:
         sc = ScreenCapture(tmp_path, rgb_threshold=3)
-        # Use num_colors coprime with sampling step to ensure all colors are sampled
         bgra = _make_bgra_varied(num_colors=7)
         ok, count = sc._count_distinct_rgb(bgra)
         assert ok
@@ -161,6 +257,16 @@ class TestCountDistinctRgb:
         ok, count = sc._count_distinct_rgb(bgra)
         assert not ok
         assert count == 4
+
+    def test_full_traversal_catches_small_region(self, tmp_path: Path) -> None:
+        """Full-pixel traversal must detect a small colored region in
+        an otherwise all-black image. This would fail under sparse sampling."""
+        sc = ScreenCapture(tmp_path, rgb_threshold=3)
+        bgra = _make_bgra_small_region(width=1920, height=1080)
+        ok, count = sc._count_distinct_rgb(bgra)
+        # The small region adds multiple distinct colors — should be detected
+        assert ok
+        assert count >= 3
 
 
 # ── _check_resolution ────────────────────────────────────────
@@ -193,7 +299,6 @@ class TestCheckResolution:
 class TestSaveScreenshot:
     @patch("sts2_autotest.evidence.capture.mss.tools.to_png")
     def test_creates_file(self, mock_to_png: MagicMock, tmp_path: Path) -> None:
-        # mss.tools.to_png returns PNG bytes
         mock_to_png.return_value = b"\x89PNG\r\n\x1a\n" + b"\x00" * 2000
         sc = ScreenCapture(tmp_path)
         bgra = _make_bgra_data()
@@ -209,7 +314,6 @@ class TestSaveScreenshot:
         sc = ScreenCapture(tmp_path)
         bgra = _make_bgra_data()
         path = sc._save_screenshot(bgra, 1920, 1080, "my-test")
-        # Should contain case_id + UTC timestamp + ms
         name = path.stem
         assert name.startswith("my-test_")
         parts = name.split("_")
@@ -241,13 +345,7 @@ class TestSaveScreenshot:
 class TestCapture:
     @patch("sts2_autotest.evidence.capture.mss.mss")
     def test_success(self, mock_mss_cls: MagicMock, tmp_path: Path) -> None:
-        bgra = _make_bgra_varied()
-        shot = _make_screenshot_mock(bgra, 1920, 1080)
-        sct = MagicMock()
-        sct.monitors = [{}, {"left": 0, "top": 0, "width": 1920, "height": 1080}]
-        sct.grab.return_value = shot
-        sct.__enter__ = MagicMock(return_value=sct)
-        sct.__exit__ = MagicMock(return_value=False)
+        sct = _make_mss_mock(_make_bgra_varied(), 1920, 1080)
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
@@ -260,7 +358,7 @@ class TestCapture:
     @patch("sts2_autotest.evidence.capture.mss.mss")
     def test_no_monitor(self, mock_mss_cls: MagicMock, tmp_path: Path) -> None:
         sct = MagicMock()
-        sct.monitors = [{}]  # Only virtual screen, no physical monitors
+        sct.monitors = [{}]
         sct.__enter__ = MagicMock(return_value=sct)
         sct.__exit__ = MagicMock(return_value=False)
         mock_mss_cls.return_value = sct
@@ -279,6 +377,21 @@ class TestCapture:
 
         assert result.status == "skipped"
 
+    @patch("sts2_autotest.evidence.capture.mss.mss")
+    def test_save_oserror_returns_skipped(
+        self, mock_mss_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """Non-blocking OSError from save returns SKIPPED (AC5/NB1)."""
+        sct = _make_mss_mock(_make_bgra_varied(), 1920, 1080)
+        mock_mss_cls.return_value = sct
+
+        sc = ScreenCapture(tmp_path)
+        with patch.object(sc, "_save_screenshot", side_effect=OSError("disk full")):
+            result = sc.capture("TestWindow", "test-case")
+
+        assert result.status == "skipped"
+        assert "disk full" in (result.message or "")
+
 
 # ── capture_with_validation (full flow) ──────────────────────
 
@@ -286,17 +399,12 @@ class TestCapture:
 class TestCaptureWithValidation:
     @patch("sts2_autotest.evidence.capture.mss.mss")
     def test_valid_capture(self, mock_mss_cls: MagicMock, tmp_path: Path) -> None:
-        bgra = _make_bgra_varied(num_colors=10)
-        shot = _make_screenshot_mock(bgra, 1920, 1080)
-        sct = MagicMock()
-        sct.monitors = [{}, {"left": 0, "top": 0, "width": 1920, "height": 1080}]
-        sct.grab.return_value = shot
-        sct.__enter__ = MagicMock(return_value=sct)
-        sct.__exit__ = MagicMock(return_value=False)
+        sct = _make_mss_mock(_make_bgra_varied(num_colors=10), 1920, 1080)
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
-        result = sc.capture_with_validation("TestWindow", "test-case")
+        with patch.object(sc, "_foreground_window", return_value="ok"):
+            result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "ok"
         assert result.path is not None
@@ -309,20 +417,15 @@ class TestCaptureWithValidation:
         self, mock_mss_cls: MagicMock, tmp_path: Path
     ) -> None:
         bgra = _make_bgra_data(color=(0, 0, 0))  # All black
-        shot = _make_screenshot_mock(bgra, 1920, 1080)
-        sct = MagicMock()
-        sct.monitors = [{}, {"left": 0, "top": 0, "width": 1920, "height": 1080}]
-        sct.grab.return_value = shot
-        sct.__enter__ = MagicMock(return_value=sct)
-        sct.__exit__ = MagicMock(return_value=False)
+        sct = _make_mss_mock(bgra, 1920, 1080)
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path, max_retries=3)
-        result = sc.capture_with_validation("TestWindow", "test-case")
+        with patch.object(sc, "_foreground_window", return_value="ok"):
+            result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "error"
         assert "RGB validation failed" in (result.message or "")
-        # Should have attempted 3 captures (retries)
         assert sct.grab.call_count == 3
 
     @patch("sts2_autotest.evidence.capture.mss.mss")
@@ -330,37 +433,46 @@ class TestCaptureWithValidation:
         self, mock_mss_cls: MagicMock, tmp_path: Path
     ) -> None:
         bgra = _make_bgra_varied(num_colors=10)
-        # Wrong resolution (800x600)
-        shot = _make_screenshot_mock(bgra, 800, 600)
-        sct = MagicMock()
-        sct.monitors = [{}, {"left": 0, "top": 0, "width": 800, "height": 600}]
-        sct.grab.return_value = shot
-        sct.__enter__ = MagicMock(return_value=sct)
-        sct.__exit__ = MagicMock(return_value=False)
+        sct = _make_mss_mock(bgra, 800, 600)
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path, max_retries=1)
-        result = sc.capture_with_validation("TestWindow", "test-case")
+        with patch.object(sc, "_foreground_window", return_value="ok"):
+            result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "error"
         assert "Resolution out of tolerance" in (result.message or "")
 
     @patch("sts2_autotest.evidence.capture.mss.mss")
-    def test_window_not_found_still_captures(
+    def test_window_not_found_returns_skipped(
         self, mock_mss_cls: MagicMock, tmp_path: Path
     ) -> None:
+        """AC5: Window not found → SKIPPED, not ok."""
         bgra = _make_bgra_varied(num_colors=10)
-        shot = _make_screenshot_mock(bgra, 1920, 1080)
-        sct = MagicMock()
-        sct.monitors = [{}, {"left": 0, "top": 0, "width": 1920, "height": 1080}]
-        sct.grab.return_value = shot
-        sct.__enter__ = MagicMock(return_value=sct)
-        sct.__exit__ = MagicMock(return_value=False)
+        sct = _make_mss_mock(bgra, 1920, 1080)
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
-        with patch.object(sc, "_foreground_window", return_value=False):
+        with patch.object(sc, "_foreground_window", return_value="not_found"):
             result = sc.capture_with_validation("MissingWindow", "test-case")
+
+        assert result.status == "skipped"
+        assert "not found" in (result.message or "").lower()
+        # Must NOT attempt capture
+        sct.grab.assert_not_called()
+
+    @patch("sts2_autotest.evidence.capture.mss.mss")
+    def test_foreground_failed_still_captures(
+        self, mock_mss_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """Window found but foreground failed → still attempt capture (warning)."""
+        bgra = _make_bgra_varied(num_colors=10)
+        sct = _make_mss_mock(bgra, 1920, 1080)
+        mock_mss_cls.return_value = sct
+
+        sc = ScreenCapture(tmp_path)
+        with patch.object(sc, "_foreground_window", return_value="foreground_failed"):
+            result = sc.capture_with_validation("TestWindow", "test-case")
 
         # Should still succeed — foreground failure is non-blocking
         assert result.status == "ok"
@@ -376,7 +488,8 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
-        result = sc.capture_with_validation("TestWindow", "test-case")
+        with patch.object(sc, "_foreground_window", return_value="ok"):
+            result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "skipped"
 
@@ -399,10 +512,27 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path, max_retries=2)
-        result = sc.capture_with_validation("TestWindow", "test-case")
+        with patch.object(sc, "_foreground_window", return_value="ok"):
+            result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "ok"
         assert sct.grab.call_count == 2
+
+    @patch("sts2_autotest.evidence.capture.mss.mss")
+    def test_save_oserror_returns_skipped(
+        self, mock_mss_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """Non-blocking OSError from save in validation flow (NB1)."""
+        sct = _make_mss_mock(_make_bgra_varied(), 1920, 1080)
+        mock_mss_cls.return_value = sct
+
+        sc = ScreenCapture(tmp_path)
+        with patch.object(sc, "_foreground_window", return_value="ok"), \
+             patch.object(sc, "_save_screenshot", side_effect=OSError("no space")):
+            result = sc.capture_with_validation("TestWindow", "test-case")
+
+        assert result.status == "skipped"
+        assert "no space" in (result.message or "")
 
 
 # ── _foreground_window (Win32) ───────────────────────────────
@@ -416,7 +546,7 @@ class TestForegroundWindow:
         mock_ctypes.windll.user32 = mock_user32
 
         sc = ScreenCapture(tmp_path)
-        assert sc._foreground_window("TestWindow") is True
+        assert sc._foreground_window("TestWindow") == "ok"
         mock_user32.SetForegroundWindow.assert_called_once_with(12345)
 
     @patch("sts2_autotest.evidence.capture.ctypes")
@@ -426,14 +556,14 @@ class TestForegroundWindow:
         mock_ctypes.windll.user32 = mock_user32
 
         sc = ScreenCapture(tmp_path)
-        assert sc._foreground_window("MissingWindow") is False
+        assert sc._foreground_window("MissingWindow") == "not_found"
 
     @patch("sts2_autotest.evidence.capture.ctypes")
     def test_win32_exception(self, mock_ctypes: MagicMock, tmp_path: Path) -> None:
         mock_ctypes.windll = AttributeError("No windll")
 
         sc = ScreenCapture(tmp_path)
-        assert sc._foreground_window("TestWindow") is False
+        assert sc._foreground_window("TestWindow") == "not_found"
 
 
 # ── FrameworkConfig screenshot fields ────────────────────────
@@ -481,6 +611,16 @@ class TestFrameworkConfigScreenshot:
 
         with pytest.raises(ValidationError):
             FrameworkConfig(screenshot_resolution_tolerance=-1)
+
+    def test_implements_settings_protocol(self) -> None:
+        """FrameworkConfig satisfies ScreenCaptureSettings protocol."""
+        from sts2_autotest.common.types import ScreenCaptureSettings
+        from sts2_autotest.config.schema import FrameworkConfig
+
+        cfg = FrameworkConfig()
+        # Structural subtyping — this should work without explicit inheritance
+        settings: ScreenCaptureSettings = cfg
+        assert settings.screenshot_rgb_threshold == 3
 
 
 # ── RealEvidenceHooks ────────────────────────────────────────

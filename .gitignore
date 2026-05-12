@@ -58,11 +58,15 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.mypy_cache/
+.import_linter_cache/
 
 # BMad
 _bmad/
 _bmad-output/
-.claude/skills/bmad-*
+
+# Claude Code local config
+.claude/
 
 # Local agent collaboration protocol and handoffs
 .agent-collab/

@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from sts2_autotest.common.evidence import FailureInfo
+from sts2_autotest.common.evidence import FailureInfo, SCHEMA_VERSION
+from sts2_autotest.common.types import EvidencePackagerSettings
 from sts2_autotest.evidence.packager import EvidencePackager
 
 
@@ -71,6 +72,21 @@ class TestCreatePack:
         import platform
         assert data["environment"]["python"] == platform.python_version()
 
+    def test_create_pack_auto_generates_summary_md(self, tmp_path: Path) -> None:
+        """AC6 regression: create_pack() automatically produces summary.md."""
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_ac6_auto")
+        assert (tmp_path / "run_ac6_auto" / "summary.md").is_file()
+
+    def test_create_pack_with_failure_auto_generates_md(self, tmp_path: Path) -> None:
+        """AC6 regression: even failed packs get summary.md automatically."""
+        pkgr = EvidencePackager(tmp_path)
+        failure = FailureInfo(type="AssertionError", message="x != y")
+        pkgr.create_pack("run_ac6_fail", run_result="failed", failure=failure)
+        assert (tmp_path / "run_ac6_fail" / "summary.md").is_file()
+        content = (tmp_path / "run_ac6_fail" / "summary.md").read_text(encoding="utf-8")
+        assert "FAIL" in content
+
 
 # ── copy_artifacts ──────────────────────────────────────────
 
@@ -122,6 +138,18 @@ class TestCopyArtifacts:
         pkgr.copy_artifacts("run_013", screenshots=[missing])
         # Should not raise, just skip
         assert not (tmp_path / "run_013" / "screenshots" / "missing.png").exists()
+
+    def test_copy_artifacts_refreshes_summary_md(self, tmp_path: Path) -> None:
+        """AC6 regression: copy_artifacts() refreshes summary.md with artifact info."""
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_art_refresh")
+
+        ss = tmp_path / "shot.png"
+        ss.write_bytes(b"\x89PNG")
+        pkgr.copy_artifacts("run_art_refresh", screenshots=[ss])
+
+        content = (tmp_path / "run_art_refresh" / "summary.md").read_text(encoding="utf-8")
+        assert "shot.png" in content
 
 
 # ── read_summary ────────────────────────────────────────────
@@ -195,3 +223,201 @@ class TestRetention:
         pkgr.create_pack("run_02")
         assert (tmp_path / "run_01").is_dir()
         assert (tmp_path / "run_02").is_dir()
+
+
+# ── schema version negotiation (AC3/FR64) ───────────────────
+
+class TestSchemaVersionNegotiation:
+    def test_same_major_version_loads(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_v1")
+        summary = pkgr.load_pack("run_v1")
+        assert summary.pack_id == "run_v1"
+        assert summary.schema_version == SCHEMA_VERSION
+
+    def test_higher_major_version_rejected(self, tmp_path: Path) -> None:
+        pack_dir = tmp_path / "run_future"
+        pack_dir.mkdir()
+        (pack_dir / "screenshots").mkdir()
+        (pack_dir / "logs").mkdir()
+        (pack_dir / "reports").mkdir()
+        # Write a summary with a future major version
+        data = {
+            "schema_version": "99.0.0",
+            "pack_id": "run_future",
+            "test_run": {"run_id": "run_future", "result": "passed", "duration_ms": 100},
+            "environment": {
+                "framework": "fw", "adapter": "cli", "game": "game",
+                "os": "test", "python": "3.11",
+            },
+        }
+        (pack_dir / "summary.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+        pkgr = EvidencePackager(tmp_path)
+        with pytest.raises(ValueError, match="upgrade the framework"):
+            pkgr.load_pack("run_future")
+
+    def test_lower_major_version_loads(self, tmp_path: Path) -> None:
+        pack_dir = tmp_path / "run_old"
+        pack_dir.mkdir()
+        (pack_dir / "screenshots").mkdir()
+        (pack_dir / "logs").mkdir()
+        (pack_dir / "reports").mkdir()
+        data = {
+            "schema_version": "0.5.0",
+            "pack_id": "run_old",
+            "test_run": {"run_id": "run_old", "result": "passed", "duration_ms": 50},
+            "environment": {
+                "framework": "fw", "adapter": "cli", "game": "game",
+                "os": "test", "python": "3.10",
+            },
+        }
+        (pack_dir / "summary.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+        pkgr = EvidencePackager(tmp_path)
+        summary = pkgr.load_pack("run_old")
+        assert summary.pack_id == "run_old"
+
+    def test_missing_pack_raises_file_not_found(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        with pytest.raises(FileNotFoundError, match="not found"):
+            pkgr.load_pack("nonexistent")
+
+    def test_invalid_schema_version_treated_as_zero(self, tmp_path: Path) -> None:
+        pack_dir = tmp_path / "run_bad_ver"
+        pack_dir.mkdir()
+        data = {
+            "schema_version": "not.a.version",
+            "pack_id": "run_bad_ver",
+            "test_run": {"run_id": "run_bad_ver", "result": "passed", "duration_ms": 10},
+            "environment": {
+                "framework": "fw", "adapter": "cli", "game": "game",
+                "os": "test", "python": "3.11",
+            },
+        }
+        (pack_dir / "summary.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+        pkgr = EvidencePackager(tmp_path)
+        # version treated as major=0, which is <= current, should load fine
+        summary = pkgr.load_pack("run_bad_ver")
+        assert summary.pack_id == "run_bad_ver"
+
+
+# ── generate_report (AC6/FR24) ──────────────────────────────
+
+class TestGenerateReport:
+    def test_generates_summary_md(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_r1", run_result="passed", duration_ms=500)
+        report_path = pkgr.generate_report("run_r1")
+
+        assert report_path.is_file()
+        assert report_path.name == "summary.md"
+        content = report_path.read_text(encoding="utf-8")
+        assert "# Evidence Report: run_r1" in content
+        assert "PASS" in content
+        assert "500 ms" in content
+
+    def test_report_contains_environment(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path, framework="test-fw", adapter="cli")
+        pkgr.create_pack("run_r2")
+        pkgr.generate_report("run_r2")
+
+        content = (tmp_path / "run_r2" / "summary.md").read_text(encoding="utf-8")
+        assert "test-fw" in content
+        assert "cli" in content
+
+    def test_report_includes_failure_details(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        failure = FailureInfo(
+            type="AssertionError",
+            message="Expected 5 got 3",
+            stack_trace="file.py:42\nassert x == 5",
+        )
+        pkgr.create_pack("run_r3", run_result="failed", failure=failure)
+        pkgr.generate_report("run_r3")
+
+        content = (tmp_path / "run_r3" / "summary.md").read_text(encoding="utf-8")
+        assert "FAIL" in content
+        assert "AssertionError" in content
+        assert "Expected 5 got 3" in content
+        assert "file.py:42" in content
+
+    def test_report_includes_artifacts(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_r4")
+        ss = tmp_path / "shot.png"
+        ss.write_bytes(b"\x89PNG")
+        lg = tmp_path / "game.log"
+        lg.write_text("log", encoding="utf-8")
+        pkgr.copy_artifacts("run_r4", screenshots=[ss], logs=[lg])
+        pkgr.generate_report("run_r4")
+
+        content = (tmp_path / "run_r4" / "summary.md").read_text(encoding="utf-8")
+        assert "shot.png" in content
+        assert "game.log" in content
+
+    def test_report_atomic_write(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_r5")
+        pkgr.generate_report("run_r5")
+        # No .tmp file left behind
+        assert not (tmp_path / "run_r5" / "summary.md.tmp").exists()
+
+    def test_report_fails_on_missing_pack(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        with pytest.raises(FileNotFoundError):
+            pkgr.generate_report("nonexistent")
+
+    def test_report_includes_expected_actual_comparison(self, tmp_path: Path) -> None:
+        """AC6 regression: FAIL report contains structured expected/actual table."""
+        pkgr = EvidencePackager(tmp_path)
+        failure = FailureInfo(
+            type="AssertionError",
+            message="HP mismatch",
+            expected="5",
+            actual="3",
+        )
+        pkgr.create_pack("run_exp_act", run_result="failed", failure=failure)
+
+        content = (tmp_path / "run_exp_act" / "summary.md").read_text(encoding="utf-8")
+        assert "**Expected**" in content
+        assert "**Actual**" in content
+        assert "`5`" in content
+        assert "`3`" in content
+
+    def test_report_without_expected_actual_still_works(self, tmp_path: Path) -> None:
+        """FailureInfo without expected/actual does not produce empty table."""
+        pkgr = EvidencePackager(tmp_path)
+        failure = FailureInfo(type="RuntimeError", message="timeout")
+        pkgr.create_pack("run_no_ea", run_result="failed", failure=failure)
+
+        content = (tmp_path / "run_no_ea" / "summary.md").read_text(encoding="utf-8")
+        assert "FAIL" in content
+        assert "**Expected**" not in content
+
+
+# ── from_config ─────────────────────────────────────────────
+
+class TestFromConfig:
+    def test_constructs_from_config(self, tmp_path: Path) -> None:
+        class _Cfg:
+            evidence_dir = str(tmp_path)
+            evidence_retention = 15
+
+        pkgr = EvidencePackager.from_config(_Cfg())
+        assert pkgr._evidence_dir == tmp_path
+        assert pkgr._retention == 15
+
+    def test_from_config_creates_pack(self, tmp_path: Path) -> None:
+        class _Cfg:
+            evidence_dir = str(tmp_path / "ev")
+            evidence_retention = 5
+
+        pkgr = EvidencePackager.from_config(_Cfg())
+        pack_dir = pkgr.create_pack("cfg_test")
+        assert pack_dir.is_dir()
+        assert (pack_dir / "summary.json").is_file()

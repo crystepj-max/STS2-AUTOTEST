@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from sts2_autotest.common.types import MetricsCollectorSettings
 from sts2_autotest.evidence.metrics import MetricEvent, MetricsCollector
 
 
@@ -187,6 +188,39 @@ class TestFlush:
         tmp_files = list(tmp_path.glob("*.tmp"))
         assert len(tmp_files) == 0
 
+    def test_flush_true_append_does_not_reread_file(self, tmp_path: Path) -> None:
+        """AC3 regression: flush cost is O(buffer) not O(file_size).
+
+        Pre-populate a large JSONL file, then flush new events and verify
+        only new lines are added (file grows, old content untouched).
+        """
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.flush()
+
+        # Simulate existing large file by writing 1000 lines directly
+        lines_before = mc.file_path.read_text(encoding="utf-8").strip().splitlines()
+        for i in range(1000):
+            mc.file_path.open("a", encoding="utf-8").write(
+                json.dumps({"event_type": "bulk", "data": {"i": i}}) + "\n"
+            )
+
+        file_size_before = mc.file_path.stat().st_size
+
+        # Flush one new event
+        mc.record("after_bulk")
+        mc.flush()
+
+        file_size_after = mc.file_path.stat().st_size
+        # File should have grown by only ~one line, not rewritten
+        assert file_size_after > file_size_before
+
+        # Original first line untouched
+        all_lines = mc.file_path.read_text(encoding="utf-8").strip().splitlines()
+        assert json.loads(all_lines[0])["event_type"] == "session_start"
+        # Last line is the new event
+        assert json.loads(all_lines[-1])["event_type"] == "after_bulk"
+
 
 # ── JSONL format ────────────────────────────────────────────
 
@@ -211,3 +245,180 @@ class TestJsonlFormat:
         ts = data["timestamp"]
         assert ts.endswith("Z")
         assert "T" in ts
+
+
+# ── record_adapter_command (AC1) ────────────────────────────
+
+class TestRecordAdapterCommand:
+    def test_success_command(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_adapter_command("get_state", duration_ms=50, success=True)
+        mc.flush()
+        data = json.loads(mc.file_path.read_text(encoding="utf-8").strip().splitlines()[1])
+        assert data["event_type"] == "adapter_command"
+        assert data["data"]["command"] == "get_state"
+        assert data["data"]["duration_ms"] == 50
+        assert data["data"]["success"] is True
+
+    def test_failed_command(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_adapter_command("click", duration_ms=120, success=False)
+        mc.flush()
+        data = json.loads(mc.file_path.read_text(encoding="utf-8").strip().splitlines()[1])
+        assert data["data"]["success"] is False
+
+
+# ── record_state_transition (AC1) ────────────────────────────
+
+class TestRecordStateTransition:
+    def test_transition_event(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_state_transition("MAIN_MENU", "COMBAT", duration_ms=200)
+        mc.flush()
+        data = json.loads(mc.file_path.read_text(encoding="utf-8").strip().splitlines()[1])
+        assert data["event_type"] == "state_transition"
+        assert data["data"]["from_state"] == "MAIN_MENU"
+        assert data["data"]["to_state"] == "COMBAT"
+        assert data["data"]["duration_ms"] == 200
+
+    def test_transition_no_duration(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_state_transition("A", "B")
+        mc.flush()
+        data = json.loads(mc.file_path.read_text(encoding="utf-8").strip().splitlines()[1])
+        assert data["data"]["duration_ms"] == 0
+
+
+# ── record_screenshot (AC1) ──────────────────────────────────
+
+class TestRecordScreenshot:
+    def test_screenshot_event(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_screenshot("case_1", duration_ms=300, status="ok")
+        mc.flush()
+        data = json.loads(mc.file_path.read_text(encoding="utf-8").strip().splitlines()[1])
+        assert data["event_type"] == "screenshot"
+        assert data["data"]["case_id"] == "case_1"
+        assert data["data"]["duration_ms"] == 300
+        assert data["data"]["status"] == "ok"
+
+
+# ── record_resource_usage (AC1) ──────────────────────────────
+
+class TestRecordResourceUsage:
+    def test_resource_event(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_resource_usage("memory_mb", 256.5)
+        mc.flush()
+        data = json.loads(mc.file_path.read_text(encoding="utf-8").strip().splitlines()[1])
+        assert data["event_type"] == "resource_usage"
+        assert data["data"]["metric"] == "memory_mb"
+        assert data["data"]["value"] == 256.5
+
+
+# ── get_summary (AC1) ────────────────────────────────────────
+
+class TestGetSummary:
+    def test_empty_summary(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        summary = mc.get_summary()
+        assert summary["total_cases"] == 0
+        assert summary["passed"] == 0
+        assert summary["failed"] == 0
+        assert summary["adapter_errors"] == 0
+
+    def test_summary_with_mixed_events(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_case_result("c1", "passed", duration_ms=100)
+        mc.record_case_result("c2", "failed", duration_ms=200, error_message="err")
+        mc.record_case_result("c3", "passed", duration_ms=50)
+        mc.record_adapter_command("get_state", 10, success=True)
+        mc.record_adapter_command("click", 20, success=False)
+        mc.record_state_transition("A", "B")
+        mc.record_state_transition("B", "C")
+        mc.record_screenshot("c1", 300, "ok")
+        mc.record_screenshot("c2", 500, "ok")
+
+        summary = mc.get_summary()
+        assert summary["total_cases"] == 3
+        assert summary["passed"] == 2
+        assert summary["failed"] == 1
+        assert summary["total_duration_ms"] == 350
+        assert summary["adapter_commands"] == 2
+        assert summary["adapter_errors"] == 1
+        assert summary["state_transitions"] == 2
+        assert summary["screenshots"] == 2
+        assert summary["avg_screenshot_ms"] == 400.0
+
+    def test_summary_no_avg_when_no_screenshots(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_case_result("c1", "passed", duration_ms=100)
+        summary = mc.get_summary()
+        assert "avg_screenshot_ms" not in summary
+
+    def test_summary_survives_flush(self, tmp_path: Path) -> None:
+        """NB2 regression: running counters persist across flush()."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_case_result("c1", "passed", duration_ms=100)
+        mc.flush()
+        summary = mc.get_summary()
+        assert summary["total_cases"] == 1
+        assert summary["passed"] == 1
+
+    def test_summary_includes_resource_usage(self, tmp_path: Path) -> None:
+        """NB1 regression: resource_usage events appear in summary."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_resource_usage("memory_mb", 256.0)
+        mc.record_resource_usage("memory_mb", 300.0)
+        mc.record_resource_usage("cpu_pct", 45.5)
+        summary = mc.get_summary()
+        ru = summary["resource_usage"]
+        assert isinstance(ru, dict)
+        assert ru["memory_mb"]["latest"] == 300.0
+        assert ru["memory_mb"]["avg"] == 278.0
+        assert ru["memory_mb"]["count"] == 2
+        assert ru["cpu_pct"]["latest"] == 45.5
+
+    def test_summary_no_resource_usage_when_none(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record_case_result("c1", "passed", duration_ms=10)
+        summary = mc.get_summary()
+        assert "resource_usage" not in summary
+
+
+# ── from_config ──────────────────────────────────────────────
+
+class TestFromConfig:
+    def test_constructs_from_config(self, tmp_path: Path) -> None:
+        class _Cfg:
+            evidence_dir = str(tmp_path)
+            metrics_filename = "custom_metrics.jsonl"
+
+        mc = MetricsCollector.from_config(_Cfg())
+        assert mc.file_path == tmp_path / "custom_metrics.jsonl"
+
+    def test_from_config_records_events(self, tmp_path: Path) -> None:
+        class _Cfg:
+            evidence_dir = str(tmp_path / "ev")
+            metrics_filename = "metrics.jsonl"
+
+        mc = MetricsCollector.from_config(_Cfg())
+        mc.start_session("s1")
+        mc.record_case_result("c1", "passed", duration_ms=50)
+        mc.flush()
+        assert mc.file_path.is_file()
+        lines = mc.file_path.read_text(encoding="utf-8").strip().splitlines()
+        data = json.loads(lines[0])
+        assert data["event_type"] == "session_start"
+        assert json.loads(lines[1])["event_type"] == "case_result"

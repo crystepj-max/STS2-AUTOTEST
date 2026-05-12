@@ -1,7 +1,15 @@
-"""Tests for adapters/cli_mod.py — CliModAdapter (MVP stub)."""
+"""Tests for adapters/cli_mod.py — CliModAdapter (real CLI subprocess).
+
+Unit tests mock subprocess.Popen to avoid requiring a real STS2-Cli-Mod
+installation. Integration tests (tests/integration/) test against the
+real CLI.
+"""
 
 import asyncio
+import json
+import subprocess
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -16,6 +24,30 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
+def _mock_popen_ok(data: dict[str, Any]) -> MagicMock:
+    """Create a mock Popen process with successful CLI response."""
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (
+        json.dumps({"ok": True, "data": data}).encode("utf-8"),
+        b"",
+    )
+    mock_proc.returncode = 0
+    return mock_proc
+
+
+def _mock_popen_error(
+    returncode: int = 1, stderr: str = "", stdout: str = ""
+) -> MagicMock:
+    """Create a mock Popen process with failed CLI response."""
+    mock_proc = MagicMock()
+    mock_proc.communicate.return_value = (
+        stdout.encode("utf-8"),
+        stderr.encode("utf-8"),
+    )
+    mock_proc.returncode = returncode
+    return mock_proc
+
+
 @pytest.fixture
 def adapter() -> CliModAdapter:
     return CliModAdapter(cli_path="sts2", timeout=30.0)
@@ -25,7 +57,7 @@ class TestCliModAdapterInit:
     """Constructor and defaults."""
 
     def test_defaults(self) -> None:
-        a = CliModAdapter()
+        a = CliModAdapter(cli_path="sts2", timeout=30.0)
         assert a.cli_path == "sts2"
         assert a.timeout == 30.0
 
@@ -38,67 +70,153 @@ class TestCliModAdapterInit:
 class TestHealthCheck:
     """health_check() tests."""
 
-    def test_returns_healthy(self, adapter: CliModAdapter) -> None:
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_healthy_when_ping_ok(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({})
         result = _run(adapter.health_check())
         assert isinstance(result, HealthStatus)
         assert result.healthy is True
+        mock_popen.assert_called_once()
+        cmd = mock_popen.call_args[0][0]
+        assert "ping" in cmd
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_unhealthy_when_cli_fails(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_error(returncode=1)
+        result = _run(adapter.health_check())
+        assert isinstance(result, HealthStatus)
+        assert result.healthy is False
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_unhealthy_when_file_not_found(self, mock_popen: MagicMock) -> None:
+        a = CliModAdapter(cli_path="/nonexistent/sts2", timeout=5.0)
+        mock_popen.side_effect = FileNotFoundError()
+        result = _run(a.health_check())
+        assert result.healthy is False
 
 
 class TestGetState:
     """get_state() tests."""
 
-    def test_returns_game_state(self, adapter: CliModAdapter) -> None:
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_returns_game_state_from_cli(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
         result = _run(adapter.get_state())
         assert isinstance(result, GameState)
         assert result.screen == GameScreen.MAIN_MENU
 
-    def test_cached_on_second_call(self, adapter: CliModAdapter) -> None:
-        _run(adapter.get_state())  # populates cache
-        _run(adapter.get_state())  # should use cache
-        assert adapter._cache_stale is False
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_combat_screen_mapping(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "COMBAT"})
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_unknown_screen_fallback(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "NEW_SCREEN"})
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.UNKNOWN
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_cached_on_second_call(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
+        _run(adapter.get_state())
+        _run(adapter.get_state())
+        # Popen should only be called once (cache hit on second call)
+        assert mock_popen.call_count == 1
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_extra_fields_preserved(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({
+            "screen": "COMBAT",
+            "combat": {"player_hp": 50},
+            "timestamp": 1234567890,
+        })
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
 
 
 class TestGetAvailableActions:
     """get_available_actions() tests."""
 
-    def test_returns_list(self, adapter: CliModAdapter) -> None:
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_actions_from_main_menu(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
         result = _run(adapter.get_available_actions())
         assert isinstance(result, list)
+        assert "new_run" in result
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_actions_from_combat(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "COMBAT"})
+        result = _run(adapter.get_available_actions())
+        assert "play_card" in result
+        assert "end_turn" in result
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_no_actions_for_unknown(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "UNKNOWN_SCREEN"})
+        result = _run(adapter.get_available_actions())
+        assert result == []
 
 
 class TestAct:
     """act() tests."""
 
-    def test_returns_action_result(self, adapter: CliModAdapter) -> None:
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_success(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({})
         result = _run(adapter.act("play_card", {"card_id": "VoidSlash"}))
         assert isinstance(result, ActionResult)
         assert result.status == "success"
         assert result.state_changed is True
 
-    def test_invalidates_cache(self, adapter: CliModAdapter) -> None:
-        _run(adapter.get_state())  # populates cache
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_invalidates_cache(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
+        _run(adapter.get_state())
         assert adapter._cache_stale is False
+        mock_popen.return_value = _mock_popen_ok({})
         _run(adapter.act("end_turn"))
         assert adapter._cache_stale is True
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_failure_on_cli_error(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_error(returncode=2)
+        result = _run(adapter.act("invalid_action"))
+        assert result.status == "failure"
+        assert result.state_changed is False
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_timeout_result(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_error(returncode=4)
+        result = _run(adapter.act("slow_action"))
+        assert result.status == "timeout"
 
 
 class TestWaitUntilActionable:
     """wait_until_actionable() tests."""
 
-    def test_returns_true(self, adapter: CliModAdapter) -> None:
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_returns_true_when_actionable(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
         result = _run(adapter.wait_until_actionable(timeout=5.0))
         assert result is True
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_returns_false_on_timeout(self, mock_popen: MagicMock) -> None:
+        a = CliModAdapter(cli_path="sts2", timeout=0.1)
+        mock_popen.return_value = _mock_popen_error(returncode=1)
+        result = _run(a.wait_until_actionable(timeout=0.2))
+        assert result is False
 
 
 class TestCaptureBugSnapshot:
     """capture_bug_snapshot() tests."""
 
-    def test_returns_dict_with_keys(self, adapter: CliModAdapter) -> None:
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_returns_dict_with_keys(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
         result = _run(adapter.capture_bug_snapshot())
         assert isinstance(result, dict)
         assert "game_state" in result
@@ -106,16 +224,19 @@ class TestCaptureBugSnapshot:
         assert "timestamp" in result
 
 
-
 class TestVersionHandshake:
     """Version parsing and validation tests (FR50)."""
 
     def test_valid_version(self, adapter: CliModAdapter) -> None:
-        adapter._check_version("1.2.3")
+        adapter._check_version("0.102.1")
+        assert adapter._version_checked is True
+
+    def test_valid_version_with_git_hash(self, adapter: CliModAdapter) -> None:
+        adapter._check_version("0.102.1+9b0771f18f6cb0f782e755285759886183c26f5e")
         assert adapter._version_checked is True
 
     def test_valid_version_with_extra_output(self, adapter: CliModAdapter) -> None:
-        adapter._check_version("1.0.0\n")
+        adapter._check_version("0.1.0\n")
         assert adapter._version_checked is True
 
     def test_invalid_format(self, adapter: CliModAdapter) -> None:
@@ -131,16 +252,16 @@ class TestVersionHandshake:
             adapter._check_version("")
 
     def test_version_handshake_on_init(self) -> None:
-        a = CliModAdapter(version_output="1.2.3")
+        a = CliModAdapter(cli_path="sts2", version_output="0.1.0")
         assert a._version_checked is True
 
     def test_version_handshake_skipped_when_none(self) -> None:
-        a = CliModAdapter()
+        a = CliModAdapter(cli_path="sts2")
         assert a._version_checked is False
 
     def test_init_rejects_incompatible_version(self) -> None:
         with pytest.raises(STS2Error, match="incompatible"):
-            CliModAdapter(version_output="2.0.0")
+            CliModAdapter(cli_path="sts2", version_output="2.0.0")
 
 
 class TestProtocolCompliance:
@@ -166,7 +287,6 @@ class TestErrorClassification:
     """Error wrapping tests (FR26)."""
 
     def test_sts2error_structure(self, adapter: CliModAdapter) -> None:
-        """Verify that errors follow the structured format."""
         try:
             adapter._check_version("invalid")
         except STS2Error as exc:
@@ -177,6 +297,45 @@ class TestErrorClassification:
             assert "timestamp" in d
             assert "subtype" in d["detail"]
             assert "command" in d["detail"]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_timeout_error(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_proc = MagicMock()
+        mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="sts2", timeout=30.0)
+        mock_popen.return_value = mock_proc
+        with pytest.raises(STS2Error) as exc_info:
+            adapter._run_cli("state")
+        assert exc_info.value.detail.get("subtype") == "timeout"
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_file_not_found_error(self, mock_popen: MagicMock) -> None:
+        a = CliModAdapter(cli_path="/nonexistent/sts2", timeout=5.0)
+        mock_popen.side_effect = FileNotFoundError()
+        with pytest.raises(STS2Error) as exc_info:
+            a._run_cli("ping")
+        assert exc_info.value.detail.get("subtype") == "process_exit"
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_json_parse_failure(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"not json", b"")
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        with pytest.raises(STS2Error) as exc_info:
+            adapter._run_cli("state")
+        assert exc_info.value.detail.get("subtype") == "json_parse_failure"
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_error_code_preserved_in_detail(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
+        """Verify error_code from CLI JSON error is included in STS2Error detail."""
+        error_json = json.dumps({"ok": False, "error": "CONNECTION", "message": "Game not running"})
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (b"", error_json.encode("utf-8"))
+        mock_proc.returncode = 1
+        mock_popen.return_value = mock_proc
+        with pytest.raises(STS2Error) as exc_info:
+            adapter._run_cli("state")
+        assert exc_info.value.detail.get("error_code") == "CONNECTION"
 
 
 class TestMockReplaceability:
@@ -209,7 +368,6 @@ class TestMockReplaceability:
         assert isinstance(mock, GameAdapterProtocol)
 
     def test_mock_can_replace_real_adapter(self) -> None:
-        """Any code typed against GameAdapterProtocol accepts this mock."""
         mock = self.MockAdapter()
         adapter_ref: GameAdapterProtocol = mock  # type: ignore[assignment]
         assert adapter_ref is not None

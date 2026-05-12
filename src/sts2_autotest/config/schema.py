@@ -45,6 +45,7 @@ class FrameworkConfig(BaseModel):
     screenshot_dir: str = "./screenshots"
     evidence_dir: str = "./evidence"
     evidence_retention: int = Field(default=20, ge=1)
+    metrics_filename: str = "metrics.jsonl"
     screenshot_rgb_threshold: int = Field(default=3, ge=1)
     screenshot_target_resolution: str = "1920x1080"
     screenshot_resolution_tolerance: int = Field(default=2, ge=0)
@@ -52,6 +53,12 @@ class FrameworkConfig(BaseModel):
     screenshot_max_retries: int = Field(default=3, ge=0)
     log_levels: str = "ERROR,WARN,WARNING"
     log_max_entries: int = Field(default=10000, ge=1)
+    log_custom_paths: str = ""
+    log_backup_dir: str = ""
+    log_lock_retries: int = Field(default=5, ge=0)
+    log_lock_base_delay: float = Field(default=0.1, gt=0)
+    log_retention_days: int = Field(default=7, ge=1)
+    log_retention_max_bytes: int = Field(default=10 * 1024 * 1024 * 1024, ge=1)
 
 
 class ExecutionConfig(BaseModel):

@@ -124,8 +124,10 @@ def _check_env() -> dict[str, str]:
             break
     checks["game_installed"] = "OK" if game_found else "NOT FOUND"
 
-    # sts2 CLI tool
-    checks["sts2_cli_mod"] = "OK" if shutil.which("sts2") else "NOT FOUND"
+    # sts2 CLI tool — use discovery mechanism
+    from sts2_autotest.adapters.discovery import discover_sts2_cli
+    cli_path = discover_sts2_cli()
+    checks["sts2_cli_mod"] = f"OK ({cli_path})" if cli_path else "NOT FOUND"
 
     # Disk space (C: drive)
     try:
