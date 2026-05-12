@@ -94,8 +94,6 @@ def _steam_roots() -> list[Path]:
             roots.append(linux_steam)
     except RuntimeError:
         pass
-        if p.is_dir():
-            roots.append(p)
 
     # Check Steam library folders via libraryfolders.vdf
     vdf_path = Path("C:/Program Files (x86)/Steam/steamapps/libraryfolders.vdf")
