@@ -1,5 +1,30 @@
 # CLAUDE.md
 
+## Agent Loop Startup
+
+When the user asks to start the automated collaboration loop, run the local ACP/BMAD loop script instead of manually continuing the next handoff.
+
+Recognize these startup phrases:
+
+- `start-agent-loop: <task>`
+- `start automated collaboration task: <task>`
+- Chinese equivalent: start the automatic collaboration task
+- `use .agent-collab/state/next-action.md`
+
+For a new task, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .agent-collab/tools/run-agent-loop.ps1 -Task "<task>"
+```
+
+To continue from the current generated next action, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .agent-collab/tools/run-agent-loop.ps1 -FromNextAction
+```
+
+After the loop exits, read `.agent-collab/state/last-loop-summary.md` and summarize it for user acceptance.
+
 本文件为 Claude Code (claude.ai/code) 在此仓库中工作时提供指导。
 
 ## 项目概览

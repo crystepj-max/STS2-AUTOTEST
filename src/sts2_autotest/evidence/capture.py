@@ -11,16 +11,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import mss
+import mss.exception
 import mss.tools
 
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.types import CaptureResult, ScreenCaptureSettings
+from sts2_autotest.core.disk_guard import check_disk_space
 
 logger = get_logger("evidence.capture")
 
 # Win32 constants
 _SW_RESTORE = 9
 _SW_MAXIMIZE = 3
+
+
+def _restore_window(title: str) -> bool:
+    """Bring window to foreground and maximize via Win32 API.
+
+    Calls: FindWindow → ShowWindow(SW_RESTORE) → SetForegroundWindow → ShowWindow(SW_MAXIMIZE).
+
+    Returns True on success, False on failure (window not found or API error).
+    On False, caller should log WARNING and return SKIPPED.
+    """
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, title)
+        if not hwnd:
+            return False
+        user32.ShowWindow(hwnd, _SW_RESTORE)
+        user32.SetForegroundWindow(hwnd)
+        user32.ShowWindow(hwnd, _SW_MAXIMIZE)
+        return True
+    except Exception:
+        return False
 
 
 def _parse_resolution(resolution_str: str) -> tuple[int, int]:
@@ -95,22 +118,15 @@ class ScreenCapture:
         AC5: If the window is not found (not visible, minimized, crashed),
         returns SKIPPED immediately without blocking the test.
         """
-        foreground_result = self._foreground_window(window_title)
-        if foreground_result == "not_found":
+        if not _restore_window(window_title):
             logger.warning(
-                "Window '%s' not found — skipping capture (AC5)",
+                "Window '%s' not found or foreground failed — "
+                "skipping capture (WARNING degradation)",
                 window_title,
             )
             return CaptureResult(
                 status="skipped",
                 message=f"Window '{window_title}' not found or not visible",
-            )
-
-        if foreground_result == "foreground_failed":
-            logger.warning(
-                "Window '%s' found but foreground failed — "
-                "attempting capture anyway",
-                window_title,
             )
 
         for attempt in range(self._max_retries):
@@ -251,7 +267,7 @@ class ScreenCapture:
                 return _RawCapture(
                     bgra=bytes(shot.bgra), width=shot.width, height=shot.height
                 )
-        except Exception as exc:
+        except mss.exception.ScreenShotError as exc:
             logger.warning("mss capture failed: %s", exc)
             return None
 
@@ -294,8 +310,16 @@ class ScreenCapture:
     def _save_screenshot(
         self, bgra_data: bytes, width: int, height: int, case_id: str
     ) -> Path:
-        """Convert BGRA to PNG and save with atomic write."""
+        """Convert BGRA to PNG and save with atomic write.
+
+        Raises OSError if disk space is below the default threshold (100 MB).
+        """
         self._output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not check_disk_space(str(self._output_dir)):
+            raise OSError(
+                f"Insufficient disk space for screenshot in {self._output_dir}"
+            )
 
         png_bytes = mss.tools.to_png(bgra_data, (width, height))
         if png_bytes is None:
@@ -322,24 +346,4 @@ class ScreenCapture:
         return target
 
     # ── internal: window foreground ─────────────────────────
-
-    def _foreground_window(self, window_title: str) -> str:
-        """Bring window to foreground and maximize via Win32 API.
-
-        Returns:
-            "ok" — window found and foregrounded
-            "foreground_failed" — window found but foreground failed
-            "not_found" — window not found (AC5: SKIPPED)
-        """
-        try:
-            user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, window_title)
-            if not hwnd:
-                return "not_found"
-            user32.ShowWindow(hwnd, _SW_RESTORE)
-            user32.SetForegroundWindow(hwnd)
-            user32.ShowWindow(hwnd, _SW_MAXIMIZE)
-            return "ok"
-        except Exception as exc:
-            logger.warning("Win32 foreground failed: %s", exc)
-            return "not_found"
+    # (module-level _restore_window handles foreground logic)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -421,3 +422,109 @@ class TestFromConfig:
         pack_dir = pkgr.create_pack("cfg_test")
         assert pack_dir.is_dir()
         assert (pack_dir / "summary.json").is_file()
+
+
+# ── disk guard integration (Story 4.4, AC3) ─────────────────
+
+class TestDiskGuardIntegration:
+    def test_low_disk_skips_summary_json(self, tmp_path: Path) -> None:
+        """AC3: low disk space skips summary.json write, dirs still created."""
+        pkgr = EvidencePackager(tmp_path)
+        with patch(
+            "sts2_autotest.evidence.packager.check_disk_space", return_value=False,
+        ):
+            pack_dir = pkgr.create_pack("run_guard")
+
+        assert pack_dir.is_dir()
+        assert (pack_dir / "screenshots").is_dir()
+        assert (pack_dir / "logs").is_dir()
+        assert (pack_dir / "reports").is_dir()
+        # summary.json should NOT exist (skipped due to low disk)
+        assert not (pack_dir / "summary.json").is_file()
+        # summary.md should also be skipped
+        assert not (pack_dir / "summary.md").is_file()
+
+    def test_disk_ok_writes_summary(self, tmp_path: Path) -> None:
+        """AC3: with enough disk space, summary files are written normally."""
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack("run_guard_ok")
+        assert (pack_dir / "summary.json").is_file()
+        assert (pack_dir / "summary.md").is_file()
+
+
+# ── artifact export (Story 4.7, FR54) ───────────────────────
+
+
+class TestArtifactExport:
+    def test_export_creates_zip(self, tmp_path: Path) -> None:
+        """export_artifact creates a ZIP file."""
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_art", run_result="passed")
+        zip_path = pkgr.export_artifact("run_art", result="passed")
+        assert zip_path is not None
+        assert zip_path.suffix == ".zip"
+        assert zip_path.exists()
+
+    def test_export_zip_contains_expected_files(self, tmp_path: Path) -> None:
+        """ZIP contains summary.json, summary.md, screenshots/, logs/."""
+        import zipfile
+
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack("run_zip", run_result="passed")
+
+        # Add a screenshot and log file to the pack
+        (pack_dir / "screenshots" / "shot.png").write_bytes(b"\x89PNG")
+        (pack_dir / "logs" / "game.log").write_text("log data", encoding="utf-8")
+
+        zip_path = pkgr.export_artifact("run_zip", result="passed")
+        assert zip_path is not None
+
+        with zipfile.ZipFile(zip_path) as zf:
+            names = zf.namelist()
+            assert "summary.json" in names
+            assert "summary.md" in names
+            assert "screenshots/shot.png" in names or "screenshots\\shot.png" in names
+            assert "logs/game.log" in names or "logs\\game.log" in names
+
+    def test_export_updates_summary_with_artifact_path(self, tmp_path: Path) -> None:
+        """summary.json receives artifact_path after export."""
+        import json
+
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_artp", run_result="passed")
+        zip_path = pkgr.export_artifact("run_artp", result="passed")
+        assert zip_path is not None
+
+        summary = pkgr.read_summary("run_artp")
+        assert summary is not None
+        assert summary.artifact_path is not None
+        assert str(zip_path) in str(summary.artifact_path)
+
+    def test_export_missing_pack_returns_none(self, tmp_path: Path) -> None:
+        """Exporting a non-existent pack returns None."""
+        pkgr = EvidencePackager(tmp_path)
+        result = pkgr.export_artifact("nonexistent", result="passed")
+        assert result is None
+
+    def test_export_creates_junit_xml_in_reports(self, tmp_path: Path) -> None:
+        """JUnit XML is generated inside the reports/ directory."""
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_junit", run_result="passed")
+        pkgr.export_artifact("run_junit", result="passed")
+
+        pack_dir = tmp_path / "run_junit"
+        junit = pack_dir / "reports" / "junit.xml"
+        assert junit.is_file()
+        content = junit.read_text(encoding="utf-8")
+        assert "testsuites" in content
+        assert "testcase" in content
+
+    def test_export_non_blocking_on_error(self, tmp_path: Path) -> None:
+        """export_artifact returns None on error without raising."""
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_err", run_result="passed")
+
+        with patch("shutil.make_archive", side_effect=OSError("mock error")):
+            result = pkgr.export_artifact("run_err", result="passed")
+
+        assert result is None

@@ -6,12 +6,14 @@ __test__ = False
 
 import json
 import os
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.types import MetricsCollectorSettings
+from sts2_autotest.core.disk_guard import check_disk_space
 
 logger = get_logger("evidence.metrics")
 
@@ -44,11 +46,13 @@ class MetricsCollector:
         output_dir: Path,
         *,
         filename: str = "metrics.jsonl",
+        max_resource_entries: int = 1000,
     ) -> None:
         self._output_dir = output_dir
         self._filename = filename
         self._file_path = output_dir / filename
         self._buffer: list[MetricEvent] = []
+        self._pending_buffer: deque[list[MetricEvent]] = deque(maxlen=100)
         self._session_id: str | None = None
         # Running counters — survive flush() (NB2)
         self._total_cases = 0
@@ -61,6 +65,7 @@ class MetricsCollector:
         self._screenshots = 0
         self._screenshot_total_ms = 0
         self._resource_usage: dict[str, list[float]] = {}
+        self._max_resource_entries = max_resource_entries
 
     @property
     def file_path(self) -> Path:
@@ -201,9 +206,37 @@ class MetricsCollector:
 
         Appends new events to the file without reading existing content,
         so flush cost is O(buffer_size) regardless of file size.
+
+        On OSError, buffers events to _pending_buffer for retry on next flush.
+        Retry is single-shot: all pending events are folded into one flush attempt.
+        If it fails, _try_flush handles caching; flush() never requeues indirectly.
         """
+        # Drain all pending events into buffer (FIFO)
+        while self._pending_buffer:
+            self._buffer = self._pending_buffer.popleft() + self._buffer
+
         if not self._buffer:
             return
+
+        # Single flush attempt — _try_flush handles caching on failure
+        self._try_flush()
+
+    def _try_flush(self) -> bool:
+        """Attempt to flush the current buffer. Returns True on success."""
+        if not check_disk_space(str(self._output_dir)):
+            logger.warning(
+                "Insufficient disk space for metrics flush — caching %d events",
+                len(self._buffer),
+            )
+            if self._buffer:
+                self._pending_buffer.append(list(self._buffer))
+            self._buffer.clear()
+            if len(self._pending_buffer) == self._pending_buffer.maxlen:
+                logger.warning(
+                    "Pending buffer full (%d entries) — discarding oldest",
+                    self._pending_buffer.maxlen,
+                )
+            return False
 
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -216,8 +249,18 @@ class MetricsCollector:
             with open(self._file_path, "a", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
             self._buffer.clear()
+            return True
         except OSError:
-            raise
+            logger.warning("Flush failed — caching %d events to pending buffer", len(self._buffer))
+            if self._buffer:
+                self._pending_buffer.append(list(self._buffer))
+            self._buffer.clear()
+            if len(self._pending_buffer) == self._pending_buffer.maxlen:
+                logger.warning(
+                    "Pending buffer full (%d entries) — discarding oldest",
+                    self._pending_buffer.maxlen,
+                )
+            return False
 
     # ── internal ────────────────────────────────────────────
 
@@ -238,7 +281,10 @@ class MetricsCollector:
                 self._passed += 1
             elif status == "failed":
                 self._failed += 1
-            self._total_duration_ms += int(str(event.data.get("duration_ms", "0")))
+            try:
+                self._total_duration_ms += int(str(event.data.get("duration_ms", "0")))
+            except (TypeError, ValueError):
+                pass
         elif event.event_type == "adapter_command":
             self._adapter_commands += 1
             if not event.data.get("success", True):
@@ -247,8 +293,18 @@ class MetricsCollector:
             self._state_transitions += 1
         elif event.event_type == "screenshot":
             self._screenshots += 1
-            self._screenshot_total_ms += int(str(event.data.get("duration_ms", "0")))
+            try:
+                self._screenshot_total_ms += int(str(event.data.get("duration_ms", "0")))
+            except (TypeError, ValueError):
+                pass
         elif event.event_type == "resource_usage":
             metric_name = str(event.data.get("metric", "unknown"))
-            value = float(str(event.data.get("value", "0")))
-            self._resource_usage.setdefault(metric_name, []).append(value)
+            try:
+                value = float(str(event.data.get("value", "0")))
+            except (TypeError, ValueError):
+                value = 0.0
+            values = self._resource_usage.setdefault(metric_name, [])
+            values.append(value)
+            # Cap entries to prevent unbounded growth
+            if len(values) > self._max_resource_entries:
+                values.pop(0)

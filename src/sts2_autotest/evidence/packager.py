@@ -7,6 +7,7 @@ __test__ = False
 import json
 import os
 import shutil
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from sts2_autotest.common.evidence import (
 )
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.types import EvidencePackagerSettings
+from sts2_autotest.core.disk_guard import check_disk_space
 
 logger = get_logger("evidence.packager")
 
@@ -267,6 +269,12 @@ class EvidencePackager:
             lines.append("")
 
         report_path = pack_dir / "summary.md"
+        if not check_disk_space(str(self._evidence_dir)):
+            logger.warning(
+                "Insufficient disk space — skipping summary.md write (AC3)",
+            )
+            return report_path
+
         tmp = report_path.with_suffix(".md.tmp")
         try:
             tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -315,8 +323,72 @@ class EvidencePackager:
             except OSError as exc:
                 logger.warning("Cannot remove pack %s: %s", pack_id, exc)
 
+    # ── artifact export (Story 4.7, FR54) ────────────────────
+
+    def export_artifact(self, pack_id: str, result: str = "unknown") -> Path | None:
+        """Export an evidence pack as a ZIP artifact.
+
+        Creates a ZIP file containing summary.json, summary.md, screenshots/,
+        logs/, and reports/ from the pack directory.
+
+        Returns the ZIP path on success, None on failure.
+        """
+        pack_dir = self._evidence_dir / pack_id
+        if not pack_dir.is_dir():
+            logger.warning("Cannot export artifact: pack %s not found", pack_id)
+            return None
+
+        output_dir = self._evidence_dir / "artifacts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        base_name = str(output_dir / f"{pack_id}_{result}_{timestamp}")
+
+        # Generate JUnit XML inside the pack before archiving
+        junit_path = pack_dir / "reports" / "junit.xml"
+        summary = self.read_summary(pack_id)
+        if summary is not None:
+            junit_xml = _generate_junit_xml(summary)
+            try:
+                junit_path.write_text(junit_xml, encoding="utf-8")
+            except OSError:
+                logger.warning("Failed to write JUnit XML for %s", pack_id)
+
+        try:
+            zip_path = shutil.make_archive(
+                base_name, "zip", root_dir=str(pack_dir),
+                base_dir=".",
+            )
+            logger.info("Artifact exported: %s", zip_path)
+            result_path = Path(zip_path)
+
+            # Update summary.json with artifact_path
+            if summary is not None:
+                updated = summary.model_copy(update={
+                    "artifact_path": str(result_path),
+                })
+                self._write_json(pack_dir / "summary.json", updated.model_dump(mode="json"))
+
+            return result_path
+        except OSError as exc:
+            logger.warning("Failed to create artifact ZIP for %s: %s", pack_id, exc)
+            return None
+
+    # ── internal ────────────────────────────────────────────
+
     def _write_json(self, path: Path, data: dict[str, object]) -> None:
-        """Write JSON with atomic write."""
+        """Write JSON with atomic write and pre-write disk space check.
+
+        Skips the write (with WARNING) when disk space is below threshold,
+        preserving any previously written file at *path*.
+        """
+        if not check_disk_space(str(self._evidence_dir)):
+            logger.warning(
+                "Insufficient disk space — skipping JSON write to %s (AC3)",
+                path,
+            )
+            return
+
         tmp = path.with_suffix(".json.tmp")
         try:
             tmp.write_text(
@@ -330,3 +402,42 @@ class EvidencePackager:
             except OSError:
                 pass
             raise
+
+
+def _generate_junit_xml(summary: SummaryJson) -> str:
+    """Generate JUnit XML from a SummaryJson for CI artifact consumption.
+
+    Format: testsuites → testsuite(name/tests/failures/errors) → testcase
+    """
+    run = summary.test_run
+    suites = ET.Element("testsuites")
+    suite = ET.SubElement(suites, "testsuite", {
+        "name": summary.pack_id,
+        "tests": "1",
+        "failures": "1" if run.result in ("failed", "crashed") else "0",
+        "errors": "1" if run.result == "crashed" else "0",
+        "time": str(run.duration_ms / 1000.0),
+    })
+
+    # Add a single synthetic test case representing the run
+    tc = ET.SubElement(suite, "testcase", {
+        "name": f"run_{summary.pack_id}",
+        "classname": "sts2_autotest.session",
+        "time": str(run.duration_ms / 1000.0),
+    })
+
+    if run.result in ("failed", "crashed") and summary.failure is not None:
+        failure = ET.SubElement(tc, "failure", {
+            "message": summary.failure.message,
+            "type": summary.failure.type,
+        })
+        if summary.failure.stack_trace:
+            failure.text = summary.failure.stack_trace
+
+    if summary.artifacts.screenshots:
+        for ss in summary.artifacts.screenshots:
+            ET.SubElement(tc, "screenshot", {"name": ss})
+
+    return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(suites, encoding="unicode")
+
+

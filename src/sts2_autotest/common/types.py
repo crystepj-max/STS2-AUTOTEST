@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -102,3 +103,88 @@ class MetricsCollectorSettings(Protocol):
 
     evidence_dir: str
     metrics_filename: str
+
+
+class RecoverySettings(Protocol):
+    """Protocol for recovery strategy configuration — decouples core/ from config/.
+
+    Implemented by config.schema.ExecutionConfig so that DefaultRecoveryStrategy
+    can consume config without core/ importing config/.
+    """
+
+    max_consecutive_failures: int
+    game_startup_timeout: float
+
+
+class SessionStatus(StrEnum):
+    """Watchdog-tracked session status. Referenced by watchdog, orchestrator, cli."""
+
+    RUNNING = "RUNNING"
+    ZOMBIE = "ZOMBIE"
+    TERMINATED = "TERMINATED"
+
+
+class WatchdogSettings(Protocol):
+    """Protocol for watchdog configuration — decouples core/ from config/.
+
+    Implemented by config.schema.ExecutionConfig.
+    """
+
+    heartbeat_timeout: float
+
+
+class ProgressSettings(Protocol):
+    """Protocol for progress persistence configuration — decouples core/ from config/.
+
+    Implemented by config.schema.FrameworkConfig so that progress module
+    can consume config without core/ importing config/.
+    """
+
+    progress_dir: str
+    progress_filename: str
+
+
+class LockManagerSettings(Protocol):
+    """Protocol for lock manager configuration — decouples core/ from config/.
+
+    Implemented by config.schema.FrameworkConfig so that LockManager
+    can consume config without core/ importing config/.
+    """
+
+    lock_file: str
+
+
+class SessionQueueSettings(Protocol):
+    """Protocol for session queue configuration — decouples core/ from config/.
+
+    Implemented by config.schema.ExecutionConfig so that SessionQueue
+    can consume config without core/ importing config/.
+    """
+
+    session_queue_timeout: float
+    session_queue_max_depth: int
+
+
+class DataValidationSettings(Protocol):
+    """Protocol for data validation configuration — decouples core/ from config/.
+
+    Implemented by config.schema.FrameworkConfig so that data validation code
+    can consume config without core/ importing config/.
+    """
+
+    strict_validation: bool
+
+
+class PrecheckSettings(Protocol):
+    """Protocol for pre-check configuration — decouples core/ from config/.
+
+    Fields are satisfied at PrecheckRunner construction time by extracting
+    values from FrameworkConfig, ExecutionConfig, and AdapterConfig.
+    """
+
+    disk_threshold_mb: int
+    lock_file: str
+    screenshot_dir: str
+    evidence_dir: str
+    adapter_cli_path: str
+    adapter_timeout: float

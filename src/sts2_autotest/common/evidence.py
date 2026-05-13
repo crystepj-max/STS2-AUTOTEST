@@ -65,6 +65,7 @@ class SummaryJson(BaseModel):
     environment: EnvironmentInfo
     artifacts: ArtifactsInfo = ArtifactsInfo()
     failure: FailureInfo | None = None
+    artifact_path: str | None = None
 
 
 class EvidencePack(BaseModel):
@@ -83,3 +84,4 @@ class EvidencePack(BaseModel):
     environment: EnvironmentInfo
     artifacts: ArtifactsInfo = ArtifactsInfo()
     failure: FailureInfo | None = None
+    artifact_path: str | None = None

@@ -42,6 +42,7 @@ _TERMINAL_STATES: frozenset[GameScreen] = frozenset({
     GameScreen.GAME_OVER,
     GameScreen.VICTORY,
     GameScreen.CRASHED,
+    GameScreen.UNKNOWN,  # No outgoing transitions — session must restart
 })
 
 _ALLOWED_TRANSITIONS: dict[GameScreen, frozenset[GameScreen]] = {

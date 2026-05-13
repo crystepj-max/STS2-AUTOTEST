@@ -116,3 +116,20 @@ class StateEngine:
             raise StateTransitionError(current, target, event)
         logger.info("State transition: %s → %s", current.value, target.value)
         return target
+
+    def force_transition(
+        self, current: GameScreen, target: GameScreen
+    ) -> GameScreen:
+        """Force a state transition bypassing allowed_transitions validation.
+
+        Only used in recovery paths (e.g., CRASHED → MAIN_MENU after
+        adapter reconnect). Normal code paths MUST NOT call this.
+        Always logs a WARNING to make recovery transitions auditable.
+        """
+        logger.warning(
+            "FORCE transition (recovery path): %s → %s — "
+            "bypassing allowed_transitions check",
+            current.value,
+            target.value,
+        )
+        return target

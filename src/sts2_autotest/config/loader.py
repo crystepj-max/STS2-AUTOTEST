@@ -96,7 +96,14 @@ def _coerce_types(overrides: dict[str, Any], schema: type) -> dict[str, Any]:
             field_info = schema_fields[key]
             annotation = field_info.annotation
             if annotation is bool:
-                coerced[key] = value.lower() in ("true", "1", "yes")
+                if value.lower() in ("true", "1", "yes"):
+                    coerced[key] = True
+                elif value.lower() in ("false", "0", "no"):
+                    coerced[key] = False
+                else:
+                    raise ValueError(
+                        f"Config key '{key}' expects bool but got '{value}'"
+                    )
             elif annotation is int:
                 try:
                     coerced[key] = int(value)

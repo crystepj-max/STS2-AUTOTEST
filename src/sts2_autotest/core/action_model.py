@@ -33,11 +33,16 @@ class TestResult:
     __test__ = False  # not a pytest test class
 
     case_id: str
-    status: str  # "pass" | "fail" | "crash" | "skip"
+    status: str  # "pass" | "fail" | "crash" | "skip" | "deterministic_fail"
     detail: str | None = None
     failures: list[str] = field(default_factory=list)
     state_snapshot: GameState | None = None
+    crash_signature: str | None = None
 
     @property
     def passed(self) -> bool:
         return self.status == "pass"
+
+    @property
+    def is_deterministic_fail(self) -> bool:
+        return self.status == "deterministic_fail"

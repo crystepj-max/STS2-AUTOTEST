@@ -6,13 +6,14 @@ from typing import Any
 
 
 class ErrorCategory(StrEnum):
-    """Top-level error classification (5 categories)."""
+    """Top-level error classification (6 categories)."""
 
     ADAPTER_ERROR = "adapter_error"
     GAME_ERROR = "game_error"
     ASSERTION_ERROR = "assertion_error"
     CRASH_ERROR = "crash_error"
     TIMEOUT_ERROR = "timeout_error"
+    SESSION_ERROR = "session_error"
 
 
 class AdapterErrorSubType(StrEnum):
@@ -53,3 +54,28 @@ class STS2Error(Exception):
             "detail": self.detail,
             "timestamp": self.timestamp.isoformat(),
         }
+
+
+class SessionQueueError(STS2Error):
+    """Session-level error for queue/lock conflicts (FR65).
+
+    detail includes 'reason' (timeout/queue_full/lock_conflict)
+    and optionally 'queue_position'.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        reason: str = "lock_conflict",
+        queue_position: int | None = None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        merged_detail = dict(detail or {})
+        merged_detail["reason"] = reason
+        if queue_position is not None:
+            merged_detail["queue_position"] = queue_position
+        super().__init__(
+            category=ErrorCategory.SESSION_ERROR,
+            message=message,
+            detail=merged_detail,
+        )

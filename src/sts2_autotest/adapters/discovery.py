@@ -11,6 +11,10 @@ import os
 import shutil
 from pathlib import Path
 
+from sts2_autotest.common.logging import get_logger
+
+logger = get_logger("adapters.discovery")
+
 
 def discover_sts2_cli() -> str | None:
     """Attempt to locate the sts2 CLI executable.
@@ -65,10 +69,13 @@ def _common_paths() -> list[Path]:
         # Workshop mod location
         workshop = steam_root / "steamapps" / "workshop" / "content"
         if workshop.exists():
-            for content_dir in workshop.iterdir():
-                mod_dir = content_dir
-                if mod_dir.is_dir():
-                    paths.append(mod_dir / "sts2.exe")
+            try:
+                for content_dir in workshop.iterdir():
+                    mod_dir = content_dir
+                    if mod_dir.is_dir():
+                        paths.append(mod_dir / "sts2.exe")
+            except OSError:
+                logger.warning("Cannot read workshop directory: %s", workshop)
 
     # Program Files level
     for pf in [Path("C:/Program Files"), Path("C:/Program Files (x86)")]:

@@ -14,10 +14,10 @@ from sts2_autotest.common.errors import (
 class TestErrorCategory:
     """ErrorCategory StrEnum tests."""
 
-    def test_has_all_five_categories(self) -> None:
+    def test_has_all_six_categories(self) -> None:
         expected = {
             "ADAPTER_ERROR", "GAME_ERROR", "ASSERTION_ERROR",
-            "CRASH_ERROR", "TIMEOUT_ERROR",
+            "CRASH_ERROR", "TIMEOUT_ERROR", "SESSION_ERROR",
         }
         actual = {c.name for c in ErrorCategory}
         assert expected == actual

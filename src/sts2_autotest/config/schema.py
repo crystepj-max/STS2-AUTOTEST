@@ -59,6 +59,12 @@ class FrameworkConfig(BaseModel):
     log_lock_base_delay: float = Field(default=0.1, gt=0)
     log_retention_days: int = Field(default=7, ge=1)
     log_retention_max_bytes: int = Field(default=10 * 1024 * 1024 * 1024, ge=1)
+    strict_validation: bool = False
+    progress_dir: str = "./evidence/.progress"
+    progress_filename: str = "session-progress.json"
+    artifact_dir: str = "./evidence/artifacts"
+    disk_threshold_mb: int = Field(default=100, ge=1)
+    lock_file: str = ".sts2-autotest.lock"
 
 
 class ExecutionConfig(BaseModel):
@@ -69,6 +75,10 @@ class ExecutionConfig(BaseModel):
     game_timeout: float = Field(default=60.0, gt=0)
     game_startup_timeout: float = Field(default=60.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
+    max_consecutive_failures: int = Field(default=3, ge=1)
+    heartbeat_timeout: float = Field(default=60.0, gt=0)
+    session_queue_timeout: float = Field(default=60.0, gt=0)
+    session_queue_max_depth: int = Field(default=10, ge=1)
     parallel: bool = False
 
 

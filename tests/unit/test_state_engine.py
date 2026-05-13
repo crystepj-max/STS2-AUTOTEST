@@ -150,3 +150,32 @@ class TestFullTransitionMatrix:
             illegal = set(GameScreen) - source.allowed_transitions - {source}
             for target in illegal:
                 assert engine.validate_transition(source, target) is False
+
+
+class TestForceTransition:
+    """force_transition() bypasses validation for recovery paths."""
+
+    def test_crashed_to_main_menu(self, engine: StateEngine) -> None:
+        result = engine.force_transition(GameScreen.CRASHED, GameScreen.MAIN_MENU)
+        assert result == GameScreen.MAIN_MENU
+
+    def test_game_over_to_main_menu(self, engine: StateEngine) -> None:
+        result = engine.force_transition(GameScreen.GAME_OVER, GameScreen.MAIN_MENU)
+        assert result == GameScreen.MAIN_MENU
+
+    def test_any_to_any(self, engine: StateEngine) -> None:
+        """force_transition works between any two states."""
+        for source in GameScreen:
+            for target in GameScreen:
+                result = engine.force_transition(source, target)
+                assert result == target
+
+    def test_logs_warning(self, engine: StateEngine, caplog: pytest.LogCaptureFixture) -> None:
+        """force_transition should log a WARNING (auditable recovery path)."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="core.state_engine"):
+            engine.force_transition(GameScreen.CRASHED, GameScreen.MAIN_MENU)
+        assert "FORCE transition" in caplog.text
+        assert "CRASHED" in caplog.text
+        assert "MAIN_MENU" in caplog.text

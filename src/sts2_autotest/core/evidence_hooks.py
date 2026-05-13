@@ -38,6 +38,10 @@ class EvidencePackagerProtocol(Protocol):
         failure: FailureInfo | None = None,
     ) -> object: ...
 
+    def export_artifact(self, pack_id: str, result: str = "unknown") -> object: ...
+
+    def list_packs(self) -> list[object]: ...
+
 
 class EvidenceHooks(Protocol):
     """Hooks triggered by the Orchestrator at evidence collection points."""
@@ -151,4 +155,12 @@ class RealEvidenceHooks:
             failed = summary.get("failed", 0)
             crashed = summary.get("crashed", 0)
             run_result = "failed" if (failed + crashed) > 0 else "passed"
-            self._packager.create_pack(run_result=run_result)
+            pack_result = self._packager.create_pack(run_result=run_result)
+            # Export artifact (Story 4.7, FR54) — non-blocking
+            try:
+                if pack_result is not None:
+                    pack_name = getattr(pack_result, "name", None)
+                    if pack_name is not None:
+                        self._packager.export_artifact(str(pack_name), result=run_result)
+            except Exception:
+                logger.warning("Artifact export failed (non-blocking)", exc_info=True)

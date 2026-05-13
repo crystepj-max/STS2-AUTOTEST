@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -422,3 +423,127 @@ class TestFromConfig:
         data = json.loads(lines[0])
         assert data["event_type"] == "session_start"
         assert json.loads(lines[1])["event_type"] == "case_result"
+
+
+# ── pending buffer (Story 4.4, AC5) ─────────────────────────
+
+class TestPendingBuffer:
+    def test_flush_failure_caches_to_pending(self, tmp_path: Path) -> None:
+        """When flush fails, events are cached to pending buffer."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record("event1")
+
+        # Force flush failure
+        with patch("builtins.open", side_effect=OSError("no space")):
+            mc.flush()
+
+        assert len(mc._pending_buffer) == 1
+        assert len(mc._buffer) == 0
+
+    def test_pending_retried_on_next_flush(self, tmp_path: Path) -> None:
+        """Pending events are retried on the next flush."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record("event1")
+
+        # First flush fails
+        with patch("builtins.open", side_effect=OSError("no space")):
+            mc.flush()
+        assert len(mc._pending_buffer) == 1
+
+        # Second flush succeeds — pending should drain
+        mc.flush()
+        assert len(mc._pending_buffer) == 0
+        lines = mc.file_path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 2  # session_start + event1
+
+    def test_pending_buffer_maxlen_discards_oldest(self, tmp_path: Path) -> None:
+        """When pending buffer is full, oldest entries are discarded."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+
+        # Fill pending buffer to near capacity
+        from sts2_autotest.evidence.metrics import MetricEvent
+        for i in range(99):
+            mc._pending_buffer.append([MetricEvent(timestamp="t", event_type="old")])
+
+        with patch("builtins.open", side_effect=OSError("no space")):
+            mc.flush()
+
+        # Should have entries (oldest discarded, newest kept)
+        assert len(mc._pending_buffer) > 0
+
+    def test_pending_buffer_capacity(self, tmp_path: Path) -> None:
+        """Pending buffer maxlen=100, old entries discarded when full."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+
+        for i in range(150):
+            mc.record(f"event_{i}")
+            with patch("builtins.open", side_effect=OSError("no space")):
+                mc.flush()
+
+        # Buffer should be at most 100
+        assert len(mc._pending_buffer) <= 100
+
+    def test_low_disk_space_caches_to_pending(self, tmp_path: Path) -> None:
+        """AC3: low disk space during flush caches events to pending buffer."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record("event1")
+
+        with patch(
+            "sts2_autotest.evidence.metrics.check_disk_space", return_value=False,
+        ):
+            mc.flush()
+
+        assert len(mc._pending_buffer) == 1
+        assert len(mc._buffer) == 0
+        # Must NOT create the metrics file
+        assert not mc.file_path.is_file()
+
+    def test_low_disk_space_pending_retried(self, tmp_path: Path) -> None:
+        """Events cached due to low disk are retried when space returns."""
+        mc = MetricsCollector(tmp_path)
+        mc.start_session("s1")
+        mc.record("event1")
+
+        # First flush — low disk space, caches to pending
+        with patch(
+            "sts2_autotest.evidence.metrics.check_disk_space", return_value=False,
+        ):
+            mc.flush()
+        assert len(mc._pending_buffer) == 1
+
+        # Second flush — space returned, pending drains
+        mc.flush()
+        assert len(mc._pending_buffer) == 0
+        lines = mc.file_path.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 2  # session_start + event1
+
+
+# ── resource_usage cap (Story 4.4, debt #5) ────────────────
+
+class TestResourceUsageCap:
+    def test_resource_usage_capped(self, tmp_path: Path) -> None:
+        """_resource_usage entries are capped at max_resource_entries."""
+        mc = MetricsCollector(tmp_path, max_resource_entries=5)
+        mc.start_session("s1")
+
+        for i in range(10):
+            mc.record_resource_usage("memory_mb", float(i * 10))
+
+        assert len(mc._resource_usage["memory_mb"]) == 5
+        # Should have the LAST 5 entries (oldest discarded)
+        assert mc._resource_usage["memory_mb"] == [50.0, 60.0, 70.0, 80.0, 90.0]
+
+    def test_resource_usage_below_cap(self, tmp_path: Path) -> None:
+        """Entries below cap are kept in full."""
+        mc = MetricsCollector(tmp_path, max_resource_entries=100)
+        mc.start_session("s1")
+
+        for i in range(3):
+            mc.record_resource_usage("cpu", float(i))
+
+        assert len(mc._resource_usage["cpu"]) == 3

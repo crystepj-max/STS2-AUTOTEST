@@ -95,13 +95,55 @@ class TestDoctorEnvCheck:
 
     def test_has_expected_keys(self) -> None:
         checks = _check_env()
-        for key in ("python", "steam_installed", "game_installed", "sts2_cli_mod", "disk_space"):
-            assert key in checks
+        expected_keys = (
+            "python", "steam_installed", "game_installed",
+            "sts2_cli_mod", "disk_space", "screenshot_dir_writable", "session_locked",
+        )
+        for key in expected_keys:
+            assert key in checks, f"Missing key: {key}"
 
     def test_python_check_ok(self) -> None:
         """Python >= 3.11 should always pass in this project."""
         checks = _check_env()
-        assert checks["python"] == "OK"
+        assert checks["python"]["status"] == "OK"
+
+
+class TestDoctorCI:
+    """doctor --ci compact JSON output."""
+
+    @patch("sts2_autotest.cli.main._check_env")
+    def test_ci_healthy(self, mock_check: patch) -> None:
+        """All OK → healthy: true, exit 0."""
+        mock_check.return_value = {
+            "python": {"status": "OK", "message": "3.11"},
+            "disk_space": {"status": "OK", "message": "ok"},
+        }
+        args = _create_parser().parse_args(["doctor", "--ci"])
+        result = doctor_cmd(args)
+        assert result == 0
+
+    @patch("sts2_autotest.cli.main._check_env")
+    def test_ci_not_found_is_unhealthy(self, mock_check: patch) -> None:
+        """NOT_FOUND status must count as unhealthy (AC1/AC3 regression)."""
+        mock_check.return_value = {
+            "python": {"status": "OK", "message": "3.11"},
+            "steam_installed": {"status": "NOT_FOUND", "message": "Steam not found"},
+        }
+        args = _create_parser().parse_args(["doctor", "--ci"])
+        result = doctor_cmd(args)
+        assert result == 1  # NOT_FOUND → unhealthy
+
+    @patch("sts2_autotest.cli.main._check_env")
+    def test_ci_multiple_failures(self, mock_check: patch) -> None:
+        """Multiple non-OK checks produce exit code 1."""
+        mock_check.return_value = {
+            "python": {"status": "OK", "message": "3.11"},
+            "steam_installed": {"status": "NOT_FOUND", "message": "missing"},
+            "disk_space": {"status": "FAIL", "message": "low"},
+        }
+        args = _create_parser().parse_args(["doctor", "--ci"])
+        result = doctor_cmd(args)
+        assert result == 1
 
 
 class TestReportFromEvidence:
@@ -141,3 +183,111 @@ class TestCLIEntryPoint:
     def test_cli_function_exists(self) -> None:
         from sts2_autotest.cli.main import cli
         assert callable(cli)
+
+
+# ── resume / progress tests (Story 4.5, AC1-AC4) ────────────
+
+
+class TestResume:
+    """CLI resume/no-resume/corruption behavior."""
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    @patch("sts2_autotest.cli.main._run_orchestrator")
+    def test_normal_run_passes_progress_path(
+        self, mock_run: patch, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        """Normal run passes the default progress path to orchestrator."""
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+
+        args = _create_parser().parse_args(["run", "--all"])
+        # progress file does not exist, so no auto-detect prompt
+        run_cmd(args)
+
+        mock_run.assert_called_once_with(
+            ["all"], timeout=30,
+            progress_path=str(progress_file),
+        )
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    @patch("sts2_autotest.cli.main._run_orchestrator")
+    def test_resume_with_valid_progress(
+        self, mock_run: patch, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        """--resume with valid progress file uses pending cases."""
+        from sts2_autotest.core.progress import ProgressRecord, save_progress
+
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+
+        # Save a valid progress record
+        record = ProgressRecord(
+            session_id="sess-1",
+            completed_cases=["TC-001"],
+            pending_cases=["TC-002", "TC-003"],
+        )
+        save_progress(record, progress_file)
+
+        args = _create_parser().parse_args(["run", "--resume"])
+        run_cmd(args)
+
+        mock_run.assert_called_once_with(
+            ["TC-002", "TC-003"], timeout=30,
+            progress_path=str(progress_file),
+            resumed_from="sess-1",
+        )
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    @patch("sts2_autotest.cli.main._run_orchestrator")
+    def test_resume_corrupted_degrades_to_full_run(
+        self, mock_run: patch, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        """AC4: corrupted progress with --resume --all runs full suite."""
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+        progress_file.write_text("corrupted data")
+
+        args = _create_parser().parse_args(["run", "--resume", "--all"])
+        run_cmd(args)
+
+        # Degrades to full run with warning (AC4)
+        mock_run.assert_called_once_with(
+            ["all"], timeout=30, progress_path=str(progress_file),
+        )
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    def test_auto_detect_prompts_user(self, mock_path: patch, tmp_path: Path) -> None:
+        """Progress exists without --resume/--no-resume → prompt and return 1."""
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+        progress_file.write_text("{}")
+
+        args = _create_parser().parse_args(["run", "--all"])
+        result = run_cmd(args)
+        assert result == 1
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    @patch("sts2_autotest.cli.main._run_orchestrator")
+    def test_no_resume_clears_progress(
+        self, mock_run: patch, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        """--no-resume deletes old progress and runs fresh."""
+        from sts2_autotest.core.progress import ProgressRecord, save_progress
+
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+
+        # Save a valid progress record
+        record = ProgressRecord(session_id="old", completed_cases=[], pending_cases=["TC-001"])
+        save_progress(record, progress_file)
+        assert progress_file.is_file()
+
+        args = _create_parser().parse_args(["run", "--no-resume", "--all"])
+        run_cmd(args)
+
+        # Progress file should be deleted
+        assert not progress_file.exists()
+        # Runs normally
+        mock_run.assert_called_once_with(
+            ["all"], timeout=30, progress_path=str(progress_file),
+        )

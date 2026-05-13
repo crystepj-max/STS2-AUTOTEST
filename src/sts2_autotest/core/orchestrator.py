@@ -1,17 +1,32 @@
 """Test Orchestrator — manages test session lifecycle (FR1, FR2, FR4, FR10-12, FR17)."""
 
 import asyncio
+import signal
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, HealthStatus
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
+from sts2_autotest.core.data_validator import validate_game_state
+from sts2_autotest.core.lock_manager import LockManager
+from sts2_autotest.core.progress import ProgressRecord, clear_progress, save_progress
 from sts2_autotest.core.evidence_hooks import EvidenceHooks, StubEvidenceHooks
-from sts2_autotest.core.recovery import FailureRecord, StubRecoveryStrategy
+from sts2_autotest.common.types import DataValidationSettings, SessionStatus
+from sts2_autotest.core.recovery import (
+    DefaultRecoveryStrategy,
+    FailureRecord,
+    RecoveryAction,
+    RecoveryDecision,
+    RecoveryStrategy,
+    crash_signature,
+    is_p0_exception,
+)
 from sts2_autotest.core.state_engine import StateEngine, StateTransitionError
+from sts2_autotest.core.watchdog import Watchdog
 
 logger = get_logger("core.orchestrator")
 
@@ -26,7 +41,9 @@ class SessionSummary:
     failed: int = 0
     crashed: int = 0
     skipped: int = 0
+    deterministic_fails: int = 0
     results: list[TestResult] = field(default_factory=list)
+    resumed_from: str | None = None
 
     def __post_init__(self) -> None:
         self.total = len(self.results)
@@ -34,6 +51,9 @@ class SessionSummary:
         self.failed = sum(1 for r in self.results if r.status == "fail")
         self.crashed = sum(1 for r in self.results if r.status == "crash")
         self.skipped = sum(1 for r in self.results if r.status == "skip")
+        self.deterministic_fails = sum(
+            1 for r in self.results if r.status == "deterministic_fail"
+        )
 
     @property
     def is_failed(self) -> bool:
@@ -53,18 +73,134 @@ class TestOrchestrator:
         self,
         adapter: GameAdapterProtocol,
         state_engine: StateEngine | None = None,
-        recovery: Any = None,
+        recovery: RecoveryStrategy | None = None,
         evidence: EvidenceHooks | None = None,
+        *,
+        adapter_factory: Callable[[], GameAdapterProtocol] | None = None,
+        max_consecutive_failures: int = 3,
+        game_startup_timeout: float = 60.0,
+        heartbeat_timeout: float = 60.0,
+        strict_validation: bool = False,
+        progress_path: str | None = None,
+        resumed_from: str | None = None,
+        lock_path: str | None = None,
     ) -> None:
         self.adapter = adapter
         self.state_engine = state_engine or StateEngine()
-        self.recovery = recovery or StubRecoveryStrategy()
+        self.recovery = recovery or DefaultRecoveryStrategy(
+            adapter_factory=adapter_factory,
+            game_startup_timeout=game_startup_timeout,
+        )
         self.evidence = evidence or StubEvidenceHooks()
+        self._max_consecutive_failures = max_consecutive_failures
+        self._game_startup_timeout = game_startup_timeout
+        self._heartbeat_timeout = heartbeat_timeout
         self._session_active = False
         self._crashed = False
+        self._session_status = SessionStatus.RUNNING
         self._current_screen: GameScreen = GameScreen.UNKNOWN
         self._failure_history: list[FailureRecord] = []
         self._last_results: list[TestResult] = []
+        self._watchdog: Watchdog | None = None
+        self._last_valid_state: GameState | None = None
+        self._strict_validation = strict_validation
+        self._primary_adapter_failures: int = 0
+        self._adapter_degraded: bool = False
+        self._progress_path: str | None = progress_path
+        self._resumed_from: str | None = resumed_from
+        self._shutdown_requested: bool = False
+        self._progress_saved_on_shutdown: bool = False
+        self._adapter_replaced: bool = False
+        self._lock_path: str | None = lock_path
+        self._lock_manager: LockManager | None = (
+            LockManager(lock_path) if lock_path else None
+        )
+
+    def _release_lock_if_held(self) -> None:
+        """Release the process lock if it was acquired."""
+        if self._lock_manager is not None:
+            self._lock_manager.release_lock()
+
+    # ── state validation ─────────────────────────────────────
+
+    async def _get_state_validated(self) -> GameState:
+        """Get game state with semantic validation.
+
+        Wraps adapter.get_state() with validate_game_state().
+        In strict mode, violations raise STS2Error.
+        In non-strict mode, violations log WARNING and return _last_valid_state.
+        """
+        state = await self.adapter.get_state()
+        violations = validate_game_state(state)
+
+        if not violations:
+            self._last_valid_state = state
+            return state
+
+        if self._strict_validation:
+            raise STS2Error(
+                category=ErrorCategory.ASSERTION_ERROR,
+                message="Game state validation failed: " + "; ".join(violations),
+                detail={"violations": violations, "screen": state.screen.value},
+            )
+
+        logger.warning(
+            "Game state validation warnings (%s): %s — "
+            "returning last valid state",
+            state.screen.value, "; ".join(violations),
+        )
+        if self._last_valid_state is not None:
+            return self._last_valid_state
+        # No cached state available — return the invalid state anyway
+        return state
+
+    async def _record_adapter_result(self, success: bool) -> None:
+        """Track adapter call success/failure for degradation detection."""
+        if success:
+            self._primary_adapter_failures = 0
+        else:
+            self._primary_adapter_failures += 1
+            if self._primary_adapter_failures >= 2 and not self._adapter_degraded:
+                self._adapter_degraded = True
+                logger.warning(
+                    "Primary adapter degraded (%d consecutive failures) — "
+                    "degradation logged (MVP: notification only)",
+                    self._primary_adapter_failures,
+                )
+
+    # ── signal handling ─────────────────────────────────────
+
+    def _register_shutdown_handler(self) -> None:
+        """Register SIGINT handler that sets a flag for graceful shutdown.
+
+        The handler only sets a flag — actual cleanup happens in
+        the run_all() loop, avoiding I/O in signal context.
+        """
+        def _on_sigint(signum: int, frame: object) -> None:
+            if not self._shutdown_requested:
+                logger.warning("SIGINT received — shutting down after current case")
+                self._shutdown_requested = True
+
+        try:
+            signal.signal(signal.SIGINT, _on_sigint)
+        except (ValueError, RuntimeError):
+            # Not in main thread or signal already set — skip gracefully
+            pass
+
+    async def _save_progress_snapshot(
+        self, completed: list[str], pending: list[str],
+        current_case: str | None = None,
+    ) -> None:
+        """Save a progress snapshot if progress_path is configured."""
+        if self._progress_path is None:
+            return
+        record = ProgressRecord(
+            session_id="session-1",
+            completed_cases=completed,
+            pending_cases=pending,
+            current_case=current_case,
+        )
+        save_progress(record, Path(self._progress_path))
 
     # ── session lifecycle ───────────────────────────────────
 
@@ -76,16 +212,30 @@ class TestOrchestrator:
         """
         logger.info("Starting test session...")
 
-        # Checkpoint 1: adapter health
-        health = await self.adapter.health_check()
-        if not health.healthy:
-            logger.error("Adapter health check failed: %s", health.message)
+        # Checkpoint 0: process-level mutex lock
+        if self._lock_manager is not None and not self._lock_manager.acquire_lock(timeout=0):
+            logger.error("Another session is running — lock file held: %s", self._lock_path)
             return False
 
-        # Checkpoint 2: state readable and known
-        state = await self.adapter.get_state()
+        # Checkpoint 1: adapter health (with degradation detection)
+        health = await self.adapter.health_check()
+        if not health.healthy:
+            await self._record_adapter_result(False)
+            logger.error("Adapter health check failed: %s", health.message)
+            self.evidence.on_session_end({
+                "total": 0, "passed": 0, "failed": 0,
+                "crashed": 0, "skipped": 0,
+                "is_failed": True,
+                "degraded": self._adapter_degraded,
+            })
+            self._release_lock_if_held()
+            return False
+
+        # Checkpoint 2: state readable and known (with validation)
+        state = await self._get_state_validated()
         if state.screen == GameScreen.UNKNOWN:
             logger.error("Game state is UNKNOWN — cannot proceed")
+            self._release_lock_if_held()
             return False
 
         # Checkpoint 3: main menu reachable
@@ -96,11 +246,26 @@ class TestOrchestrator:
             )
 
         # Checkpoint 4: game is actionable
-        await self.wait_until_actionable(timeout=10.0)
+        await self.wait_until_actionable(timeout=self._game_startup_timeout)
 
         self._current_screen = state.screen
         self._session_active = True
         self._crashed = False
+        self._session_status = SessionStatus.RUNNING
+        self._failure_history.clear()
+
+        # Start watchdog
+        game_pid = getattr(self.adapter, 'game_pid', None)
+        adapter_pid = getattr(self.adapter, 'adapter_pid', None)
+        self._watchdog = Watchdog(
+            game_pid=game_pid,
+            adapter=self.adapter,
+            adapter_pid=adapter_pid,
+            heartbeat_timeout=self._heartbeat_timeout,
+            on_zombie=self._on_watchdog_zombie,
+        )
+        await self._watchdog.start_monitoring()
+
         logger.info("Session started. Screen: %s", self._current_screen.value)
         return True
 
@@ -110,6 +275,11 @@ class TestOrchestrator:
         Release order: game adapter cleanup → evidence finalization.
         """
         self._session_active = False
+
+        # Stop watchdog
+        if self._watchdog is not None:
+            await self._watchdog.stop_monitoring()
+            self._watchdog = None
 
         # Release adapter resources
         try:
@@ -124,28 +294,70 @@ class TestOrchestrator:
             "failed": summary.failed,
             "crashed": summary.crashed,
             "skipped": summary.skipped,
+            "deterministic_fails": summary.deterministic_fails,
             "is_failed": summary.is_failed,
+            "resumed_from": self._resumed_from,
         })
+
+        # Release process-level lock
+        if self._lock_manager is not None:
+            self._lock_manager.release_lock()
+
+        # Clear progress file on normal completion
+        if self._progress_path is not None and not self._crashed and not self._progress_saved_on_shutdown:
+            clear_progress(Path(self._progress_path))
+
         logger.info(
-            "Session stopped. %d passed, %d failed, %d crashed, %d skipped",
+            "Session stopped. %d passed, %d failed, %d crashed, %d skipped, "
+            "%d deterministic_fail",
             summary.passed, summary.failed, summary.crashed, summary.skipped,
+            summary.deterministic_fails,
         )
 
     # ── execution modes ─────────────────────────────────────
 
     async def run_all(self, case_ids: list[str]) -> SessionSummary:
-        """Run all specified test cases."""
+        """Run all specified test cases with progress persistence."""
+        self._register_shutdown_handler()
         if not await self.start_session():
             return SessionSummary(session_id="failed-start")
         results = []
+        completed: list[str] = []
+        pending = list(case_ids)
+
         for case_id in case_ids:
             if self._crashed:
                 results.append(TestResult(case_id, "skip", "Session crashed"))
+                completed.append(case_id)
+                pending = [c for c in pending if c != case_id]
+                await self._save_progress_snapshot(completed, pending, case_id)
                 continue
+
             results.append(await self.execute_case(case_id))
+            completed.append(case_id)
+            pending = [c for c in case_ids if c not in completed]
+
+            # Save progress after each completed case (AC1)
+            await self._save_progress_snapshot(completed, pending)
+
+            if self._shutdown_requested:
+                logger.info("Shutdown requested — saving final progress and stopping")
+                await self._save_progress_snapshot(completed, pending)
+                self._progress_saved_on_shutdown = True
+                logger.warning(
+                    "进度已保存，使用 --resume 继续 (Progress saved. Use --resume to continue.)"
+                )
+                for remaining in pending:
+                    results.append(
+                        TestResult(remaining, "skip", "Interrupted by SIGINT")
+                    )
+                break
+
         self._last_results = results
         await self.stop_session()
-        return self._build_summary(results)
+        summary = self._build_summary(results)
+        summary.resumed_from = getattr(self, "_resumed_from", None)
+        return summary
 
     async def run_cases(self, case_ids: list[str]) -> SessionSummary:
         """Run specific test cases by ID. Delegates to run_all."""
@@ -154,9 +366,16 @@ class TestOrchestrator:
     async def run_failed(
         self, previous_results: list[TestResult] | None = None
     ) -> SessionSummary:
-        """Re-run previously failed cases."""
+        """Re-run previously failed cases.
+
+        Excludes deterministic_fail cases — their root cause is
+        framework/environment issues, re-running is pointless.
+        """
         prev = previous_results or self._last_results
-        failed_ids = [r.case_id for r in prev if r.status == "fail"]
+        failed_ids = [
+            r.case_id for r in prev
+            if r.status == "fail" and not r.is_deterministic_fail
+        ]
         if not failed_ids:
             logger.info("No failed cases to re-run")
             return SessionSummary(session_id="no-failed")
@@ -171,6 +390,7 @@ class TestOrchestrator:
         between cases (handles, caches, temp state).
         """
         self.evidence.on_case_start(case_id)
+        self._adapter_replaced = False
         logger.info("Executing case: %s", case_id)
 
         try:
@@ -194,20 +414,7 @@ class TestOrchestrator:
             return result
 
         except STS2Error as exc:
-            logger.error("Case %s: %s — %s", case_id, exc.category.value, exc)
-            self._failure_history.append(FailureRecord(
-                error_type=exc.category.value,
-                message=exc.message,
-                timestamp=str(exc.timestamp),
-            ))
-            is_crash = exc.category == ErrorCategory.CRASH_ERROR
-            if is_crash:
-                self._handle_crash(case_id, exc)
-                result2: TestResult = TestResult(case_id, "crash", exc.message)
-            else:
-                result2 = TestResult(case_id, "fail", exc.message)
-            self.evidence.on_case_end(result2)
-            return result2
+            return await self._handle_failure(case_id, exc)
 
         except Exception as exc:
             logger.error("Case %s: unexpected crash — %s", case_id, exc)
@@ -218,11 +425,123 @@ class TestOrchestrator:
             return result3
 
         finally:
-            # Per-case adapter cleanup: clear caches, release per-case handles
-            try:
-                await self.adapter.cleanup()
-            except Exception as exc:
-                logger.debug("Adapter cleanup after case %s failed: %s", case_id, exc)
+            # Per-case adapter cleanup: skip if recovery replaced the adapter
+            if not self._adapter_replaced:
+                try:
+                    await self.adapter.cleanup()
+                except Exception as exc:
+                    logger.debug("Adapter cleanup after case %s failed: %s", case_id, exc)
+
+    # ── failure handling ────────────────────────────────────
+
+    async def _handle_failure(self, case_id: str, exc: STS2Error) -> TestResult:
+        """Centralized failure handler: record → decide → execute recovery.
+
+        Flow:
+        1. Record failure in history
+        2. Check for P0 session-level exception → crash immediately
+        3. Decide recovery action via RecoveryStrategy
+        4. Execute recovery if applicable
+        5. On success: force state through CRASHED → MAIN_MENU
+        6. Determine result status (fail/crash/deterministic_fail)
+        """
+        logger.error(
+            "Case %s: %s — %s", case_id, exc.category.value, exc,
+        )
+
+        record = FailureRecord(
+            error_type=exc.category.value,
+            message=exc.message,
+            timestamp=exc.timestamp.isoformat(),
+            exit_code=exc.detail.get("exit_code") if exc.detail else None,
+        )
+        self._failure_history.append(record)
+
+        is_crash = exc.category == ErrorCategory.CRASH_ERROR
+
+        # P0 session-level fatal — always crash, never downgrade
+        if is_p0_exception(exc):
+            self._handle_crash(case_id, exc)
+            sig = crash_signature(exc, record.exit_code)
+            result = TestResult(case_id, "crash", exc.message, crash_signature=sig)
+            self.evidence.on_case_end(result)
+            return result
+
+        if is_crash:
+            self._handle_crash(case_id, exc)
+            result2 = TestResult(case_id, "crash", exc.message)
+            self.evidence.on_case_end(result2)
+            return result2
+
+        # Decide recovery action (non-P0)
+        decision = self.recovery.decide(
+            exc,
+            self._failure_history,
+            max_consecutive=self._max_consecutive_failures,
+        )
+
+        # TERMINATE from decision: P0 → crash, non-P0 → deterministic fail
+        if decision.action == RecoveryAction.TERMINATE:
+            if decision.is_p0:
+                # Safety net: P0 must crash, never become deterministic_fail
+                self._handle_crash(case_id, exc)
+                result3 = TestResult(case_id, "crash", exc.message)
+            else:
+                # Non-P0 TERMINATE from consecutive threshold → deterministic fail
+                sig = crash_signature(exc, record.exit_code)
+                result3 = TestResult(
+                    case_id, "deterministic_fail", exc.message,
+                    crash_signature=sig,
+                )
+            self.evidence.on_case_end(result3)
+            return result3
+
+        # Non-P0, non-terminate: attempt recovery (FAST_PATH or RECREATE)
+        recovered, new_adapter = await self.recovery.execute(decision.action, self.adapter)
+
+        if recovered and new_adapter is not None:
+            # RECREATE succeeded with a new adapter — switch to it
+            self.adapter = new_adapter
+            self._adapter_replaced = True
+            logger.info("RECREATE recovery: switched to new adapter for case %s", case_id)
+
+        if recovered:
+            # Recovery succeeded — reset state through CRASHED → MAIN_MENU
+            self._current_screen = self.state_engine.force_transition(
+                self._current_screen, GameScreen.CRASHED,
+            )
+            await self.wait_until_actionable(timeout=self._game_startup_timeout)
+            self._current_screen = self.state_engine.force_transition(
+                GameScreen.CRASHED, GameScreen.MAIN_MENU,
+            )
+            logger.info(
+                "Recovery succeeded for case %s — state reset to MAIN_MENU", case_id,
+            )
+
+        # Check consecutive failures for deterministic fail (non-P0 path)
+        consecutive = self._consecutive_same_type(record.error_type)
+        if consecutive >= self._max_consecutive_failures:
+            sig = crash_signature(exc, record.exit_code)
+            result4 = TestResult(
+                case_id, "deterministic_fail", exc.message,
+                crash_signature=sig,
+            )
+            self.evidence.on_case_end(result4)
+            return result4
+
+        result5 = TestResult(case_id, "fail", exc.message)
+        self.evidence.on_case_end(result5)
+        return result5
+
+    def _consecutive_same_type(self, error_type: str) -> int:
+        """Count consecutive failures of the same type from history end."""
+        count = 0
+        for record in reversed(self._failure_history):
+            if record.error_type == error_type:
+                count += 1
+            else:
+                break
+        return count
 
     # ── crash handling ──────────────────────────────────────
 
@@ -231,6 +550,13 @@ class TestOrchestrator:
         logger.error("CRASH during case %s: %s", case_id, error)
         self._crashed = True
         self.evidence.on_crash(case_id, error)
+
+    def _on_watchdog_zombie(self, reason: str) -> None:
+        """Callback invoked when watchdog detects a zombie session."""
+        logger.critical("Watchdog zombie detected: %s", reason)
+        self._session_status = SessionStatus.ZOMBIE
+        self._crashed = True
+        self.evidence.on_crash("__watchdog__", Exception(f"Zombie: {reason}"))
 
     # ── wait until actionable ───────────────────────────────
 
@@ -258,12 +584,14 @@ class TestOrchestrator:
         → re-read state → validate transition → check expected_state.
         This is the ONLY action execution path — all code paths use it.
         """
-        # 1. Pre-read state
-        self._current_screen = (await self.adapter.get_state()).screen
+        # 1. Pre-read state (with validation)
+        pre_state = await self._get_state_validated()
+        self._current_screen = pre_state.screen
 
         # 2. Validate action in available set (empty = nothing available)
         available = await self.adapter.get_available_actions()
         if action.action_type not in available:
+            await self._record_adapter_result(True)
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
                 message=f"Action '{action.action_type}' not available. "
@@ -276,20 +604,26 @@ class TestOrchestrator:
 
         # 4. Check ActionResult
         if result.status == "timeout":
+            await self._record_adapter_result(False)
             raise STS2Error(
                 category=ErrorCategory.TIMEOUT_ERROR,
                 message=f"Action '{action.action_type}' timed out",
                 detail={"action": action.action_type, "result_detail": result.detail},
             )
         if result.status == "failure":
+            await self._record_adapter_result(False)
             raise STS2Error(
                 category=ErrorCategory.GAME_ERROR,
                 message=f"Action '{action.action_type}' failed: {result.detail}",
                 detail={"action": action.action_type, "result_detail": result.detail},
             )
 
-        # 5. Re-read state and validate transition
-        new_state = await self.adapter.get_state()
+        # Record heartbeat on successful adapter call
+        if self._watchdog is not None:
+            self._watchdog.record_heartbeat()
+
+        # 5. Re-read state and validate transition (with validation)
+        new_state = await self._get_state_validated()
         self._current_screen = self.state_engine.update_state(
             self._current_screen,
             new_state.screen.value,
@@ -324,4 +658,8 @@ class TestOrchestrator:
         return results
 
     def _build_summary(self, results: list[TestResult]) -> SessionSummary:
-        return SessionSummary(session_id="session-1", results=results)
+        return SessionSummary(
+            session_id="session-1",
+            results=results,
+            resumed_from=self._resumed_from,
+        )

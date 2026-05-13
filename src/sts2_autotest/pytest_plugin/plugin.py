@@ -1,6 +1,7 @@
 """pytest plugin for STS2-AUTOTEST — session management and async bridge (FR16, FR51).
 
 Hooks:
+- pytest_addoption: register custom CLI flags
 - pytest_configure: register custom markers
 - pytest_collection_modifyitems: filter by sts2_state marker
 - pytest_runtest_setup: skip if sts2_adapter required and adapter unavailable
@@ -8,7 +9,8 @@ Hooks:
 - pytest_sessionstart / pytest_sessionfinish: fire lifecycle hooks
 """
 
-import asyncio
+import _thread
+import threading
 from typing import Generator
 
 import pytest
@@ -23,6 +25,15 @@ from sts2_autotest.pytest_plugin.hooks import fire
 from sts2_autotest.pytest_plugin.markers import MARKERS
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--sts2-adapter-available",
+        action="store_true",
+        default=False,
+        help="Mark adapter as available (skip sts2_adapter-marked tests otherwise)",
+    )
+
+
 def pytest_configure(config: pytest.Config) -> None:
     for name, description in MARKERS:
         config.addinivalue_line("markers", f"{name}: {description}")
@@ -32,7 +43,7 @@ def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
     """Filter collected items based on sts2_state marker requirements."""
-    adapter_available = config.getoption("--sts2-adapter-available", default=True)
+    adapter_available = config.getoption("--sts2-adapter-available", default=False)
     for item in items:
         state_marker = item.get_closest_marker("sts2_state")
         if state_marker:
@@ -50,7 +61,11 @@ def pytest_collection_modifyitems(
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
-    """Apply per-case timeout from sts2_timeout marker."""
+    """Apply per-case timeout from sts2_timeout marker.
+
+    Uses threading.Thread + interrupt_main() to interrupt hanging tests.
+    On Windows, this raises KeyboardInterrupt in the main thread.
+    """
     timeout_marker = item.get_closest_marker("sts2_timeout")
     if not timeout_marker:
         yield
@@ -58,25 +73,23 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
 
     timeout_sec = timeout_marker.args[0] if timeout_marker.args else 30.0
 
-    import threading
-
     test_finished = threading.Event()
-    timed_out = threading.Event()
 
     def _timeout_guard() -> None:
-        if test_finished.wait(timeout=timeout_sec):
-            return  # test finished in time
-        timed_out.set()
+        if not test_finished.wait(timeout=timeout_sec):
+            _thread.interrupt_main()
 
     guard = threading.Thread(target=_timeout_guard, daemon=True)
     guard.start()
-    yield
-    test_finished.set()  # signal test finished
-    guard.join(timeout=0.1)
-    if timed_out.is_set():
+    try:
+        yield
+    except KeyboardInterrupt:
         raise TimeoutError(
             f"Test {item.nodeid} exceeded {timeout_sec}s timeout"
         )
+    finally:
+        test_finished.set()
+        guard.join(timeout=0.1)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

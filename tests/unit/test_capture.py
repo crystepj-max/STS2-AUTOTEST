@@ -12,6 +12,7 @@ from sts2_autotest.common.types import CaptureResult
 from sts2_autotest.evidence.capture import (
     ScreenCapture,
     _parse_resolution,
+    _restore_window,
 )
 
 
@@ -370,7 +371,8 @@ class TestCapture:
 
     @patch("sts2_autotest.evidence.capture.mss.mss")
     def test_mss_exception(self, mock_mss_cls: MagicMock, tmp_path: Path) -> None:
-        mock_mss_cls.side_effect = RuntimeError("mss init failed")
+        from mss.exception import ScreenShotError
+        mock_mss_cls.side_effect = ScreenShotError("mss init failed")
 
         sc = ScreenCapture(tmp_path)
         result = sc.capture("TestWindow", "test-case")
@@ -403,7 +405,7 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
-        with patch.object(sc, "_foreground_window", return_value="ok"):
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=True):
             result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "ok"
@@ -421,7 +423,7 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path, max_retries=3)
-        with patch.object(sc, "_foreground_window", return_value="ok"):
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=True):
             result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "error"
@@ -437,7 +439,7 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path, max_retries=1)
-        with patch.object(sc, "_foreground_window", return_value="ok"):
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=True):
             result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "error"
@@ -453,29 +455,13 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
-        with patch.object(sc, "_foreground_window", return_value="not_found"):
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=False):
             result = sc.capture_with_validation("MissingWindow", "test-case")
 
         assert result.status == "skipped"
         assert "not found" in (result.message or "").lower()
         # Must NOT attempt capture
         sct.grab.assert_not_called()
-
-    @patch("sts2_autotest.evidence.capture.mss.mss")
-    def test_foreground_failed_still_captures(
-        self, mock_mss_cls: MagicMock, tmp_path: Path
-    ) -> None:
-        """Window found but foreground failed → still attempt capture (warning)."""
-        bgra = _make_bgra_varied(num_colors=10)
-        sct = _make_mss_mock(bgra, 1920, 1080)
-        mock_mss_cls.return_value = sct
-
-        sc = ScreenCapture(tmp_path)
-        with patch.object(sc, "_foreground_window", return_value="foreground_failed"):
-            result = sc.capture_with_validation("TestWindow", "test-case")
-
-        # Should still succeed — foreground failure is non-blocking
-        assert result.status == "ok"
 
     @patch("sts2_autotest.evidence.capture.mss.mss")
     def test_no_monitor_returns_skipped(
@@ -488,7 +474,7 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
-        with patch.object(sc, "_foreground_window", return_value="ok"):
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=True):
             result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "skipped"
@@ -512,7 +498,7 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path, max_retries=2)
-        with patch.object(sc, "_foreground_window", return_value="ok"):
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=True):
             result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "ok"
@@ -527,43 +513,59 @@ class TestCaptureWithValidation:
         mock_mss_cls.return_value = sct
 
         sc = ScreenCapture(tmp_path)
-        with patch.object(sc, "_foreground_window", return_value="ok"), \
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=True), \
              patch.object(sc, "_save_screenshot", side_effect=OSError("no space")):
             result = sc.capture_with_validation("TestWindow", "test-case")
 
         assert result.status == "skipped"
         assert "no space" in (result.message or "")
 
+    @patch("sts2_autotest.evidence.capture.mss.mss")
+    def test_low_disk_space_skips_write(
+        self, mock_mss_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        """AC3: low disk space makes _save_screenshot raise OSError → SKIPPED."""
+        sct = _make_mss_mock(_make_bgra_varied(), 1920, 1080)
+        mock_mss_cls.return_value = sct
 
-# ── _foreground_window (Win32) ───────────────────────────────
+        sc = ScreenCapture(tmp_path)
+        with patch("sts2_autotest.evidence.capture._restore_window", return_value=True), \
+             patch("sts2_autotest.evidence.capture.check_disk_space", return_value=False):
+            result = sc.capture_with_validation("TestWindow", "test-case")
+
+        assert result.status == "skipped"
+        assert "Insufficient disk space" in (result.message or "")
 
 
-class TestForegroundWindow:
+# ── _restore_window (AC1) ────────────────────────────────────
+
+
+class TestRestoreWindow:
     @patch("sts2_autotest.evidence.capture.ctypes")
-    def test_success(self, mock_ctypes: MagicMock, tmp_path: Path) -> None:
+    def test_success(self, mock_ctypes: MagicMock) -> None:
         mock_user32 = MagicMock()
         mock_user32.FindWindowW.return_value = 12345  # Non-zero HWND
         mock_ctypes.windll.user32 = mock_user32
 
-        sc = ScreenCapture(tmp_path)
-        assert sc._foreground_window("TestWindow") == "ok"
+        result = _restore_window("TestWindow")
+        assert result is True
         mock_user32.SetForegroundWindow.assert_called_once_with(12345)
 
     @patch("sts2_autotest.evidence.capture.ctypes")
-    def test_window_not_found(self, mock_ctypes: MagicMock, tmp_path: Path) -> None:
+    def test_window_not_found(self, mock_ctypes: MagicMock) -> None:
         mock_user32 = MagicMock()
         mock_user32.FindWindowW.return_value = 0  # NULL HWND
         mock_ctypes.windll.user32 = mock_user32
 
-        sc = ScreenCapture(tmp_path)
-        assert sc._foreground_window("MissingWindow") == "not_found"
+        result = _restore_window("MissingWindow")
+        assert result is False
 
     @patch("sts2_autotest.evidence.capture.ctypes")
-    def test_win32_exception(self, mock_ctypes: MagicMock, tmp_path: Path) -> None:
+    def test_exception_returns_false(self, mock_ctypes: MagicMock) -> None:
         mock_ctypes.windll = AttributeError("No windll")
 
-        sc = ScreenCapture(tmp_path)
-        assert sc._foreground_window("TestWindow") == "not_found"
+        result = _restore_window("TestWindow")
+        assert result is False
 
 
 # ── FrameworkConfig screenshot fields ────────────────────────
@@ -675,18 +677,26 @@ class TestRealEvidenceHooks:
 
         mock_capture = MagicMock()
         mock_packager = MagicMock()
+        mock_packager.create_pack.return_value = Path("/tmp/evidence/run_001")
         hooks = RealEvidenceHooks(mock_capture, packager=mock_packager)
         hooks.on_session_end({"passed": 5, "failed": 1, "crashed": 0, "skipped": 0})
         mock_packager.create_pack.assert_called_once_with(run_result="failed")
+        mock_packager.export_artifact.assert_called_once_with(
+            "run_001", result="failed",
+        )
 
     def test_on_session_end_passed(self) -> None:
         from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
 
         mock_capture = MagicMock()
         mock_packager = MagicMock()
+        mock_packager.create_pack.return_value = Path("/tmp/evidence/run_002")
         hooks = RealEvidenceHooks(mock_capture, packager=mock_packager)
         hooks.on_session_end({"passed": 5, "failed": 0, "crashed": 0, "skipped": 0})
         mock_packager.create_pack.assert_called_once_with(run_result="passed")
+        mock_packager.export_artifact.assert_called_once_with(
+            "run_002", result="passed",
+        )
 
     def test_on_case_end_collects_logs_on_failure(self) -> None:
         from sts2_autotest.core.evidence_hooks import RealEvidenceHooks

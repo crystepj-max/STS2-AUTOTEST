@@ -36,6 +36,7 @@ class TestIsTerminal:
         GameScreen.GAME_OVER,
         GameScreen.VICTORY,
         GameScreen.CRASHED,
+        GameScreen.UNKNOWN,
     ])
     def test_terminal_states(self, state: GameScreen) -> None:
         assert state.is_terminal is True
@@ -52,7 +53,6 @@ class TestIsTerminal:
         GameScreen.BOSS_REWARD,
         GameScreen.CARD_REWARD,
         GameScreen.RELIC_REWARD,
-        GameScreen.UNKNOWN,
     ])
     def test_non_terminal_states(self, state: GameScreen) -> None:
         assert state.is_terminal is False
