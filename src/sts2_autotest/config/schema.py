@@ -42,8 +42,8 @@ class FrameworkConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     log_level: str = Field(default="INFO", pattern=r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
-    screenshot_dir: str = "./screenshots"
-    evidence_dir: str = "./evidence"
+    screenshot_dir: str = "tests/output/screenshots"
+    evidence_dir: str = "tests/output"
     evidence_retention: int = Field(default=20, ge=1)
     metrics_filename: str = "metrics.jsonl"
     screenshot_rgb_threshold: int = Field(default=3, ge=1)
@@ -60,11 +60,11 @@ class FrameworkConfig(BaseModel):
     log_retention_days: int = Field(default=7, ge=1)
     log_retention_max_bytes: int = Field(default=10 * 1024 * 1024 * 1024, ge=1)
     strict_validation: bool = False
-    progress_dir: str = "./evidence/.progress"
+    progress_dir: str = "tests/output/.progress"
     progress_filename: str = "session-progress.json"
-    artifact_dir: str = "./evidence/artifacts"
+    artifact_dir: str = "tests/output/artifacts"
     disk_threshold_mb: int = Field(default=100, ge=1)
-    lock_file: str = ".sts2-autotest.lock"
+    lock_file: str = "tests/output/.sts2-autotest.lock"
 
 
 class ExecutionConfig(BaseModel):
@@ -91,6 +91,20 @@ class StateMachineConfig(BaseModel):
     poll_interval: float = Field(default=0.5, gt=0)
 
 
+class ProjectConfigModel(BaseModel):
+    """Configuration for a single MOD project in the workspace."""
+    model_config = ConfigDict(frozen=True)
+    name: str
+    spec_dir: str
+    output_dir: str = ""
+
+
+class WorkspaceConfigModel(BaseModel):
+    """Workspace configuration for multi-MOD-project support."""
+    model_config = ConfigDict(frozen=True)
+    projects: list[ProjectConfigModel] = []
+
+
 class STS2Config(BaseModel):
     """Top-level configuration model with four-layer inheritance support.
 
@@ -107,6 +121,7 @@ class STS2Config(BaseModel):
     adapter: AdapterConfig = AdapterConfig()
     execution: ExecutionConfig = ExecutionConfig()
     state_machine: StateMachineConfig = StateMachineConfig()
+    workspace: WorkspaceConfigModel = WorkspaceConfigModel()
 
     @model_validator(mode="after")
     def _check_adapter_mutual_exclusion(self) -> "STS2Config":
