@@ -6,7 +6,6 @@ Produces ReviewReport (diagnostics) and RevisedDraft (improved Markdown).
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from sts2_autotest.common.spec_models import (
     TestSpec, SuiteSpec, ReviewReport, RevisedDraft,
@@ -120,7 +119,7 @@ class SpecReviewer:
 
     def _check_completeness(self, spec: TestSpec, issues: list[ReviewIssue]) -> None:
         """Check that required fields are populated."""
-        if spec.priority == "P3" and spec.priority == "P3":
+        if spec.priority == "P3":
             # Only flag if it's the default and never explicitly set
             issues.append(ReviewIssue(
                 category=IssueCategory.MISSING,
@@ -213,5 +212,6 @@ class SpecReviewer:
             r"尽快": "指定回合限制或时间上限（如 '在 15 回合内'）",
             r"合理": "指定预期的数值范围（如 'HP 减少 ≥ 10'）",
             r"酌情": "指定决策规则（如 '总是选择奖励'）",
+            r"相关": "明确指定相关的具体项目（如 '选择与战斗相关的卡牌'）",
         }
         return suggestions.get(pattern, "请更具体地描述该步骤")
