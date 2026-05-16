@@ -128,3 +128,28 @@ def set_hp(hp: int) -> ActionDescriptor:
         action_type="set_hp",
         params={"hp": hp},
     )
+
+
+def no_crash_detected() -> AssertionFn:
+    """Assert the game has not crashed."""
+
+    def check(state: GameState) -> tuple[bool, str]:
+        ok = state.screen != GameScreen.CRASHED
+        msg = "" if ok else f"Game is in CRASHED state"
+        return ok, msg
+
+    return check
+
+
+def has_travelable_node() -> AssertionFn:
+    """Assert there is at least one travelable map node."""
+
+    def check(state: GameState) -> tuple[bool, str]:
+        nodes = getattr(state, "travelable_nodes", None)
+        if nodes is None:
+            return False, "travelable_nodes not in state"
+        ok = len(nodes) > 0
+        msg = "" if ok else "No travelable nodes available"
+        return ok, msg
+
+    return check
