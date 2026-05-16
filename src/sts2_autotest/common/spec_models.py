@@ -5,6 +5,8 @@ Markdown test specifications. ReviewReport and RevisedDraft are
 outputs of the review phase.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import StrEnum
 
