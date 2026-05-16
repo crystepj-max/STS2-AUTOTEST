@@ -176,8 +176,8 @@ class MarkdownParser:
                     cases.append(self.parse_case(text, source_path=str(f)))
                 elif level == "suite":
                     suites.append(self.parse_suite(text, source_path=str(f)))
-            except ParsingError:
-                continue  # skip files that don't match the spec format
+            except (ParsingError, UnicodeDecodeError, PermissionError):
+                continue  # skip files that don't match the spec format or can't be read
         return cases, suites
 
     def _parse_section_text(self, markdown: str, name: str) -> str:

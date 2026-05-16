@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import pytest
-from sts2_autotest.common.spec_models import TestSpec, SuiteSpec, IssueCategory
+from sts2_autotest.common.spec_models import TestSpec, SuiteSpec
 from sts2_autotest.core.markdown_parser import (
     MarkdownParser, ParsingError, detect_level,
 )
