@@ -194,30 +194,43 @@ def review_cmd(args: Any) -> int:
     reviewer = SpecReviewer()
     all_passed = True
 
-    print(f"[autotest] Reviewing {len(cases)} case(s), {len(suites)} suite(s) in {spec_dir}\n")
+    output_lines: list[str] = []
+    def _out(line: str = "") -> None:
+        output_lines.append(line)
+
+    _out(f"[autotest] Reviewing {len(cases)} case(s), {len(suites)} suite(s) in {spec_dir}\n")
 
     for spec in cases:
         report = reviewer.review(spec)
         status = "PASS" if report.passed else "ISSUES"
-        print(f"  [{status}] {spec.id}: {spec.title}")
+        _out(f"  [{status}] {spec.id}: {spec.title}")
         if not report.passed:
             all_passed = False
             for issue in report.issues:
-                print(f"         - [{issue.category.value}] {issue.location}: {issue.description}")
+                _out(f"         - [{issue.category.value}] {issue.location}: {issue.description}")
         draft = reviewer.generate_revised_draft(spec, report)
         if draft.changes_summary and draft.changes_summary != ["No issues found — spec is already clean"]:
             for change in draft.changes_summary:
-                print(f"           draft: {change}")
+                _out(f"           draft: {change}")
 
     for suite in suites:
         report = reviewer.review_suite(suite)
         status = "PASS" if report.passed else "ISSUES"
-        print(f"  [{status}] {suite.id}: {suite.title}")
+        _out(f"  [{status}] {suite.id}: {suite.title}")
         if not report.passed:
             for issue in report.issues:
-                print(f"         - [{issue.category.value}] {issue.location}: {issue.description}")
+                _out(f"         - [{issue.category.value}] {issue.location}: {issue.description}")
 
-    print(f"\n[autotest] Review complete. {'All passed' if all_passed else 'Some issues found'}.")
+    _out(f"\n[autotest] Review complete. {'All passed' if all_passed else 'Some issues found'}.")
+
+    output = "\n".join(output_lines)
+    output_path = getattr(args, "output", None)
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(output + "\n")
+    else:
+        print(output)
+
     return 0 if all_passed else 1
 
 
@@ -245,11 +258,20 @@ def compile_cmd(args: Any) -> int:
 
     generator = CodeGenerator()
     generated: list[str] = []
+    specs_by_id = {s.id: s for s in cases}
 
     for spec in cases:
         out_path = generator.generate_to_file(spec, output_dir)
         generated.append(out_path)
         print(f"  [GENERATED] {out_path}")
+
+    for suite in suites:
+        suite_code = generator.generate_suite_test(suite, specs_by_id)
+        suite_path = os.path.join(output_dir, f"test_{suite.id.lower().replace('-', '_')}.py")
+        with open(suite_path, "w", encoding="utf-8") as f:
+            f.write(suite_code)
+        generated.append(suite_path)
+        print(f"  [GENERATED] {suite_path}")
 
     print(f"\n[autotest] Generated {len(generated)} test file(s) in {output_dir}")
     return 0

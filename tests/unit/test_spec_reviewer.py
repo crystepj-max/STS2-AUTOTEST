@@ -93,8 +93,9 @@ class TestSpecReviewer:
         assert isinstance(draft, RevisedDraft)
         assert draft.spec_id == "TC-DRAFT"
         assert len(draft.changes_summary) > 0
-        # The draft should replace ambiguous terms with concrete alternatives
-        assert "适当" not in draft.markdown_content
+        # The draft should list ambiguity issues with suggestions
+        assert any("Ambiguity" in c for c in draft.changes_summary)
+        assert "适当" in draft.markdown_content  # original preserved, changes in summary
 
     def test_generate_revised_draft_clean_spec(self) -> None:
         spec = TestSpec(

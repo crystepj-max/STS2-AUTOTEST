@@ -81,12 +81,7 @@ class SpecReviewer:
 
         for issue in report.issues:
             if issue.category == IssueCategory.AMBIGUITY:
-                for pattern, _ in _AMBIGUITY_PATTERNS:
-                    p = re.compile(pattern)
-                    if p.search(revised):
-                        revised = p.sub(issue.suggestion or "[明确指定]", revised)
-                        changes.append(f"Replaced '{pattern}' with concrete wording")
-                        break
+                changes.append(f"Ambiguity: {issue.description} → {issue.suggestion}")
 
             elif issue.category == IssueCategory.MISSING:
                 if "start state" in issue.description.lower() and not spec.start_state:
@@ -176,13 +171,17 @@ class SpecReviewer:
         if spec.start_state:
             lines.append("## Start State")
             for s in spec.start_state.split("\n"):
-                lines.append(f"- {s.strip()}")
+                clean = s.strip().lstrip("- ")
+                if clean:
+                    lines.append(f"- {clean}")
             lines.append("")
 
         if spec.end_state:
             lines.append("## End State")
             for s in spec.end_state.split("\n"):
-                lines.append(f"- {s.strip()}")
+                clean = s.strip().lstrip("- ")
+                if clean:
+                    lines.append(f"- {clean}")
             lines.append("")
 
         if spec.givens:
