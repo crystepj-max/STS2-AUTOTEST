@@ -297,27 +297,29 @@ def run_cmd(args: Any) -> int:
 
     # Normal run paths (all with progress_path set for AC1)
     if args.all:
-        print("[autotest] Running full pipeline: review -> compile -> run")
-        from argparse import Namespace
-        # Step 1: Review
-        review_rc = review_cmd(Namespace(
-            command="review", spec_dir=args.spec_dir,
-            project=getattr(args, "project", None), output=None,
-        ))
-        if review_rc != 0:
-            print("[autotest] Review failed - aborting pipeline")
-            return 1
-        # Step 2: Compile
-        compile_rc = compile_cmd(Namespace(
-            command="compile", spec_dir=args.spec_dir,
-            output_dir=getattr(args, "output_dir", None),
-            project=getattr(args, "project", None),
-        ))
-        if compile_rc != 0:
-            print("[autotest] Compile failed - aborting pipeline")
-            return 1
-        # Step 3: Run
-        print("[autotest] Running compiled tests...")
+        # Pipeline mode: review -> compile -> run, only if spec dir available
+        pipeline_spec_dir = _resolve_spec_dir(args)
+        if pipeline_spec_dir:
+            print("[autotest] Running full pipeline: review -> compile -> run")
+            from argparse import Namespace
+            review_rc = review_cmd(Namespace(
+                command="review", spec_dir=pipeline_spec_dir,
+                project=getattr(args, "project", None), output=None,
+            ))
+            if review_rc != 0:
+                print("[autotest] Review failed - aborting pipeline")
+                return 1
+            output_dir = _resolve_output_dir(args, pipeline_spec_dir)
+            compile_rc = compile_cmd(Namespace(
+                command="compile", spec_dir=pipeline_spec_dir,
+                output_dir=output_dir, project=getattr(args, "project", None),
+            ))
+            if compile_rc != 0:
+                print("[autotest] Compile failed - aborting pipeline")
+                return 1
+            print("[autotest] Running compiled tests...")
+        else:
+            print("[autotest] Running all cases (no spec pipeline)...")
         return _run_orchestrator(
             ["all"], timeout=args.timeout,
             progress_path=use_progress,
