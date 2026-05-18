@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+from sts2_autotest.adapters.base import GameAdapterProtocol
+
 
 DEFAULT_EVIDENCE_DIR = ".sts2-evidence"
 
@@ -38,6 +40,12 @@ def _create_parser() -> Any:
     run.add_argument("--resume", action="store_true", help="Resume from last run")
     run.add_argument("--no-resume", action="store_true", help="Ignore existing progress and start fresh")
     run.add_argument("--timeout", type=int, default=30, help="Case timeout (seconds)")
+    run.add_argument(
+        "--adapter",
+        choices=["cli", "agent"],
+        default=None,
+        help="Adapter type (overrides config: cli=STS2-Cli-Mod, agent=STS2-Agent)",
+    )
 
     # autotest doctor
     doc = sub.add_parser("doctor", help="Check environment readiness")
@@ -56,6 +64,74 @@ def _create_parser() -> Any:
     return p
 
 
+def _get_env(keys: list[str], default: str) -> str:
+    """Look up an env var by trying each STS2_ prefix.
+
+    Tries STS2_ADAPTER__AGENT__<KEY>, STS2_ADAPTER__CLI__<KEY>, and plain <KEY>.
+    This mirrors the config loader's env-var convention without importing config.
+    """
+    for key in keys:
+        val = os.environ.get(key)
+        if val is not None:
+            return val
+    return default
+
+
+def _is_agent_default() -> bool:
+    """Check if agent adapter is enabled by default via STS2_ADAPTER__AGENT__ENABLED env var."""
+    raw = os.environ.get("STS2_ADAPTER__AGENT__ENABLED", "false")
+    return raw.lower() in ("true", "1", "yes")
+
+
+def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
+    """Create adapter based on type.
+
+    Reads configuration from STS2_ prefixed environment variables,
+    mirroring the config/loader.py convention without importing config.
+
+    Args:
+        adapter_type: "cli" or "agent" — which adapter to instantiate.
+
+    Returns:
+        A GameAdapterProtocol-compliant adapter instance.
+    """
+    if adapter_type == "agent":
+        from sts2_autotest.adapters.agent import AgentAdapter
+
+        return AgentAdapter(
+            endpoint=_get_env(
+                ["STS2_ADAPTER__AGENT__ENDPOINT"], "http://localhost:8080"
+            ),
+            timeout=float(_get_env(["STS2_ADAPTER__AGENT__TIMEOUT"], "30")),
+            tool_profile=_get_env(
+                ["STS2_ADAPTER__AGENT__TOOL_PROFILE"], "guided"
+            ),
+            debug_actions=_get_env(
+                ["STS2_ADAPTER__AGENT__DEBUG_ACTIONS"], "false"
+            ).lower()
+            in ("true", "1", "yes"),
+            health_path=_get_env(["STS2_ADAPTER__AGENT__HEALTH_PATH"], "health"),
+            state_path=_get_env(
+                ["STS2_ADAPTER__AGENT__STATE_PATH"], "game_state"
+            ),
+            actions_path=_get_env(
+                ["STS2_ADAPTER__AGENT__ACTIONS_PATH"], "available_actions"
+            ),
+            act_path=_get_env(["STS2_ADAPTER__AGENT__ACT_PATH"], "act"),
+            wait_path=_get_env(
+                ["STS2_ADAPTER__AGENT__WAIT_PATH"], "wait_until_actionable"
+            ),
+        )
+    else:
+        from sts2_autotest.adapters.cli_mod import CliModAdapter
+
+        cli_path = os.environ.get("STS2_ADAPTER__CLI__CLI_PATH")
+        cli_timeout = float(
+            os.environ.get("STS2_ADAPTER__CLI__TIMEOUT", "30")
+        )
+        return CliModAdapter(cli_path=cli_path, timeout=cli_timeout)
+
+
 def _run_orchestrator(
     case_ids: list[str],
     timeout: int,
@@ -66,11 +142,31 @@ def _run_orchestrator(
     """Create an orchestrator and run the given case IDs.
 
     Lifecycle is owned by run_all() (start_session + stop_session inside).
+    Uses CliModAdapter by default. Callers that need a specific adapter
+    should use _run_orchestrator_with_adapter instead.
     """
     from sts2_autotest.adapters.cli_mod import CliModAdapter
+
+    return _run_orchestrator_with_adapter(
+        CliModAdapter(), case_ids, timeout,
+        progress_path=progress_path, resumed_from=resumed_from,
+    )
+
+
+def _run_orchestrator_with_adapter(
+    adapter: GameAdapterProtocol,
+    case_ids: list[str],
+    timeout: int,
+    *,
+    progress_path: str | None = None,
+    resumed_from: str | None = None,
+) -> int:
+    """Create an orchestrator with the given adapter and run the given case IDs.
+
+    Lifecycle is owned by run_all() (start_session + stop_session inside).
+    """
     from sts2_autotest.core.orchestrator import TestOrchestrator
 
-    adapter = CliModAdapter()
     orch = TestOrchestrator(
         adapter=adapter,
         progress_path=progress_path,
@@ -96,9 +192,43 @@ def _get_progress_path() -> Path:
     return Path(DEFAULT_EVIDENCE_DIR) / ".progress" / "session-progress.json"
 
 
+def _dispatch_orchestrator(
+    use_agent: bool,
+    adapter: GameAdapterProtocol | None,
+    case_ids: list[str],
+    timeout: int,
+    *,
+    progress_path: str | None = None,
+    resumed_from: str | None = None,
+) -> int:
+    """Route to the correct orchestrator based on adapter type.
+
+    Preserves backward compatibility: when using CLI adapter (the default),
+    calls the original _run_orchestrator so existing mock-based tests pass.
+    When using agent adapter, calls _run_orchestrator_with_adapter.
+    """
+    # Build kwargs to match original _run_orchestrator call signature
+    # (timeout as keyword, resumed_from omitted when None)
+    kwargs: dict[str, str | None] = {"progress_path": progress_path}
+    if resumed_from is not None:
+        kwargs["resumed_from"] = resumed_from
+
+    if use_agent and adapter is not None:
+        return _run_orchestrator_with_adapter(
+            adapter, case_ids, timeout=timeout, **kwargs,
+        )
+    return _run_orchestrator(
+        case_ids, timeout=timeout, **kwargs,
+    )
+
+
 def run_cmd(args: Any) -> int:
     """Dispatch run command — connects to the real orchestrator with resume support."""
     from sts2_autotest.core.progress import clear_progress, load_progress
+
+    # Determine adapter type: --adapter flag takes precedence, then env var default
+    use_agent: bool = (args.adapter or ("agent" if _is_agent_default() else "cli")) == "agent"
+    adapter = _create_adapter("agent") if use_agent else None
 
     progress_path = _get_progress_path()
     use_progress = str(progress_path)  # Enable progress persistence for all runs (AC1)
@@ -123,8 +253,8 @@ def run_cmd(args: Any) -> int:
             print(f"[autotest] Resuming session {record.session_id} — "
                   f"{len(pending)} cases remaining")
             resumed_from = record.session_id
-            return _run_orchestrator(
-                pending, timeout=args.timeout,
+            return _dispatch_orchestrator(
+                use_agent, adapter, pending, timeout=args.timeout,
                 progress_path=use_progress, resumed_from=resumed_from,
             )
 
@@ -139,26 +269,26 @@ def run_cmd(args: Any) -> int:
     # Normal run paths (all with progress_path set for AC1)
     if args.all:
         print("[autotest] Running all cases...")
-        return _run_orchestrator(
-            ["all"], timeout=args.timeout,
+        return _dispatch_orchestrator(
+            use_agent, adapter, ["all"], timeout=args.timeout,
             progress_path=use_progress,
         )
     elif args.cases:
         print(f"[autotest] Running cases: {', '.join(args.cases)}")
-        return _run_orchestrator(
-            args.cases, timeout=args.timeout,
+        return _dispatch_orchestrator(
+            use_agent, adapter, args.cases, timeout=args.timeout,
             progress_path=use_progress,
         )
     elif args.suite:
         print(f"[autotest] Running suite: {args.suite}")
-        return _run_orchestrator(
-            [args.suite], timeout=args.timeout,
+        return _dispatch_orchestrator(
+            use_agent, adapter, [args.suite], timeout=args.timeout,
             progress_path=use_progress,
         )
     elif args.failed:
         print("[autotest] Re-running failed cases...")
-        return _run_orchestrator(
-            ["failed"], timeout=args.timeout,
+        return _dispatch_orchestrator(
+            use_agent, adapter, ["failed"], timeout=args.timeout,
             progress_path=use_progress,
         )
     else:
@@ -254,6 +384,35 @@ def _check_env() -> dict[str, dict[str, str]]:
 def doctor_cmd(args: Any) -> int:
     """Check environment readiness with real checks."""
     checks = _check_env()
+
+    # Agent endpoint check when enabled via env var
+    if _is_agent_default():
+        from sts2_autotest.adapters.agent import AgentAdapter
+
+        agent_endpoint = os.environ.get(
+            "STS2_ADAPTER__AGENT__ENDPOINT", "http://localhost:8080"
+        )
+
+        async def _probe_agent() -> bool:
+            adapter = AgentAdapter(endpoint=agent_endpoint, timeout=5.0)
+            try:
+                health = await adapter.health_check()
+                return health.healthy
+            except Exception:
+                return False
+            finally:
+                await adapter.cleanup()
+
+        agent_healthy = asyncio.run(_probe_agent())
+        checks["sts2_agent"] = {
+            "status": "OK" if agent_healthy else "FAIL",
+            "message": (
+                f"Agent endpoint: {agent_endpoint}"
+                if agent_healthy
+                else "Agent not responding"
+            ),
+        }
+
     has_failure = any(v["status"] != "OK" for v in checks.values())
 
     if args.ci:
