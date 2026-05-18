@@ -181,7 +181,8 @@ class AgentAdapter:
             )
 
         try:
-            return resp.json()
+            resp_data: dict[str, Any] = resp.json()
+            return resp_data
         except json.JSONDecodeError as exc:
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
@@ -230,7 +231,8 @@ class AgentAdapter:
         Returns the list of action names the agent reports as available.
         """
         data = await self._request("POST", self._actions_path)
-        return data.get("actions", [])
+        actions_result: list[str] = data.get("actions", [])
+        return actions_result
 
     async def act(self, action: str, args: dict[str, Any] | None = None) -> ActionResult:
         """POST {endpoint}/act.
