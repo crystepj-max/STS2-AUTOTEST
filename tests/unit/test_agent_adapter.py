@@ -10,7 +10,7 @@ import pytest
 
 from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.adapters.base import ActionResult, HealthStatus
-from sts2_autotest.common.errors import ErrorCategory, STS2Error
+from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
 
 
@@ -20,23 +20,37 @@ def _run(coro: Any) -> Any:
 
 
 class MockAsyncClient:
-    """Minimal mock for httpx.AsyncClient to avoid respx dependency."""
+    """Minimal mock for httpx.AsyncClient to avoid respx dependency.
+
+    Supports both response queuing and exception injection.
+    Call add_response() to queue a normal response, or add_exception()
+    to queue an exception that will be raised on the next call.
+    """
 
     def __init__(self) -> None:
         self.responses: list[httpx.Response] = []
+        self.exceptions: list[Exception] = []
         self._closed = False
         self._requests: list[dict[str, Any]] = []
 
     def add_response(self, status: int = 200, json_data: dict[str, Any] | None = None) -> None:
         self.responses.append(httpx.Response(status, json=json_data or {}))
 
+    def add_exception(self, exc: Exception) -> None:
+        self.exceptions.append(exc)
+
+    def _next(self) -> httpx.Response:
+        if self.exceptions:
+            raise self.exceptions.pop(0)
+        return self.responses.pop(0) if self.responses else httpx.Response(200, json={})
+
     async def get(self, url: str, **kwargs: object) -> httpx.Response:
         self._requests.append({"method": "GET", "url": url, "kwargs": kwargs})
-        return self.responses.pop(0) if self.responses else httpx.Response(200, json={})
+        return self._next()
 
     async def post(self, url: str, **kwargs: object) -> httpx.Response:
         self._requests.append({"method": "POST", "url": url, "kwargs": kwargs})
-        return self.responses.pop(0) if self.responses else httpx.Response(200, json={})
+        return self._next()
 
     async def aclose(self) -> None:
         self._closed = True
@@ -237,6 +251,137 @@ class TestAgentAdapterVersionHandshake:
 
         assert result.healthy is True
         assert adapter._version_checked is True
+
+
+class TestAgentAdapterErrorMapping:
+    """Verify httpx exceptions are properly classified as STS2Error."""
+
+    def test_timeout_exception_maps_to_adapter_error(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_exception(httpx.TimeoutException("Connection timed out"))
+        adapter = AgentAdapter(client=mock)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+        assert exc.value.category == ErrorCategory.ADAPTER_ERROR
+        assert exc.value.detail.get("subtype") == AdapterErrorSubType.TIMEOUT
+
+    def test_connect_error_maps_to_adapter_error(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_exception(httpx.ConnectError("Connection refused"))
+        adapter = AgentAdapter(client=mock)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+        assert exc.value.category == ErrorCategory.ADAPTER_ERROR
+        assert exc.value.detail.get("subtype") == AdapterErrorSubType.PROCESS_EXIT
+
+    def test_http_status_error_408_maps_to_timeout(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(408, {})
+        adapter = AgentAdapter(client=mock)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+        assert exc.value.category == ErrorCategory.TIMEOUT_ERROR
+
+    def test_http_status_error_504_maps_to_timeout(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(504, {})
+        adapter = AgentAdapter(client=mock)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+        assert exc.value.category == ErrorCategory.TIMEOUT_ERROR
+
+    def test_http_status_error_500_maps_to_adapter_error(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(500, {})
+        adapter = AgentAdapter(client=mock)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+        assert exc.value.category == ErrorCategory.ADAPTER_ERROR
+        assert exc.value.detail.get("subtype") == AdapterErrorSubType.NONZERO_EXIT_CODE
+
+    def test_request_error_fallback(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_exception(httpx.RemoteProtocolError("Remote disconnected"))
+        adapter = AgentAdapter(client=mock)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+        assert exc.value.category == ErrorCategory.ADAPTER_ERROR
+        assert exc.value.detail.get("subtype") == AdapterErrorSubType.PROCESS_EXIT
+
+    def test_json_decode_error_maps_to_adapter_error(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"broken": None})  # Will be returned as valid JSON
+        adapter = AgentAdapter(client=mock)
+        # get_state calls _request which calls resp.json() — valid JSON here
+        state = _run(adapter.get_state())
+        assert state.screen == GameScreen.UNKNOWN
+
+    def test_act_timeout_from_exception(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_exception(httpx.TimeoutException("Timed out"))
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("play_card"))
+        assert result.status == "timeout"
+
+    def test_act_connect_error_maps_to_failure(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_exception(httpx.ConnectError("Connection refused"))
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("play_card"))
+        assert result.status == "failure"
+
+    def test_capture_bug_snapshot_fallback(self) -> None:
+        """When get_state fails, capture_bug_snapshot returns UNKNOWN."""
+        mock = MockAsyncClient()
+        mock.add_exception(httpx.ConnectError("No connection"))
+        adapter = AgentAdapter(client=mock)
+
+        snapshot = _run(adapter.capture_bug_snapshot())
+        assert snapshot["available_actions"] == []
+        assert "timestamp" in snapshot
+
+
+class TestAgentAdapterScreenMapping:
+    """Verify screen mapping covers all known values."""
+
+    def test_crashed_screen_mapped(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"screen": "CRASHED"})
+        adapter = AgentAdapter(client=mock)
+
+        state = _run(adapter.get_state())
+        assert state.screen == GameScreen.CRASHED
+
+    def test_all_major_screens(self) -> None:
+        screens = {
+            "MENU": GameScreen.MAIN_MENU,
+            "CHARACTER_SELECT": GameScreen.CHARACTER_SELECT,
+            "COMBAT": GameScreen.COMBAT,
+            "SHOP": GameScreen.SHOP,
+            "REST": GameScreen.REST,
+            "EVENT": GameScreen.EVENT,
+            "CHEST": GameScreen.CHEST,
+            "BOSS_REWARD": GameScreen.BOSS_REWARD,
+            "CARD_REWARD": GameScreen.CARD_REWARD,
+            "GAME_OVER": GameScreen.GAME_OVER,
+            "VICTORY": GameScreen.VICTORY,
+            "CRASHED": GameScreen.CRASHED,
+            "NONEXISTENT": GameScreen.UNKNOWN,
+        }
+        for raw, expected in screens.items():
+            mock = MockAsyncClient()
+            mock.add_response(200, {"screen": raw})
+            adapter = AgentAdapter(client=mock)
+            state = _run(adapter.get_state())
+            assert state.screen == expected, f"{raw} -> {expected}"
 
 
 class TestProtocolCompliance:

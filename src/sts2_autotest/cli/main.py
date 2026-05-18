@@ -141,9 +141,8 @@ def _run_orchestrator(
 ) -> int:
     """Create an orchestrator and run the given case IDs.
 
-    Lifecycle is owned by run_all() (start_session + stop_session inside).
-    Uses CliModAdapter by default. Callers that need a specific adapter
-    should use _run_orchestrator_with_adapter instead.
+    Delegates to _run_orchestrator_with_adapter with a CliModAdapter.
+    Kept for backward compatibility with existing mock-based tests.
     """
     from sts2_autotest.adapters.cli_mod import CliModAdapter
 
@@ -193,30 +192,37 @@ def _get_progress_path() -> Path:
 
 
 def _dispatch_orchestrator(
-    use_agent: bool,
     adapter: GameAdapterProtocol | None,
     case_ids: list[str],
     timeout: int,
     *,
     progress_path: str | None = None,
     resumed_from: str | None = None,
+    use_agent: bool = False,
 ) -> int:
     """Route to the correct orchestrator based on adapter type.
 
-    Preserves backward compatibility: when using CLI adapter (the default),
-    calls the original _run_orchestrator so existing mock-based tests pass.
-    When using agent adapter, calls _run_orchestrator_with_adapter.
+    Uses _run_orchestrator for CLI (backward compat with mock tests),
+    _run_orchestrator_with_adapter for Agent. When adapter is None
+    (from --resume branches that haven't built it yet), creates it
+    from default env config.
     """
-    # Build kwargs to match original _run_orchestrator call signature
-    # (timeout as keyword, resumed_from omitted when None)
+    if adapter is None:
+        use_agent = _is_agent_default()
+        if use_agent:
+            adapter = _create_adapter("agent")
+        else:
+            adapter = _create_adapter("cli")
+
     kwargs: dict[str, str | None] = {"progress_path": progress_path}
     if resumed_from is not None:
         kwargs["resumed_from"] = resumed_from
 
-    if use_agent and adapter is not None:
+    if use_agent:
         return _run_orchestrator_with_adapter(
             adapter, case_ids, timeout=timeout, **kwargs,
         )
+
     return _run_orchestrator(
         case_ids, timeout=timeout, **kwargs,
     )
@@ -227,8 +233,9 @@ def run_cmd(args: Any) -> int:
     from sts2_autotest.core.progress import clear_progress, load_progress
 
     # Determine adapter type: --adapter flag takes precedence, then env var default
-    use_agent: bool = (args.adapter or ("agent" if _is_agent_default() else "cli")) == "agent"
-    adapter = _create_adapter("agent") if use_agent else None
+    adapter_type: str = args.adapter or ("agent" if _is_agent_default() else "cli")
+    use_agent = adapter_type == "agent"
+    adapter = _create_adapter(adapter_type)
 
     progress_path = _get_progress_path()
     use_progress = str(progress_path)  # Enable progress persistence for all runs (AC1)
@@ -254,8 +261,9 @@ def run_cmd(args: Any) -> int:
                   f"{len(pending)} cases remaining")
             resumed_from = record.session_id
             return _dispatch_orchestrator(
-                use_agent, adapter, pending, timeout=args.timeout,
+                adapter, pending, timeout=args.timeout,
                 progress_path=use_progress, resumed_from=resumed_from,
+                use_agent=use_agent,
             )
 
     # Auto-detect: progress file exists but no explicit flag
@@ -270,26 +278,26 @@ def run_cmd(args: Any) -> int:
     if args.all:
         print("[autotest] Running all cases...")
         return _dispatch_orchestrator(
-            use_agent, adapter, ["all"], timeout=args.timeout,
-            progress_path=use_progress,
+            adapter, ["all"], timeout=args.timeout,
+            progress_path=use_progress, use_agent=use_agent,
         )
     elif args.cases:
         print(f"[autotest] Running cases: {', '.join(args.cases)}")
         return _dispatch_orchestrator(
-            use_agent, adapter, args.cases, timeout=args.timeout,
-            progress_path=use_progress,
+            adapter, args.cases, timeout=args.timeout,
+            progress_path=use_progress, use_agent=use_agent,
         )
     elif args.suite:
         print(f"[autotest] Running suite: {args.suite}")
         return _dispatch_orchestrator(
-            use_agent, adapter, [args.suite], timeout=args.timeout,
-            progress_path=use_progress,
+            adapter, [args.suite], timeout=args.timeout,
+            progress_path=use_progress, use_agent=use_agent,
         )
     elif args.failed:
         print("[autotest] Re-running failed cases...")
         return _dispatch_orchestrator(
-            use_agent, adapter, ["failed"], timeout=args.timeout,
-            progress_path=use_progress,
+            adapter, ["failed"], timeout=args.timeout,
+            progress_path=use_progress, use_agent=use_agent,
         )
     else:
         print("[autotest] No run option specified. "

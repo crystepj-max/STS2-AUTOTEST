@@ -25,8 +25,11 @@ import httpx
 
 from sts2_autotest.adapters.base import ActionResult, HealthStatus
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
+from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.common.types import Capabilities
+
+logger = get_logger("adapters.agent")
 
 # STS2-Agent screen name → GameScreen enum mapping (same semantics as cli_mod.py)
 _SCREEN_MAP: dict[str, GameScreen] = {
@@ -45,6 +48,7 @@ _SCREEN_MAP: dict[str, GameScreen] = {
     "RELIC_REWARD": GameScreen.RELIC_REWARD,
     "GAME_OVER": GameScreen.GAME_OVER,
     "VICTORY": GameScreen.VICTORY,
+    "CRASHED": GameScreen.CRASHED,
 }
 
 
@@ -79,6 +83,8 @@ class AgentAdapter:
         act_path: str = "act",
         wait_path: str = "wait_until_actionable",
     ) -> None:
+        if endpoint is None:
+            endpoint = "http://localhost:8080"
         self.endpoint = endpoint.rstrip("/")
         self.timeout = timeout
         self.tool_profile = tool_profile
@@ -150,6 +156,19 @@ class AgentAdapter:
                 message=f"Connection refused: {url}",
                 detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "url": url, "method": method},
             )
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in (408, 504):
+                raise STS2Error(
+                    category=ErrorCategory.TIMEOUT_ERROR,
+                    message=f"HTTP timeout: {status}",
+                    detail={"subtype": AdapterErrorSubType.TIMEOUT, "url": url, "status": status},
+                )
+            raise STS2Error(
+                category=ErrorCategory.ADAPTER_ERROR,
+                message=f"HTTP error: {status}",
+                detail={"subtype": AdapterErrorSubType.NONZERO_EXIT_CODE, "url": url, "status": status},
+            )
         except httpx.RequestError as exc:
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
@@ -157,8 +176,8 @@ class AgentAdapter:
                 detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "url": url, "method": method},
             )
 
-        # Check HTTP status directly (avoids httpx raise_for_status which
-        # requires the request attribute to be set on the response object)
+        # Raise HTTPStatusError for 4xx/5xx responses not caught by httpx
+        # (httpx only raises HTTPStatusError when raise_for_status is called)
         if resp.status_code >= 400:
             if resp.status_code in (408, 504):
                 raise STS2Error(
@@ -271,20 +290,24 @@ class AgentAdapter:
         - The agent responds with actionable=True → returns True
         - The timeout is reached → returns False
         Transient STS2Errors during polling are swallowed.
+        Each request is capped to the remaining time so that
+        callers get a timely response even when self.timeout is large.
         """
         import asyncio
         import time
 
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
             try:
                 data = await self._request("POST", self._wait_path)
                 if data.get("actionable") or data.get("ready"):
                     return True
             except STS2Error:
                 pass
-            await asyncio.sleep(0.5)
-        return False
+            await asyncio.sleep(min(0.5, remaining))
 
     async def capture_bug_snapshot(self) -> dict[str, Any]:
         """Compose get_state() + get_available_actions() into a snapshot dict.
@@ -306,9 +329,17 @@ class AgentAdapter:
         }
 
     async def cleanup(self) -> None:
-        """Close the HTTP client session. Idempotent — safe to call multiple times."""
+        """Close the HTTP client session. Idempotent — safe to call multiple times.
+        Closing wraps in asyncio.wait_for(..., timeout=10) per project resource
+        cleanup standard (CLAUDE.md: __exit__ must include 10s timeout logic).
+        """
+        import asyncio
+
         if self._client is not None:
-            await self._client.aclose()
+            try:
+                await asyncio.wait_for(self._client.aclose(), timeout=10)
+            except (asyncio.TimeoutError, Exception) as exc:
+                logger.debug("Error closing HTTP client: %s", exc)
             self._client = None
 
     # ── version handshake ────────────────────────────────────
