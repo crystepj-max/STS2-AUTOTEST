@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "psutil>=5.9",
     "mss>=9.0",
+    "httpx>=0.27.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,10 @@ sts2_autotest = "sts2_autotest.pytest_plugin.plugin"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--ignore=src"
+markers = [
+    "integration: 需要真实 STS2-Cli-Mod 环境的集成测试",
+    "requires_game: 需要 Slay the Spire 2 游戏已运行的测试",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sts2_autotest"]
