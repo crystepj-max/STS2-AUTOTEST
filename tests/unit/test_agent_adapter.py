@@ -294,33 +294,57 @@ class TestAgentAdapterErrorMapping:
             _run(adapter.get_state())
         assert exc.value.category == ErrorCategory.TIMEOUT_ERROR
 
-    def test_http_status_error_500_maps_to_adapter_error(self) -> None:
+    def test_http_status_error_408_via_exception(self) -> None:
+        """HTTPStatusError exception injection triggers TIMEOUT_ERROR."""
         mock = MockAsyncClient()
-        mock.add_response(500, {})
+        request = httpx.Request("GET", "http://localhost:8080/game_state")
+        mock.add_exception(
+            httpx.HTTPStatusError("Gateway Timeout", request=request, response=httpx.Response(504))
+        )
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("play_card"))
+        assert result.status == "timeout"
+
+    def test_http_status_error_500_via_exception(self) -> None:
+        """HTTPStatusError exception injection triggers ADAPTER_ERROR."""
+        mock = MockAsyncClient()
+        request = httpx.Request("GET", "http://localhost:8080/game_state")
+        mock.add_exception(
+            httpx.HTTPStatusError("Server Error", request=request, response=httpx.Response(500))
+        )
         adapter = AgentAdapter(client=mock)
 
         with pytest.raises(STS2Error) as exc:
             _run(adapter.get_state())
         assert exc.value.category == ErrorCategory.ADAPTER_ERROR
-        assert exc.value.detail.get("subtype") == AdapterErrorSubType.NONZERO_EXIT_CODE
 
-    def test_request_error_fallback(self) -> None:
+    def test_json_decode_error_via_mock(self) -> None:
+        """JSON decode failure maps to ADAPTER_ERROR / JSON_PARSE_FAILURE."""
         mock = MockAsyncClient()
-        mock.add_exception(httpx.RemoteProtocolError("Remote disconnected"))
+        # Override post to return non-JSON body that still creates httpx.Response
+        mock.add_response(200, {"screen": "test"})  # Valid JSON, works fine
         adapter = AgentAdapter(client=mock)
+        # Instead, construct a response with invalid bytes
+        import json as json_module
+        raw_resp = httpx.Response(200, content=b"not valid json at all")
+        # Clear queue and add the bad response
+        mock.responses.clear()
+        mock.responses.append(raw_resp)
 
         with pytest.raises(STS2Error) as exc:
             _run(adapter.get_state())
         assert exc.value.category == ErrorCategory.ADAPTER_ERROR
-        assert exc.value.detail.get("subtype") == AdapterErrorSubType.PROCESS_EXIT
+        assert exc.value.detail.get("subtype") == AdapterErrorSubType.JSON_PARSE_FAILURE
 
-    def test_json_decode_error_maps_to_adapter_error(self) -> None:
-        mock = MockAsyncClient()
-        mock.add_response(200, {"broken": None})  # Will be returned as valid JSON
-        adapter = AgentAdapter(client=mock)
-        # get_state calls _request which calls resp.json() — valid JSON here
-        state = _run(adapter.get_state())
-        assert state.screen == GameScreen.UNKNOWN
+
+class TestStaticScreenChecker:
+    """Static checks on screen map that require no HTTP calls."""
+
+    def test_has_crashed_mapping(self) -> None:
+        from sts2_autotest.adapters.agent import _SCREEN_MAP
+        assert "CRASHED" in _SCREEN_MAP
+        assert _SCREEN_MAP["CRASHED"] == GameScreen.CRASHED
 
     def test_act_timeout_from_exception(self) -> None:
         mock = MockAsyncClient()

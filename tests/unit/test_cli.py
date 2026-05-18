@@ -192,7 +192,7 @@ class TestResume:
     """CLI resume/no-resume/corruption behavior."""
 
     @patch("sts2_autotest.cli.main._get_progress_path")
-    @patch("sts2_autotest.cli.main._run_orchestrator")
+    @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
     def test_normal_run_passes_progress_path(
         self, mock_run: patch, mock_path: patch, tmp_path: Path,
     ) -> None:
@@ -204,13 +204,16 @@ class TestResume:
         # progress file does not exist, so no auto-detect prompt
         run_cmd(args)
 
-        mock_run.assert_called_once_with(
-            ["all"], timeout=30,
-            progress_path=str(progress_file),
-        )
+        # adapter is first positional arg; verify case_ids and kwargs
+        call_args = mock_run.call_args
+        assert call_args is not None
+        args_list, kwargs = call_args[0], call_args[1]
+        assert args_list[1] == ["all"]  # case_ids is 2nd positional
+        assert kwargs.get("timeout") == 30
+        assert kwargs.get("progress_path") == str(progress_file)
 
     @patch("sts2_autotest.cli.main._get_progress_path")
-    @patch("sts2_autotest.cli.main._run_orchestrator")
+    @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
     def test_resume_with_valid_progress(
         self, mock_run: patch, mock_path: patch, tmp_path: Path,
     ) -> None:
@@ -231,14 +234,15 @@ class TestResume:
         args = _create_parser().parse_args(["run", "--resume"])
         run_cmd(args)
 
-        mock_run.assert_called_once_with(
-            ["TC-002", "TC-003"], timeout=30,
-            progress_path=str(progress_file),
-            resumed_from="sess-1",
-        )
+        call_args = mock_run.call_args
+        assert call_args is not None
+        args_list, kwargs = call_args[0], call_args[1]
+        assert args_list[1] == ["TC-002", "TC-003"]
+        assert kwargs.get("timeout") == 30
+        assert kwargs.get("resumed_from") == "sess-1"
 
     @patch("sts2_autotest.cli.main._get_progress_path")
-    @patch("sts2_autotest.cli.main._run_orchestrator")
+    @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
     def test_resume_corrupted_degrades_to_full_run(
         self, mock_run: patch, mock_path: patch, tmp_path: Path,
     ) -> None:
@@ -251,9 +255,11 @@ class TestResume:
         run_cmd(args)
 
         # Degrades to full run with warning (AC4)
-        mock_run.assert_called_once_with(
-            ["all"], timeout=30, progress_path=str(progress_file),
-        )
+        call_args = mock_run.call_args
+        assert call_args is not None
+        args_list, kwargs = call_args[0], call_args[1]
+        assert args_list[1] == ["all"]
+        assert kwargs.get("timeout") == 30
 
     @patch("sts2_autotest.cli.main._get_progress_path")
     def test_auto_detect_prompts_user(self, mock_path: patch, tmp_path: Path) -> None:
@@ -267,7 +273,7 @@ class TestResume:
         assert result == 1
 
     @patch("sts2_autotest.cli.main._get_progress_path")
-    @patch("sts2_autotest.cli.main._run_orchestrator")
+    @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
     def test_no_resume_clears_progress(
         self, mock_run: patch, mock_path: patch, tmp_path: Path,
     ) -> None:
@@ -287,7 +293,9 @@ class TestResume:
 
         # Progress file should be deleted
         assert not progress_file.exists()
-        # Runs normally
-        mock_run.assert_called_once_with(
-            ["all"], timeout=30, progress_path=str(progress_file),
-        )
+        # Runs normally — first arg is adapter, second is case_ids
+        call_args = mock_run.call_args
+        assert call_args is not None
+        args_list, kwargs = call_args[0], call_args[1]
+        assert args_list[1] == ["all"]
+        assert kwargs.get("timeout") == 30

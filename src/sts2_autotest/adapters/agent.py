@@ -302,12 +302,16 @@ class AgentAdapter:
             if remaining <= 0:
                 return False
             try:
-                data = await self._request("POST", self._wait_path)
+                data = await asyncio.wait_for(
+                    self._request("POST", self._wait_path),
+                    timeout=remaining,
+                )
                 if data.get("actionable") or data.get("ready"):
                     return True
-            except STS2Error:
+            except (STS2Error, asyncio.TimeoutError):
                 pass
             await asyncio.sleep(min(0.5, remaining))
+        return False
 
     async def capture_bug_snapshot(self) -> dict[str, Any]:
         """Compose get_state() + get_available_actions() into a snapshot dict.

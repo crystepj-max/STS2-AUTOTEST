@@ -200,31 +200,23 @@ def _dispatch_orchestrator(
     resumed_from: str | None = None,
     use_agent: bool = False,
 ) -> int:
-    """Route to the correct orchestrator based on adapter type.
+    """Route to the correct orchestrator with the given adapter.
 
-    Uses _run_orchestrator for CLI (backward compat with mock tests),
-    _run_orchestrator_with_adapter for Agent. When adapter is None
-    (from --resume branches that haven't built it yet), creates it
-    from default env config.
+    Always uses _run_orchestrator_with_adapter so that the adapter
+    instance from _create_adapter() (which respects STS2_ env vars)
+    is actually used. When adapter is None (from --resume branches
+    that haven't built it yet), creates it from default env config.
     """
     if adapter is None:
         use_agent = _is_agent_default()
-        if use_agent:
-            adapter = _create_adapter("agent")
-        else:
-            adapter = _create_adapter("cli")
+        adapter = _create_adapter("agent") if use_agent else _create_adapter("cli")
 
     kwargs: dict[str, str | None] = {"progress_path": progress_path}
     if resumed_from is not None:
         kwargs["resumed_from"] = resumed_from
 
-    if use_agent:
-        return _run_orchestrator_with_adapter(
-            adapter, case_ids, timeout=timeout, **kwargs,
-        )
-
-    return _run_orchestrator(
-        case_ids, timeout=timeout, **kwargs,
+    return _run_orchestrator_with_adapter(
+        adapter, case_ids, timeout=timeout, **kwargs,
     )
 
 
