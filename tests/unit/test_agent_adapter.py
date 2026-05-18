@@ -227,3 +227,33 @@ class TestAgentAdapterVersionHandshake:
         with pytest.raises(STS2Error) as exc:
             _run(adapter.health_check())
         assert "version" in str(exc.value).lower()
+
+    def test_valid_version_sets_flag(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"version": "0.1.2", "status": "ok"})
+        adapter = AgentAdapter(client=mock, supported_version=0)
+
+        result = _run(adapter.health_check())
+
+        assert result.healthy is True
+        assert adapter._version_checked is True
+
+
+class TestProtocolCompliance:
+    """Verify AgentAdapter satisfies GameAdapterProtocol"""
+
+    def test_is_protocol_instance(self) -> None:
+        from sts2_autotest.adapters.base import GameAdapterProtocol
+
+        adapter = AgentAdapter()
+        assert isinstance(adapter, GameAdapterProtocol)
+
+    def test_has_all_protocol_methods(self) -> None:
+        adapter = AgentAdapter()
+        assert hasattr(adapter, "health_check")
+        assert hasattr(adapter, "get_state")
+        assert hasattr(adapter, "get_available_actions")
+        assert hasattr(adapter, "act")
+        assert hasattr(adapter, "wait_until_actionable")
+        assert hasattr(adapter, "capture_bug_snapshot")
+        assert hasattr(adapter, "cleanup")

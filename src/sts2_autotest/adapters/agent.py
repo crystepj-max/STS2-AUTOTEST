@@ -63,24 +63,34 @@ class AgentAdapter:
         supported_version: Expected major version for version handshake.
     """
 
-    SUPPORTED_MAJOR_VERSION = 1
+    SUPPORTED_MAJOR_VERSION = 0
 
     def __init__(
         self,
         endpoint: str = "http://localhost:8080",
         timeout: float = 30.0,
-        tool_profile: str = "balanced",
+        tool_profile: str = "guided",
         debug_actions: bool = False,
         client: httpx.AsyncClient | None = None,
         supported_version: int | None = None,
+        health_path: str = "health",
+        state_path: str = "game_state",
+        actions_path: str = "available_actions",
+        act_path: str = "act",
+        wait_path: str = "wait_until_actionable",
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.timeout = timeout
         self.tool_profile = tool_profile
         self.debug_actions = debug_actions
+        self._health_path = health_path
+        self._state_path = state_path
+        self._actions_path = actions_path
+        self._act_path = act_path
+        self._wait_path = wait_path
         self._client = client
         self._version_checked = False
-        self.supported_version = supported_version or self.SUPPORTED_MAJOR_VERSION
+        self._supported_version = supported_version if supported_version is not None else self.SUPPORTED_MAJOR_VERSION
 
     # ── capabilities ─────────────────────────────────────────
 
@@ -120,7 +130,7 @@ class AgentAdapter:
           Other HTTP errors       → ADAPTER_ERROR / NONZERO_EXIT_CODE
           JSON decode failure     → ADAPTER_ERROR / JSON_PARSE_FAILURE
         """
-        url = f"{self.endpoint}{path}"
+        url = f"{self.endpoint}/{path}"
         client = self._get_client()
 
         try:
@@ -138,6 +148,12 @@ class AgentAdapter:
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
                 message=f"Connection refused: {url}",
+                detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "url": url, "method": method},
+            )
+        except httpx.RequestError as exc:
+            raise STS2Error(
+                category=ErrorCategory.ADAPTER_ERROR,
+                message=f"HTTP request failed: {exc}",
                 detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "url": url, "method": method},
             )
 
@@ -183,7 +199,7 @@ class AgentAdapter:
         handshake if a version field is present in the response.
         """
         try:
-            data = await self._request("GET", "/health")
+            data = await self._request("GET", self._health_path)
         except STS2Error:
             return HealthStatus(healthy=False)
 
@@ -201,7 +217,7 @@ class AgentAdapter:
         screen name and any extra fields in the response.
         Raises STS2Error on transport or server errors.
         """
-        data = await self._request("POST", "/game_state")
+        data = await self._request("POST", self._state_path)
 
         screen_raw = data.get("screen", "UNKNOWN")
         screen = _map_screen(screen_raw)
@@ -213,7 +229,7 @@ class AgentAdapter:
 
         Returns the list of action names the agent reports as available.
         """
-        data = await self._request("POST", "/available_actions")
+        data = await self._request("POST", self._actions_path)
         return data.get("actions", [])
 
     async def act(self, action: str, args: dict[str, Any] | None = None) -> ActionResult:
@@ -232,7 +248,7 @@ class AgentAdapter:
             payload["args"] = args
 
         try:
-            data = await self._request("POST", "/act", payload)
+            data = await self._request("POST", self._act_path, payload)
         except STS2Error as exc:
             if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
                 return ActionResult(status="timeout", state_changed=False, detail=exc.message)
@@ -260,7 +276,7 @@ class AgentAdapter:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                data = await self._request("POST", "/wait_until_actionable")
+                data = await self._request("POST", self._wait_path)
                 if data.get("actionable") or data.get("ready"):
                     return True
             except STS2Error:
@@ -311,12 +327,12 @@ class AgentAdapter:
                 },
             )
         major = int(match.group(1))
-        if major != self.supported_version:
+        if major != self._supported_version:
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
                 message=(
                     f"Adapter major version {major} is incompatible "
-                    f"(supported: {self.supported_version}). "
+                    f"(supported: {self._supported_version}). "
                     f"Please upgrade STS2-Agent."
                 ),
                 detail={
