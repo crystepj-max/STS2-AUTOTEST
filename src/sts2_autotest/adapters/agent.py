@@ -309,7 +309,10 @@ class AgentAdapter:
                 if data.get("actionable") or data.get("ready"):
                     return True
             except (STS2Error, asyncio.TimeoutError):
-                pass
+                # Re-check remaining time before sleeping
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
             await asyncio.sleep(min(0.5, remaining))
         return False
 

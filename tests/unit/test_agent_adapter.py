@@ -294,8 +294,8 @@ class TestAgentAdapterErrorMapping:
             _run(adapter.get_state())
         assert exc.value.category == ErrorCategory.TIMEOUT_ERROR
 
-    def test_http_status_error_408_via_exception(self) -> None:
-        """HTTPStatusError exception injection triggers TIMEOUT_ERROR."""
+    def test_http_status_error_504_via_exception(self) -> None:
+        """HTTPStatusError(504) exception injection triggers timeout result."""
         mock = MockAsyncClient()
         request = httpx.Request("GET", "http://localhost:8080/game_state")
         mock.add_exception(
@@ -325,8 +325,7 @@ class TestAgentAdapterErrorMapping:
         # Override post to return non-JSON body that still creates httpx.Response
         mock.add_response(200, {"screen": "test"})  # Valid JSON, works fine
         adapter = AgentAdapter(client=mock)
-        # Instead, construct a response with invalid bytes
-        import json as json_module
+        # Construct a response with invalid bytes
         raw_resp = httpx.Response(200, content=b"not valid json at all")
         # Clear queue and add the bad response
         mock.responses.clear()
