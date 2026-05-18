@@ -25,6 +25,13 @@ class AgentAdapterConfig(BaseModel):
     enabled: bool = False
     endpoint: str = "http://localhost:8080"
     timeout: float = Field(default=30.0, gt=0)
+    tool_profile: str = Field(default="guided", pattern=r"^(guided|layered|full)$")
+    health_path: str = "health"
+    state_path: str = "game_state"
+    actions_path: str = "available_actions"
+    act_path: str = "act"
+    wait_path: str = "wait_until_actionable"
+    debug_actions: bool = False
 
 
 class AdapterConfig(BaseModel):
