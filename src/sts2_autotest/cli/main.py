@@ -304,6 +304,20 @@ def _check_env() -> dict[str, dict[str, str]]:
     """
     checks: dict[str, dict[str, str]] = {}
 
+    # Mutual exclusion check — both adapters cannot be enabled simultaneously
+    agent_enabled = os.environ.get("STS2_ADAPTER__AGENT__ENABLED", "false").lower() in ("true", "1", "yes")
+    cli_enabled = os.environ.get("STS2_ADAPTER__CLI__ENABLED", "true").lower() in ("true", "1", "yes")
+    if agent_enabled and cli_enabled:
+        checks["adapter_mutual_exclusion"] = {
+            "status": "FAIL",
+            "message": "Mutual exclusion: both CLI and Agent adapters are enabled",
+        }
+    else:
+        checks["adapter_mutual_exclusion"] = {
+            "status": "OK",
+            "message": "No mutual exclusion conflict",
+        }
+
     # Python version
     pv = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     if sys.version_info >= (3, 11):
