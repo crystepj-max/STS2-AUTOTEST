@@ -120,3 +120,19 @@ def _steam_roots() -> list[Path]:
             pass
 
     return roots
+
+
+def steam_roots() -> list[Path]:
+    """Public alias for _steam_roots()."""
+    return _steam_roots()
+
+
+def find_game_dir(roots: list[Path] | None = None) -> Path | None:
+    """Locate the Slay the Spire 2 game directory. Searches each Steam library root."""
+    if roots is None:
+        roots = _steam_roots()
+    for root in roots:
+        candidate = root / "steamapps" / "common" / "Slay the Spire 2"
+        if candidate.is_dir():
+            return candidate
+    return None
