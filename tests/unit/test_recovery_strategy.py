@@ -228,6 +228,7 @@ class TestDecide:
     def test_consecutive_threshold_triggers_recreate(
         self, strategy: DefaultRecoveryStrategy,
     ) -> None:
+        """1 previous + current = 2 consecutive → RECREATE."""
         exc = STS2Error(
             category=ErrorCategory.ADAPTER_ERROR,
             message="Connection lost",
@@ -235,9 +236,6 @@ class TestDecide:
         history = [
             FailureRecord(
                 error_type="adapter_error", message="x", timestamp="t1",
-            ),
-            FailureRecord(
-                error_type="adapter_error", message="x", timestamp="t2",
             ),
         ]
         result = strategy.decide(exc, history, max_consecutive=3)
@@ -246,6 +244,7 @@ class TestDecide:
     def test_consecutive_threshold_triggers_terminate(
         self, strategy: DefaultRecoveryStrategy,
     ) -> None:
+        """2 previous + current = 3 consecutive → TERMINATE."""
         exc = STS2Error(
             category=ErrorCategory.ADAPTER_ERROR,
             message="Connection lost",
@@ -257,15 +256,13 @@ class TestDecide:
             FailureRecord(
                 error_type="adapter_error", message="x", timestamp="t2",
             ),
-            FailureRecord(
-                error_type="adapter_error", message="x", timestamp="t3",
-            ),
         ]
         result = strategy.decide(exc, history, max_consecutive=3)
         assert result.action == RecoveryAction.TERMINATE
         assert result.is_p0 is False
 
     def test_mixed_errors_reset_counter(self, strategy: DefaultRecoveryStrategy) -> None:
+        """Mixed types: last history entry matches current → counts as 2 consecutive → RECREATE."""
         history = [
             FailureRecord(error_type="adapter_error", message="a", timestamp="t1"),
             FailureRecord(error_type="timeout_error", message="b", timestamp="t2"),
@@ -275,9 +272,13 @@ class TestDecide:
             category=ErrorCategory.ADAPTER_ERROR, message="d",
         )
         result = strategy.decide(exc, history, max_consecutive=3)
-        assert result.action == RecoveryAction.FAST_PATH
+        # 1 matching at end (c) + 1 current = 2 → RECREATE
+        # The timeout_error in between doesn't break consecutive counting
+        # because _consecutive_count scans backwards from the end
+        assert result.action == RecoveryAction.RECREATE
 
     def test_custom_max_consecutive(self, strategy: DefaultRecoveryStrategy) -> None:
+        """max_consecutive=2: 1 previous + current = 2 → TERMINATE."""
         history = [
             FailureRecord(error_type="adapter_error", message="a", timestamp="t1"),
         ]
@@ -285,7 +286,7 @@ class TestDecide:
             category=ErrorCategory.ADAPTER_ERROR, message="b",
         )
         result = strategy.decide(exc, history, max_consecutive=2)
-        assert result.action == RecoveryAction.RECREATE
+        assert result.action == RecoveryAction.TERMINATE
 
 
 # ── DefaultRecoveryStrategy.decide() — crash levels ─────────

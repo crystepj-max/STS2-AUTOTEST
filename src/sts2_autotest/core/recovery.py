@@ -234,14 +234,12 @@ class DefaultRecoveryStrategy:
     ) -> RecoveryAction:
         """Check consecutive same-type failures against threshold.
 
-        When decide() receives history WITHOUT the current failure
-        (current error is appended after decision), the caller MUST
-        pass current_error_type so counts are based on the current
-        error type, not the previous entry's type.
+        History does NOT include the current failure (it's appended
+        after decide()). The caller MUST pass current_error_type so
+        counts use the current error's type, not the previous entry.
 
-        When history already includes the current failure (backward
-        compat callers), current_error_type can be omitted and falls
-        back to history[-1].error_type.
+        The +1 accounts for the current failure not being in history,
+        matching the original semantics where history included it.
         """
         if not history:
             return RecoveryAction.FAST_PATH
@@ -249,7 +247,8 @@ class DefaultRecoveryStrategy:
         if current_error_type is None:
             current_error_type = history[-1].error_type
 
-        consecutive = self._consecutive_count(history, current_error_type)
+        # +1 for current failure not in history
+        consecutive = self._consecutive_count(history, current_error_type) + 1
         if consecutive >= max_consecutive:
             return RecoveryAction.TERMINATE
         if consecutive >= max_consecutive - 1:
