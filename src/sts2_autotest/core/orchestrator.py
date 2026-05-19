@@ -459,7 +459,6 @@ class TestOrchestrator:
             timestamp=exc.timestamp.isoformat(),
             exit_code=exc.detail.get("exit_code") if exc.detail else None,
         )
-        self._failure_history.append(record)
 
         # P0 session-level fatal — always crash, never downgrade
         if is_p0_exception(exc):
@@ -469,12 +468,17 @@ class TestOrchestrator:
             self.evidence.on_case_end(result)
             return result
 
-        # Decide recovery action (includes progressive crash levels)
+        # Decide recovery action before appending to history,
+        # so decide() sees history WITHOUT the current failure
+        # and consecutive counts are not off-by-one.
         decision = self.recovery.decide(
             exc,
             self._failure_history,
             max_consecutive=self._max_consecutive_failures,
         )
+
+        # Now append to history — used by _consecutive_same_type below
+        self._failure_history.append(record)
 
         # TERMINATE from decision: P0 → crash, non-P0 → deterministic fail
         if decision.action == RecoveryAction.TERMINATE:
@@ -484,6 +488,7 @@ class TestOrchestrator:
                 result3 = TestResult(case_id, "crash", exc.message)
             else:
                 # Non-P0 TERMINATE from consecutive threshold → deterministic fail
+                self._crashed = True  # Stop remaining cases
                 sig = crash_signature(exc, record.exit_code)
                 result3 = TestResult(
                     case_id, "deterministic_fail", exc.message,

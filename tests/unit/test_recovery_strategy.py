@@ -326,7 +326,7 @@ class TestDecideCrashLevels:
         strategy = DefaultRecoveryStrategy()
         error = STS2Error(category=ErrorCategory.ADAPTER_ERROR, message="adapter failed")
         decision = strategy.decide(error, [])
-        assert decision.action in (RecoveryAction.FAST_PATH, RecoveryAction.GAME_RESTART)
+        assert decision.action == RecoveryAction.FAST_PATH
 
     def test_crash_after_other_errors_resets_to_game_restart(self) -> None:
         """Crash after non-crash errors should start from GAME_RESTART, not escalate."""

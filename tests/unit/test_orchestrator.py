@@ -424,10 +424,11 @@ class TestHandleFailure:
             evidence=evidence,
             max_consecutive_failures=3,
         )
-        # Pre-fill with 1 record → after _handle_failure appends, consecutive=2
+        # Pre-fill with 2 records → decide() sees consecutive=2
         # which triggers RECREATE (≥ max_consecutive-1 = 2)
         orch._failure_history = [
             FailureRecord(error_type="adapter_error", message="a", timestamp="t1"),
+            FailureRecord(error_type="adapter_error", message="b", timestamp="t2"),
         ]
         exc = STS2Error(
             category=ErrorCategory.ADAPTER_ERROR,
