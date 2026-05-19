@@ -529,6 +529,7 @@ class TestOrchestrator:
         # Check consecutive failures for deterministic fail
         consecutive = self._consecutive_same_type(record.error_type)
         if consecutive >= self._max_consecutive_failures:
+            self._crashed = True  # Stop remaining cases
             sig = crash_signature(exc, record.exit_code)
             result4 = TestResult(
                 case_id, "deterministic_fail", exc.message,

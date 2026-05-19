@@ -181,17 +181,24 @@ class DefaultRecoveryStrategy:
         if p0:
             return RecoveryDecision(action=RecoveryAction.TERMINATE, is_p0=True)
 
+        # Extract error type from the current failure
+        current_type = (
+            failure.category.value
+            if isinstance(failure, STS2Error)
+            else type(failure).__name__
+        )
+
         # Crashes get progressive recovery levels
         if isinstance(failure, STS2Error) and failure.category == ErrorCategory.CRASH_ERROR:
             return self._decide_crash(history, max_consecutive)
 
-        # Timeouts → fast path
+        # Timeouts → fast path (with consecutive escalation)
         if isinstance(failure, STS2Error) and failure.category in _FAST_PATH_CATEGORIES:
-            action = self._check_consecutive(history, max_consecutive)
+            action = self._check_consecutive(history, max_consecutive, current_type)
             return RecoveryDecision(action=action, is_p0=False)
 
         # Other adapter errors
-        action = self._check_consecutive(history, max_consecutive)
+        action = self._check_consecutive(history, max_consecutive, current_type)
         return RecoveryDecision(action=action, is_p0=False)
 
     async def execute(
@@ -223,13 +230,26 @@ class DefaultRecoveryStrategy:
         self,
         history: list[FailureRecord],
         max_consecutive: int,
+        current_error_type: str | None = None,
     ) -> RecoveryAction:
-        """Check consecutive same-type failures against threshold."""
+        """Check consecutive same-type failures against threshold.
+
+        When decide() receives history WITHOUT the current failure
+        (current error is appended after decision), the caller MUST
+        pass current_error_type so counts are based on the current
+        error type, not the previous entry's type.
+
+        When history already includes the current failure (backward
+        compat callers), current_error_type can be omitted and falls
+        back to history[-1].error_type.
+        """
         if not history:
             return RecoveryAction.FAST_PATH
 
-        last_type = history[-1].error_type
-        consecutive = self._consecutive_count(history, last_type)
+        if current_error_type is None:
+            current_error_type = history[-1].error_type
+
+        consecutive = self._consecutive_count(history, current_error_type)
         if consecutive >= max_consecutive:
             return RecoveryAction.TERMINATE
         if consecutive >= max_consecutive - 1:
@@ -245,14 +265,17 @@ class DefaultRecoveryStrategy:
 
         1st crash → GAME_RESTART (restart game process)
         2nd consecutive crash → FULL_RESTART (restart Steam + game)
-        3rd+ consecutive crash → TERMINATE
+        3rd+ consecutive crash → TERMINATE.
+        Note: history does NOT include the current crash
+        (appended after decide()), so we add +1 for the current.
         """
         if not history:
             return RecoveryDecision(action=RecoveryAction.GAME_RESTART)
-        consecutive = self._consecutive_count(history, ErrorCategory.CRASH_ERROR.value)
-        if consecutive >= max_consecutive - 1:
+        # Count consecutive crashes from history, +1 for current crash
+        consecutive = self._consecutive_count(history, ErrorCategory.CRASH_ERROR.value) + 1
+        if consecutive >= max_consecutive:
             return RecoveryDecision(action=RecoveryAction.TERMINATE)
-        if consecutive >= max_consecutive - 2:
+        if consecutive >= max_consecutive - 1:
             return RecoveryDecision(action=RecoveryAction.FULL_RESTART)
         return RecoveryDecision(action=RecoveryAction.GAME_RESTART)
 
