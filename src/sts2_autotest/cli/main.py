@@ -69,10 +69,19 @@ def _run_orchestrator(
     """
     from sts2_autotest.adapters.cli_mod import CliModAdapter
     from sts2_autotest.core.orchestrator import TestOrchestrator
+    from sts2_autotest.core.recovery import DefaultRecoveryStrategy
+    from sts2_autotest.core.steam import SteamController
 
     adapter = CliModAdapter()
+    steam = SteamController(startup_timeout=60.0)
+    recovery = DefaultRecoveryStrategy(
+        adapter_factory=lambda: CliModAdapter(),
+        game_startup_timeout=60.0,
+        steam_controller=steam,
+    )
     orch = TestOrchestrator(
         adapter=adapter,
+        recovery=recovery,
         progress_path=progress_path,
         resumed_from=resumed_from,
     )

@@ -146,12 +146,14 @@ class TestResultClassification:
     def test_crash_stops_subsequent_cases(
         self, mock_adapter: Any
     ) -> None:
-        """AC#6: crash marks subsequent cases as skip."""
+        """AC#6: unknown exception (non-STS2Error) marks subsequent cases as skip.
+
+        CRASH_ERROR STS2Error now routes through progressive recovery;
+        only unknown/unexpected exceptions (caught by the bare except Exception
+        in execute_case) immediately terminate the session.
+        """
         mock = _make_mock_adapter()
-        mock.act.side_effect = STS2Error(
-            category=ErrorCategory.CRASH_ERROR,
-            message="Game crashed",
-        )
+        mock.act.side_effect = RuntimeError("Unexpected game crash")
         orch = TestOrchestrator(adapter=mock)
         summary = _run(orch.run_all(["TC-001", "TC-002", "TC-003"]))
         assert summary.results[0].status == "crash"
@@ -212,6 +214,43 @@ class TestCrashHandling:
         orch = TestOrchestrator(adapter=mock)
         result = _run(orch.execute_case("TC-001"))
         assert result.status == "crash"
+
+    def test_crash_goes_through_recovery_not_immediate_terminate(self) -> None:
+        """CRASH_ERROR should reach recovery.decide(), not immediately crash.
+
+        Beta: crash errors flow through progressive recovery
+        (GAME_RESTART -> FULL_RESTART -> TERMINATE) instead of
+        immediately terminating the session.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_adapter = MagicMock(spec=GameAdapterProtocol)
+        mock_adapter.get_available_actions = AsyncMock(return_value=["probe"])
+        mock_adapter.act = AsyncMock(return_value=ActionResult("success", True))
+        mock_adapter.health_check = AsyncMock(return_value=HealthStatus(True))
+        mock_adapter.get_state = AsyncMock(
+            return_value=GameState(screen=GameScreen.COMBAT),
+        )
+        mock_adapter.wait_until_actionable = AsyncMock(return_value=True)
+        mock_adapter.cleanup = AsyncMock()
+
+        strategy = DefaultRecoveryStrategy()
+        orch = TestOrchestrator(
+            adapter=mock_adapter,
+            recovery=strategy,
+        )
+
+        crash = STS2Error(
+            category=ErrorCategory.CRASH_ERROR,
+            message="game crashed",
+        )
+        result = _run(orch._handle_failure("TC-001", crash))
+
+        # First crash -> GAME_RESTART -> execute returns (False, None)
+        # since no steam_controller. Falls back to RECREATE which also
+        # fails since no factory. Fall through to consecutive check -> "fail"
+        assert result.status != "crash"  # Not immediate crash
+        assert isinstance(orch.recovery, DefaultRecoveryStrategy)
 
 
 class TestSessionSummary:
@@ -296,7 +335,8 @@ class TestHandleFailure:
         assert result.status == "deterministic_fail"
         assert result.crash_signature is not None
 
-    def test_crash_error_sets_crashed_flag(self) -> None:
+    def test_crash_error_routes_through_recovery(self) -> None:
+        """CRASH_ERROR now flows through recovery, not immediate crash."""
         mock = _make_mock_adapter()
         evidence = MagicMock()
         evidence.on_crash = MagicMock()
@@ -307,8 +347,11 @@ class TestHandleFailure:
             message="Game process died",
         )
         result = _run(orch._handle_failure("TC-001", exc))
-        assert result.status == "crash"
-        assert orch._crashed is True
+        # CRASH_ERROR now routes through recovery instead of immediate crash.
+        # Without steam_controller/factory, recovery fails and returns "fail".
+        assert result.status == "fail"
+        # _crashed is NOT set because recovery was attempted (not P0)
+        assert orch._crashed is False
 
     def test_p0_not_downgraded_to_deterministic_fail(self) -> None:
         """P0 version_mismatch always crashes, even with consecutive history."""
