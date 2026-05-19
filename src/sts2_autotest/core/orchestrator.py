@@ -437,12 +437,16 @@ class TestOrchestrator:
     async def _handle_failure(self, case_id: str, exc: STS2Error) -> TestResult:
         """Centralized failure handler: record → decide → execute recovery.
 
+        Beta: crash errors go through progressive recovery
+        (GAME_RESTART -> FULL_RESTART -> TERMINATE) instead of
+        immediately terminating.
+
         Flow:
         1. Record failure in history
-        2. Check for P0 session-level exception → crash immediately
+        2. Check for P0 session-level exception -> crash immediately
         3. Decide recovery action via RecoveryStrategy
         4. Execute recovery if applicable
-        5. On success: force state through CRASHED → MAIN_MENU
+        5. On success: clear crash flag + force state CRASHED -> MAIN_MENU
         6. Determine result status (fail/crash/deterministic_fail)
         """
         logger.error(
@@ -455,9 +459,6 @@ class TestOrchestrator:
             timestamp=exc.timestamp.isoformat(),
             exit_code=exc.detail.get("exit_code") if exc.detail else None,
         )
-        self._failure_history.append(record)
-
-        is_crash = exc.category == ErrorCategory.CRASH_ERROR
 
         # P0 session-level fatal — always crash, never downgrade
         if is_p0_exception(exc):
@@ -467,18 +468,17 @@ class TestOrchestrator:
             self.evidence.on_case_end(result)
             return result
 
-        if is_crash:
-            self._handle_crash(case_id, exc)
-            result2 = TestResult(case_id, "crash", exc.message)
-            self.evidence.on_case_end(result2)
-            return result2
-
-        # Decide recovery action (non-P0)
+        # Decide recovery action before appending to history,
+        # so decide() sees history WITHOUT the current failure
+        # and consecutive counts are not off-by-one.
         decision = self.recovery.decide(
             exc,
             self._failure_history,
             max_consecutive=self._max_consecutive_failures,
         )
+
+        # Now append to history — used by _consecutive_same_type below
+        self._failure_history.append(record)
 
         # TERMINATE from decision: P0 → crash, non-P0 → deterministic fail
         if decision.action == RecoveryAction.TERMINATE:
@@ -488,6 +488,7 @@ class TestOrchestrator:
                 result3 = TestResult(case_id, "crash", exc.message)
             else:
                 # Non-P0 TERMINATE from consecutive threshold → deterministic fail
+                self._crashed = True  # Stop remaining cases
                 sig = crash_signature(exc, record.exit_code)
                 result3 = TestResult(
                     case_id, "deterministic_fail", exc.message,
@@ -500,13 +501,20 @@ class TestOrchestrator:
         recovered, new_adapter = await self.recovery.execute(decision.action, self.adapter)
 
         if recovered and new_adapter is not None:
-            # RECREATE succeeded with a new adapter — switch to it
             self.adapter = new_adapter
             self._adapter_replaced = True
-            logger.info("RECREATE recovery: switched to new adapter for case %s", case_id)
+            logger.info(
+                "Recovery (action=%s) succeeded for case %s",
+                decision.action.value, case_id,
+            )
 
         if recovered:
-            # Recovery succeeded — reset state through CRASHED → MAIN_MENU
+            # Clear crash flag if previously set
+            if self._crashed:
+                self._crashed = False
+                logger.info("Crash flag cleared after successful recovery")
+
+            # Reset state through CRASHED -> MAIN_MENU
             self._current_screen = self.state_engine.force_transition(
                 self._current_screen, GameScreen.CRASHED,
             )
@@ -518,9 +526,10 @@ class TestOrchestrator:
                 "Recovery succeeded for case %s — state reset to MAIN_MENU", case_id,
             )
 
-        # Check consecutive failures for deterministic fail (non-P0 path)
+        # Check consecutive failures for deterministic fail
         consecutive = self._consecutive_same_type(record.error_type)
         if consecutive >= self._max_consecutive_failures:
+            self._crashed = True  # Stop remaining cases
             sig = crash_signature(exc, record.exit_code)
             result4 = TestResult(
                 case_id, "deterministic_fail", exc.message,

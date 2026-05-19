@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from sts2_autotest.adapters.base import HealthStatus
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
@@ -27,6 +27,8 @@ class RecoveryAction(StrEnum):
 
     FAST_PATH = "FAST_PATH"
     RECREATE = "RECREATE"
+    GAME_RESTART = "GAME_RESTART"  # kill game → start game → recreate adapter
+    FULL_RESTART = "FULL_RESTART"  # kill game+Steam → start Steam → start game → recreate adapter
     TERMINATE = "TERMINATE"
 
 
@@ -153,9 +155,11 @@ class DefaultRecoveryStrategy:
         *,
         adapter_factory: Callable[[], GameAdapterProtocol] | None = None,
         game_startup_timeout: float = 60.0,
+        steam_controller: Any = None,
     ) -> None:
         self._adapter_factory = adapter_factory
         self._game_startup_timeout = game_startup_timeout
+        self._steam_controller = steam_controller
 
     def decide(
         self,
@@ -168,28 +172,33 @@ class DefaultRecoveryStrategy:
 
         Decision logic:
         1. P0 exceptions (FileNotFoundError, OSError, VERSION_MISMATCH) → TERMINATE (is_p0=True)
-        2. Timeout/process exit → FAST_PATH
-        3. Consecutive same-type failures ≥ threshold → TERMINATE (is_p0=False)
-        4. Otherwise → FAST_PATH (try reconnect first)
+        2. CRASH_ERROR → progressive levels: GAME_RESTART → FULL_RESTART → TERMINATE
+        3. Timeout → FAST_PATH (with consecutive escalation)
+        4. Other adapter errors → FAST_PATH (with consecutive escalation)
         """
         # P0: session-level fatal
         p0 = is_p0_exception(failure)
         if p0:
             return RecoveryDecision(action=RecoveryAction.TERMINATE, is_p0=True)
 
-        # Check for fast-path categories
-        if isinstance(failure, STS2Error):
-            if failure.category in _FAST_PATH_CATEGORIES:
-                action = self._check_consecutive(history, max_consecutive)
-                return RecoveryDecision(action=action, is_p0=False)
+        # Extract error type from the current failure
+        current_type = (
+            failure.category.value
+            if isinstance(failure, STS2Error)
+            else type(failure).__name__
+        )
 
-        # Process exit (subprocess returned non-zero or died)
+        # Crashes get progressive recovery levels
         if isinstance(failure, STS2Error) and failure.category == ErrorCategory.CRASH_ERROR:
-            action = self._check_consecutive(history, max_consecutive)
+            return self._decide_crash(history, max_consecutive)
+
+        # Timeouts → fast path (with consecutive escalation)
+        if isinstance(failure, STS2Error) and failure.category in _FAST_PATH_CATEGORIES:
+            action = self._check_consecutive(history, max_consecutive, current_type)
             return RecoveryDecision(action=action, is_p0=False)
 
-        # Default: check consecutive count, then fast path
-        action = self._check_consecutive(history, max_consecutive)
+        # Other adapter errors
+        action = self._check_consecutive(history, max_consecutive, current_type)
         return RecoveryDecision(action=action, is_p0=False)
 
     async def execute(
@@ -207,6 +216,10 @@ class DefaultRecoveryStrategy:
             return await self._execute_fast_path(adapter), None
         if action == RecoveryAction.RECREATE:
             return await self._execute_recreate(adapter)
+        if action == RecoveryAction.GAME_RESTART:
+            return await self._execute_game_restart(adapter)
+        if action == RecoveryAction.FULL_RESTART:
+            return await self._execute_full_restart(adapter)
         # TERMINATE
         logger.info("Recovery action: TERMINATE — recording artifacts")
         return False, None
@@ -217,18 +230,53 @@ class DefaultRecoveryStrategy:
         self,
         history: list[FailureRecord],
         max_consecutive: int,
+        current_error_type: str | None = None,
     ) -> RecoveryAction:
-        """Check consecutive same-type failures against threshold."""
+        """Check consecutive same-type failures against threshold.
+
+        History does NOT include the current failure (it's appended
+        after decide()). The caller MUST pass current_error_type so
+        counts use the current error's type, not the previous entry.
+
+        The +1 accounts for the current failure not being in history,
+        matching the original semantics where history included it.
+        """
         if not history:
             return RecoveryAction.FAST_PATH
 
-        last_type = history[-1].error_type
-        consecutive = self._consecutive_count(history, last_type)
+        if current_error_type is None:
+            current_error_type = history[-1].error_type
+
+        # +1 for current failure not in history
+        consecutive = self._consecutive_count(history, current_error_type) + 1
         if consecutive >= max_consecutive:
             return RecoveryAction.TERMINATE
         if consecutive >= max_consecutive - 1:
             return RecoveryAction.RECREATE
         return RecoveryAction.FAST_PATH
+
+    def _decide_crash(
+        self,
+        history: list[FailureRecord],
+        max_consecutive: int,
+    ) -> RecoveryDecision:
+        """Three-level progressive crash recovery.
+
+        1st crash → GAME_RESTART (restart game process)
+        2nd consecutive crash → FULL_RESTART (restart Steam + game)
+        3rd+ consecutive crash → TERMINATE.
+        Note: history does NOT include the current crash
+        (appended after decide()), so we add +1 for the current.
+        """
+        if not history:
+            return RecoveryDecision(action=RecoveryAction.GAME_RESTART)
+        # Count consecutive crashes from history, +1 for current crash
+        consecutive = self._consecutive_count(history, ErrorCategory.CRASH_ERROR.value) + 1
+        if consecutive >= max_consecutive:
+            return RecoveryDecision(action=RecoveryAction.TERMINATE)
+        if consecutive >= max_consecutive - 1:
+            return RecoveryDecision(action=RecoveryAction.FULL_RESTART)
+        return RecoveryDecision(action=RecoveryAction.GAME_RESTART)
 
     @staticmethod
     def _consecutive_count(history: list[FailureRecord], error_type: str) -> int:
@@ -291,3 +339,36 @@ class DefaultRecoveryStrategy:
 
         logger.info("RECREATE recovery: new adapter created and healthy")
         return True, new_adapter
+
+    async def _execute_game_restart(
+        self, adapter: GameAdapterProtocol,
+    ) -> tuple[bool, GameAdapterProtocol | None]:
+        """Level 1: restart game → recreate adapter → health check."""
+        if self._steam_controller is None:
+            logger.warning("GAME_RESTART: no steam_controller — falling back to RECREATE")
+            return await self._execute_recreate(adapter)
+        logger.info("GAME_RESTART: restarting game process...")
+        try:
+            self._steam_controller.restart_game()
+        except Exception as exc:
+            logger.error("GAME_RESTART: restart_game failed: %s", exc)
+            return False, None
+        return await self._execute_recreate(adapter)
+
+    async def _execute_full_restart(
+        self, adapter: GameAdapterProtocol,
+    ) -> tuple[bool, GameAdapterProtocol | None]:
+        """Level 2: stop game+Steam → start Steam+game → recreate adapter."""
+        if self._steam_controller is None:
+            logger.warning("FULL_RESTART: no steam_controller — falling back to RECREATE")
+            return await self._execute_recreate(adapter)
+        logger.info("FULL_RESTART: restarting Steam and game...")
+        try:
+            self._steam_controller.stop_game()
+            self._steam_controller.stop_steam()
+            self._steam_controller.start_steam()
+            self._steam_controller.start_game()
+        except Exception as exc:
+            logger.error("FULL_RESTART: restart failed: %s", exc)
+            return False, None
+        return await self._execute_recreate(adapter)

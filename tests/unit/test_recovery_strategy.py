@@ -214,17 +214,21 @@ class TestDecide:
         result = strategy.decide(exc, [])
         assert result.action == RecoveryAction.FAST_PATH
 
-    def test_crash_error_fast_path_initially(self, strategy: DefaultRecoveryStrategy) -> None:
+    def test_crash_error_initially_returns_game_restart(
+        self, strategy: DefaultRecoveryStrategy,
+    ) -> None:
+        """First crash returns GAME_RESTART (progressive recovery, not FAST_PATH)."""
         exc = STS2Error(
             category=ErrorCategory.CRASH_ERROR,
             message="Game crashed",
         )
         result = strategy.decide(exc, [])
-        assert result.action == RecoveryAction.FAST_PATH
+        assert result.action == RecoveryAction.GAME_RESTART
 
     def test_consecutive_threshold_triggers_recreate(
         self, strategy: DefaultRecoveryStrategy,
     ) -> None:
+        """1 previous + current = 2 consecutive → RECREATE."""
         exc = STS2Error(
             category=ErrorCategory.ADAPTER_ERROR,
             message="Connection lost",
@@ -232,9 +236,6 @@ class TestDecide:
         history = [
             FailureRecord(
                 error_type="adapter_error", message="x", timestamp="t1",
-            ),
-            FailureRecord(
-                error_type="adapter_error", message="x", timestamp="t2",
             ),
         ]
         result = strategy.decide(exc, history, max_consecutive=3)
@@ -243,6 +244,7 @@ class TestDecide:
     def test_consecutive_threshold_triggers_terminate(
         self, strategy: DefaultRecoveryStrategy,
     ) -> None:
+        """2 previous + current = 3 consecutive → TERMINATE."""
         exc = STS2Error(
             category=ErrorCategory.ADAPTER_ERROR,
             message="Connection lost",
@@ -254,15 +256,13 @@ class TestDecide:
             FailureRecord(
                 error_type="adapter_error", message="x", timestamp="t2",
             ),
-            FailureRecord(
-                error_type="adapter_error", message="x", timestamp="t3",
-            ),
         ]
         result = strategy.decide(exc, history, max_consecutive=3)
         assert result.action == RecoveryAction.TERMINATE
         assert result.is_p0 is False
 
     def test_mixed_errors_reset_counter(self, strategy: DefaultRecoveryStrategy) -> None:
+        """Mixed types: last history entry matches current → counts as 2 consecutive → RECREATE."""
         history = [
             FailureRecord(error_type="adapter_error", message="a", timestamp="t1"),
             FailureRecord(error_type="timeout_error", message="b", timestamp="t2"),
@@ -272,9 +272,13 @@ class TestDecide:
             category=ErrorCategory.ADAPTER_ERROR, message="d",
         )
         result = strategy.decide(exc, history, max_consecutive=3)
-        assert result.action == RecoveryAction.FAST_PATH
+        # 1 matching at end (c) + 1 current = 2 → RECREATE
+        # The timeout_error in between doesn't break consecutive counting
+        # because _consecutive_count scans backwards from the end
+        assert result.action == RecoveryAction.RECREATE
 
     def test_custom_max_consecutive(self, strategy: DefaultRecoveryStrategy) -> None:
+        """max_consecutive=2: 1 previous + current = 2 → TERMINATE."""
         history = [
             FailureRecord(error_type="adapter_error", message="a", timestamp="t1"),
         ]
@@ -282,7 +286,60 @@ class TestDecide:
             category=ErrorCategory.ADAPTER_ERROR, message="b",
         )
         result = strategy.decide(exc, history, max_consecutive=2)
-        assert result.action == RecoveryAction.RECREATE
+        assert result.action == RecoveryAction.TERMINATE
+
+
+# ── DefaultRecoveryStrategy.decide() — crash levels ─────────
+
+
+class TestDecideCrashLevels:
+    """Progressive crash recovery: GAME_RESTART → FULL_RESTART → TERMINATE."""
+
+    def make_history(self, error_type: str, count: int) -> list[FailureRecord]:
+        return [
+            FailureRecord(error_type=error_type, message="test", timestamp="now")
+            for _ in range(count)
+        ]
+
+    def test_first_crash_returns_game_restart(self) -> None:
+        strategy = DefaultRecoveryStrategy()
+        error = STS2Error(category=ErrorCategory.CRASH_ERROR, message="game crashed")
+        decision = strategy.decide(error, [])
+        assert decision.action == RecoveryAction.GAME_RESTART
+        assert decision.is_p0 is False
+
+    def test_second_consecutive_crash_returns_full_restart(self) -> None:
+        strategy = DefaultRecoveryStrategy()
+        error = STS2Error(category=ErrorCategory.CRASH_ERROR, message="crashed again")
+        history = self.make_history("crash_error", 1)
+        decision = strategy.decide(error, history)
+        assert decision.action == RecoveryAction.FULL_RESTART
+
+    def test_third_consecutive_crash_returns_terminate(self) -> None:
+        strategy = DefaultRecoveryStrategy()
+        error = STS2Error(category=ErrorCategory.CRASH_ERROR, message="crashed x3")
+        history = self.make_history("crash_error", 2)
+        decision = strategy.decide(error, history)
+        assert decision.action == RecoveryAction.TERMINATE
+
+    def test_non_crash_error_not_affected(self) -> None:
+        """Adapter errors should still get standard recovery, not crash levels."""
+        strategy = DefaultRecoveryStrategy()
+        error = STS2Error(category=ErrorCategory.ADAPTER_ERROR, message="adapter failed")
+        decision = strategy.decide(error, [])
+        assert decision.action == RecoveryAction.FAST_PATH
+
+    def test_crash_after_other_errors_resets_to_game_restart(self) -> None:
+        """Crash after non-crash errors should start from GAME_RESTART, not escalate."""
+        strategy = DefaultRecoveryStrategy()
+        error = STS2Error(category=ErrorCategory.CRASH_ERROR, message="crashed")
+        # Previous errors were adapter errors, not crashes
+        history = [
+            FailureRecord(error_type="adapter_error", message="prev", timestamp="now"),
+        ]
+        decision = strategy.decide(error, history)
+        # Different error_type — consecutive count for 'crash_error' is 0 → GAME_RESTART
+        assert decision.action == RecoveryAction.GAME_RESTART
 
 
 # ── DefaultRecoveryStrategy._consecutive_count ──────────────
@@ -428,3 +485,104 @@ class TestExecute:
         ok, new_adapter = _run(strategy.execute(RecoveryAction.RECREATE, mock_adapter))
         assert ok is False
         assert new_adapter is None
+
+
+# ── DefaultRecoveryStrategy.execute() — GAME_RESTART ─────────
+
+
+class TestExecuteGameRestart:
+    """GAME_RESTART calls steam_controller methods."""
+
+    @staticmethod
+    def _make_healthy_adapter() -> Any:
+        adapter = AsyncMock()
+        adapter.health_check.return_value = HealthStatus(healthy=True)
+        adapter.cleanup.return_value = None
+        return adapter
+
+    def test_game_restart_with_steam_controller(self) -> None:
+        mock_steam = MagicMock()
+        mock_steam.restart_game = MagicMock(return_value=12345)
+        new_adapter_mock = self._make_healthy_adapter()
+        mock_factory = MagicMock(return_value=new_adapter_mock)
+        strategy = DefaultRecoveryStrategy(adapter_factory=mock_factory, steam_controller=mock_steam)
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.GAME_RESTART, old_adapter))
+
+        assert success is True
+        assert result_adapter is new_adapter_mock
+        mock_steam.restart_game.assert_called_once()
+
+    def test_game_restart_no_steam_falls_back(self) -> None:
+        """Without steam_controller, GAME_RESTART falls back to RECREATE."""
+        new_adapter_mock = self._make_healthy_adapter()
+        mock_factory = MagicMock(return_value=new_adapter_mock)
+        strategy = DefaultRecoveryStrategy(adapter_factory=mock_factory)
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.GAME_RESTART, old_adapter))
+
+        # Falls back to RECREATE — should still succeed
+        assert success is True
+        assert result_adapter is new_adapter_mock
+
+
+# ── DefaultRecoveryStrategy.execute() — FULL_RESTART ─────────
+
+
+class TestExecuteFullRestart:
+    """FULL_RESTART stops game+Steam, then starts them again."""
+
+    @staticmethod
+    def _make_healthy_adapter() -> Any:
+        adapter = AsyncMock()
+        adapter.health_check.return_value = HealthStatus(healthy=True)
+        adapter.cleanup.return_value = None
+        return adapter
+
+    def test_full_restart_with_steam_controller(self) -> None:
+        mock_steam = MagicMock()
+        mock_steam.stop_game = MagicMock()
+        mock_steam.stop_steam = MagicMock()
+        mock_steam.start_steam = MagicMock(return_value=9999)
+        mock_steam.start_game = MagicMock(return_value=12345)
+        new_adapter_mock = self._make_healthy_adapter()
+        mock_factory = MagicMock(return_value=new_adapter_mock)
+        strategy = DefaultRecoveryStrategy(adapter_factory=mock_factory, steam_controller=mock_steam)
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.FULL_RESTART, old_adapter))
+
+        assert success is True
+        assert result_adapter is new_adapter_mock
+        mock_steam.stop_game.assert_called_once()
+        mock_steam.stop_steam.assert_called_once()
+        mock_steam.start_steam.assert_called_once()
+        mock_steam.start_game.assert_called_once()
+
+    def test_full_restart_failure_returns_false(self) -> None:
+        mock_steam = MagicMock()
+        mock_steam.stop_game = MagicMock(side_effect=RuntimeError("stop failed"))
+        new_adapter_mock = self._make_healthy_adapter()
+        mock_factory = MagicMock(return_value=new_adapter_mock)
+        strategy = DefaultRecoveryStrategy(adapter_factory=mock_factory, steam_controller=mock_steam)
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.FULL_RESTART, old_adapter))
+
+        assert success is False
+        assert result_adapter is None
+
+    def test_full_restart_no_steam_falls_back(self) -> None:
+        """Without steam_controller, FULL_RESTART falls back to RECREATE."""
+        new_adapter_mock = self._make_healthy_adapter()
+        mock_factory = MagicMock(return_value=new_adapter_mock)
+        strategy = DefaultRecoveryStrategy(adapter_factory=mock_factory)
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.FULL_RESTART, old_adapter))
+
+        # Falls back to RECREATE — should still succeed
+        assert success is True
+        assert result_adapter is new_adapter_mock
