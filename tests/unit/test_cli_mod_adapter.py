@@ -1,8 +1,7 @@
-"""Tests for adapters/cli_mod.py — CliModAdapter (real CLI subprocess).
+"""CliModAdapter 单元测试。
 
-Unit tests mock subprocess.Popen to avoid requiring a real STS2-Cli-Mod
-installation. Integration tests (tests/integration/) test against the
-real CLI.
+这些测试 mock `subprocess.Popen`，不依赖真实 STS2-Cli-Mod 安装。
+真实 CLI 和真实游戏链路由 `tests/integration/` 覆盖。
 """
 
 import asyncio
@@ -20,7 +19,7 @@ from sts2_autotest.common.state import GameScreen, GameState
 
 
 def _run(coro: Any) -> Any:
-    """Bridge async → sync for testing."""
+    """Bridge async to sync for testing."""
     return asyncio.run(coro)
 
 
@@ -110,6 +109,14 @@ class TestGetState:
         mock_popen.return_value = _mock_popen_ok({"screen": "COMBAT"})
         result = _run(adapter.get_state())
         assert result.screen == GameScreen.COMBAT
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_singleplayer_submenu_maps_to_main_menu(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "SINGLEPLAYER_SUBMENU"})
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.MAIN_MENU
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_unknown_screen_fallback(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:

@@ -1,7 +1,8 @@
-"""Tests for cli_mod.py pure functions — CLI command mapping correctness.
+"""CliModAdapter 纯函数契约测试。
 
-Validates that _build_cli_args, _screen_to_actions, and _SCREEN_MAP
-produce correct commands per the STS2-Cli-Mod CLI reference document.
+验证 `_build_cli_args`、`_screen_to_actions` 和 `_SCREEN_MAP`
+是否符合 `docs/sts2-cli-mod-reference.md` 中记录的 STS2-Cli-Mod CLI 命令格式。
+这些测试不启动真实 CLI 进程。
 """
 
 from sts2_autotest.adapters.cli_mod import (
@@ -21,7 +22,7 @@ class TestBuildCliArgs:
 
     def test_action_with_string_arg(self) -> None:
         result = _build_cli_args("play_card", {"card_id": "VoidSlash"})
-        assert result == ["play_card", "--card_id", "VoidSlash"]
+        assert result == ["play_card", "VoidSlash"]
 
     def test_action_with_numeric_arg(self) -> None:
         result = _build_cli_args("set_ascension", {"level": 5})
@@ -46,12 +47,23 @@ class TestBuildCliArgs:
             "target": "enemy_1",
         })
         assert result[0] == "play_card"
-        assert "--card_id" in result
-        assert "VoidSlash" in result
+        assert result[1] == "VoidSlash"
         assert "--nth" in result
         assert "2" in result
         assert "--target" in result
         assert "enemy_1" in result
+
+    def test_play_card_preserves_unknown_flags(self) -> None:
+        result = _build_cli_args("play_card", {"card_id": "Strike", "foo": "bar"})
+        assert result == ["play_card", "Strike", "--foo", "bar"]
+
+    def test_choose_map_node_uses_explicit_positional_order(self) -> None:
+        result = _build_cli_args("choose_map_node", {"row": 3, "col": 1})
+        assert result == ["choose_map_node", "1", "3"]
+
+    def test_grid_select_card_uses_positional_card_id(self) -> None:
+        result = _build_cli_args("grid_select_card", {"card_id": "Strike"})
+        assert result == ["grid_select_card", "Strike"]
 
     def test_action_with_none_args(self) -> None:
         assert _build_cli_args("end_turn", None) == ["end_turn"]
@@ -70,6 +82,7 @@ class TestScreenToActions:
         actions = _screen_to_actions(GameScreen.MAIN_MENU)
         assert "new_run" in actions
         assert "continue_run" in actions
+        assert "abandon_run" in actions
         assert "choose_game_mode" in actions
 
     def test_character_select_actions(self) -> None:
@@ -147,7 +160,12 @@ class TestScreenToActions:
         assert _screen_to_actions(GameScreen.CRASHED) == []
 
     def test_all_non_terminal_screens_have_actions(self) -> None:
-        terminal = {GameScreen.GAME_OVER, GameScreen.VICTORY, GameScreen.CRASHED, GameScreen.UNKNOWN}
+        terminal = {
+            GameScreen.GAME_OVER,
+            GameScreen.VICTORY,
+            GameScreen.CRASHED,
+            GameScreen.UNKNOWN,
+        }
         for screen in GameScreen:
             if screen not in terminal:
                 assert _screen_to_actions(screen), f"{screen.value} has no actions"
@@ -158,6 +176,9 @@ class TestScreenMap:
 
     def test_menu_mapped(self) -> None:
         assert _SCREEN_MAP["MENU"] == GameScreen.MAIN_MENU
+
+    def test_singleplayer_submenu_mapped(self) -> None:
+        assert _SCREEN_MAP["SINGLEPLAYER_SUBMENU"] == GameScreen.MAIN_MENU
 
     def test_character_select_mapped(self) -> None:
         assert _SCREEN_MAP["CHARACTER_SELECT"] == GameScreen.CHARACTER_SELECT
@@ -203,7 +224,7 @@ class TestScreenMap:
         for cli_name, screen in _SCREEN_MAP.items():
             actions = _screen_to_actions(screen)
             if screen not in (GameScreen.UNKNOWN, GameScreen.CRASHED):
-                assert actions, f"{cli_name} → {screen.value} has no actions"
+                assert actions, f"{cli_name} -> {screen.value} has no actions"
 
 
 class TestFilterStateExtra:
