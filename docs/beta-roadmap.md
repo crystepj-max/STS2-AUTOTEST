@@ -66,7 +66,7 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 
 | ID | 项 | 说明 |
 |----|-----|------|
-| B19 | CliModAdapter 真实 CLI 集成测试 | 接入真实 sts2 CLI 并编写集成测试 |
+| B19 | CliModAdapter 真实 CLI 集成测试 | 分层为 CLI-only 与 requires_game 两组；CLI-only 可在仅安装 sts2.exe 的环境运行，requires_game 用于验证真实游戏/Mod 链路 |
 | B20 | hooks 多 session 泄漏修复 | 模块级可变 dict 风险 |
 | B21 | assert_that loop 未关闭修复 | 用户未传入 loop 时的退化场景 |
 | B22 | CliModAdapter 缓存竞态修复 | 非线程安全问题 |
