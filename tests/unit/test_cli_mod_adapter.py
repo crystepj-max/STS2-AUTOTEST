@@ -308,11 +308,16 @@ class TestErrorClassification:
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_timeout_error(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
         mock_proc = MagicMock()
-        mock_proc.communicate.side_effect = subprocess.TimeoutExpired(cmd="sts2", timeout=30.0)
+        mock_proc.communicate.side_effect = [
+            subprocess.TimeoutExpired(cmd="sts2", timeout=30.0),
+            (b"", b""),
+        ]
         mock_popen.return_value = mock_proc
         with pytest.raises(STS2Error) as exc_info:
             adapter._run_cli("state")
         assert exc_info.value.detail.get("subtype") == "timeout"
+        mock_proc.kill.assert_called_once()
+        assert mock_proc.communicate.call_count == 2
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_file_not_found_error(self, mock_popen: MagicMock) -> None:

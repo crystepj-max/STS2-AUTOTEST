@@ -109,7 +109,7 @@ class CliModAdapter:
             returncode = proc.returncode
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait()
+            proc.communicate()
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
                 message=f"CLI command timed out after {self.timeout}s: {' '.join(cmd)}",

@@ -20,8 +20,8 @@ class TestFrameworkConfig:
     def test_defaults(self) -> None:
         cfg = FrameworkConfig()
         assert cfg.log_level == "INFO"
-        assert cfg.screenshot_dir == "./screenshots"
-        assert cfg.evidence_dir == "./evidence"
+        assert cfg.screenshot_dir == "tests/output/screenshots"
+        assert cfg.evidence_dir == "tests/output"
         assert cfg.evidence_retention == 20
 
     def test_valid_log_levels(self) -> None:
