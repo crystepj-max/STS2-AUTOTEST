@@ -30,6 +30,7 @@ from sts2_autotest.common.state import GameScreen, GameState
 # CLI 命令返回的 screen 值 → GameScreen 枚举映射
 _SCREEN_MAP: dict[str, GameScreen] = {
     "MENU": GameScreen.MAIN_MENU,
+    "SINGLEPLAYER_SUBMENU": GameScreen.MAIN_MENU,
     "CHARACTER_SELECT": GameScreen.CHARACTER_SELECT,
     "MAP": GameScreen.MAP,
     "COMBAT": GameScreen.COMBAT,
@@ -108,7 +109,7 @@ class CliModAdapter:
             returncode = proc.returncode
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait()
+            proc.communicate()
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
                 message=f"CLI command timed out after {self.timeout}s: {' '.join(cmd)}",
@@ -415,7 +416,7 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
     game's state machine; the actual available actions may vary.
     """
     _ACTIONS: dict[GameScreen, list[str]] = {
-        GameScreen.MAIN_MENU: ["new_run", "continue_run", "choose_game_mode"],
+        GameScreen.MAIN_MENU: ["new_run", "continue_run", "abandon_run", "choose_game_mode"],
         GameScreen.CHARACTER_SELECT: ["select_character", "set_ascension", "embark"],
         GameScreen.MAP: ["choose_map_node", "proceed"],
         GameScreen.COMBAT: ["play_card", "end_turn", "use_potion"],
@@ -432,27 +433,86 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
     return _ACTIONS.get(screen, [])
 
 
+_POSITIONAL_ARG_KEYS: dict[str, tuple[str, ...]] = {
+    "choose_game_mode": ("mode",),
+    "select_character": ("character_id",),
+    "choose_map_node": ("col", "row"),
+    "choose_event": ("index",),
+    "grid_card_select": ("index",),
+    "hand_select_card": ("card_ids",),
+    "grid_select_card": ("card_id", "card_ids"),
+    "tri_select_card": ("card_id", "card_ids"),
+}
+
+
 def _build_cli_args(action: str, args: dict[str, Any] | None = None) -> list[str]:
     """Convert an action name + args dict into CLI positional + flag arguments.
 
     Maps framework action names to sts2 CLI commands. Special cases
     for actions that require specific flag formats.
     """
-    # Direct command mapping
     cmd = [action]
 
     if args is None:
         return cmd
 
-    # Convert args dict to CLI arguments
+    if action == "play_card":
+        card_id = args.get("card_id")
+        if card_id is not None:
+            cmd.append(str(card_id))
+        consumed = {"card_id"}
+        for key, value in args.items():
+            if key in consumed:
+                continue
+            if key in ("nth", "target"):
+                cmd.extend([f"--{key}", str(value)])
+            else:
+                _append_flag_args(cmd, key, value)
+        return cmd
+
+    if action == "use_potion":
+        potion_id = args.get("potion_id")
+        if potion_id is not None:
+            cmd.append(str(potion_id))
+        consumed = {"potion_id"}
+        for key, value in args.items():
+            if key in consumed:
+                continue
+            if key in ("nth", "target"):
+                cmd.extend([f"--{key}", str(value)])
+            else:
+                _append_flag_args(cmd, key, value)
+        return cmd
+
+    if action in _POSITIONAL_ARG_KEYS:
+        consumed = set()
+        for key in _POSITIONAL_ARG_KEYS[action]:
+            if key not in args:
+                continue
+            consumed.add(key)
+            value = args[key]
+            if isinstance(value, (list, tuple)):
+                cmd.extend(str(v) for v in value)
+            else:
+                cmd.append(str(value))
+        for key, value in args.items():
+            if key not in consumed:
+                _append_flag_args(cmd, key, value)
+        return cmd
+
     for key, value in args.items():
-        if isinstance(value, bool):
-            if value:
-                cmd.append(f"--{key}")
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                cmd.append(str(item))
-        else:
-            cmd.extend([f"--{key}", str(value)])
+        _append_flag_args(cmd, key, value)
 
     return cmd
+
+
+def _append_flag_args(cmd: list[str], key: str, value: Any) -> None:
+    """Append a value using generic CLI flag formatting."""
+    if isinstance(value, bool):
+        if value:
+            cmd.append(f"--{key}")
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            cmd.append(str(item))
+    else:
+        cmd.extend([f"--{key}", str(value)])
