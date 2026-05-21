@@ -1,0 +1,139 @@
+# generated: 2026-05-10
+# last_updated: 2026-05-21
+# project: STS2-AUTOTEST
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-05-10
+last_updated: 2026-05-21
+# Epic 1 auto-transitioned to in-progress (first story created)
+project: STS2-AUTOTEST
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Foundation & Game Control
+  epic-1: done
+  1-1-project-scaffolding-shared-data-models: done
+  1-2-configuration-system: done
+  1-3-adapter-protocol-climodadapter: done
+  1-4-state-engine-transition-validation: done
+  1-5-steam-game-process-controller: done
+  epic-1-retrospective: done
+
+  # Epic 2: Test Authoring & Execution
+  epic-2: done
+  2-1-test-orchestrator-core: done
+  2-2-action-model-game-command-execution: done
+  2-3-fluent-api: done
+  2-4-test-data-fixtures: done
+  2-5-pytest-plugin-async-bridge: done
+  2-6-custom-pytest-markers-lifecycle-hooks: done
+  2-7-test-isolation-resource-cleanup: done
+  2-8-cli-entry-points: done
+  epic-2-retrospective: done
+
+  # Epic 3: Evidence & Observability
+  epic-3: done
+  3-1-screen-capture-system: done
+  3-2-log-collector: done
+  3-3-evidence-packager: done
+  3-4-metrics-collector: done
+  epic-3-retrospective: done
+
+  # Epic 4: Resilience & Operational Safety
+  epic-4: in-progress
+  4-1-environment-pre-check-system: done
+  4-2-recovery-strategy: done
+  4-3-zombie-session-detection-termination: done
+  4-4-edge-case-handling-graceful-degradation: done
+  4-5-progress-persistence-resume: done
+  4-6-concurrency-control-session-queue: done
+  4-7-cicd-health-check-artifact-packaging: done
+  4-8-security-sandbox-beta: backlog
+  epic-4-retrospective: done
+
+  # Epic 5: Beta Runtime Resilience & Operator Control
+  epic-5: in-progress
+  5-1-crash-three-level-recovery: done
+  5-2-popup-auto-disposal: backlog
+  5-3-four-hour-unattended-runtime-validation: backlog
+  5-4-local-test-queue-pause-resume: backlog
+  5-5-realtime-progress-pause-resume: backlog
+  5-6-game-scene-coverage-report: backlog
+  5-7-async-artifact-zip-packaging: backlog
+  epic-5-retrospective: optional
+
+  # Epic 6: Beta Adapters & Real Environment Integration
+  epic-6: in-progress
+  6-1-agentadapter-http-baseline: done
+  6-2-agentadapter-mcp-native-control: backlog
+  6-3-adapter-capabilities-contract: in-progress
+  6-4-real-climodadapter-cli-integration-tests: done
+  6-5-game-running-cli-smoke-validation: backlog
+  6-6-climodadapter-cache-race-fix: backlog
+  6-7-start-session-process-checkpoints: backlog
+  6-8-doctor-steam-login-and-version-checks: backlog
+  epic-6-retrospective: optional
+
+  # Epic 7: Beta Natural Language Test Pipeline
+  epic-7: in-progress
+  7-1-markdown-spec-review-compile-run-pipeline: done
+  7-2-generated-dsl-action-coverage: in-progress
+  7-3-default-specs-and-user-manual: in-progress
+  7-4-spec-pipeline-real-regression: done
+  epic-7-retrospective: optional
+
+  # Epic 8: Beta CI/CD & Repair Workflow
+  epic-8: backlog
+  8-1-ci-pipeline-and-pr-commenting: backlog
+  8-2-level2-repair-advisor-patch-diff: backlog
+  8-3-desktop-notification: backlog
+  8-4-health-check-http-endpoint: backlog
+  epic-8-retrospective: optional
+
+  # Epic 9: Beta Visual & Multiplayer QA
+  epic-9: backlog
+  9-1-visual-qa-engine: backlog
+  9-2-dual-runner-multiplayer-smoke: backlog
+  epic-9-retrospective: optional
+
+  # Epic 10: Beta Technical Debt Burn-down
+  epic-10: in-progress
+  10-1-hooks-multi-session-leak-fix: in-progress
+  10-2-assert-that-loop-lifecycle-fix: backlog
+  10-3-setup-scenario-auto-validation: backlog
+  10-4-on-error-handler-type-safety: backlog
+  10-5-remove-coerce-types-type-ignore: backlog
+  epic-10-retrospective: optional
