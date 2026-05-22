@@ -61,6 +61,105 @@ class TestPytestPlugin:
         from sts2_autotest.pytest_plugin.fixtures import SESSION_TEARDOWN_TIMEOUT
         assert SESSION_TEARDOWN_TIMEOUT == 10.0
 
+    def test_session_init_error_message_mentions_external_launch(self) -> None:
+        from sts2_autotest.pytest_plugin.fixtures import _session_init_error_message
+
+        message = _session_init_error_message()
+
+        assert "steam.exe -applaunch 2868840" in message
+        assert "sts2.exe ping" in message
+
+    def test_bootstrap_runtime_starts_steam_and_game(self, monkeypatch) -> None:
+        from sts2_autotest.pytest_plugin import fixtures as fixtures_module
+
+        calls: list[object] = []
+
+        class FakeSteamController:
+            def __init__(
+                self,
+                *,
+                startup_timeout: float,
+                game_dir: str | None,
+                steam_exe: str,
+            ) -> None:
+                calls.append(("init", startup_timeout, game_dir, steam_exe))
+
+            def start_steam(self) -> int:
+                calls.append("start_steam")
+                return 1
+
+            def start_game(self) -> int:
+                calls.append("start_game")
+                return 2
+
+        monkeypatch.setattr(fixtures_module, "_find_game_dir_for_bootstrap", lambda: "D:/Games/STS2")
+        monkeypatch.setattr(fixtures_module, "_find_steam_exe_for_bootstrap", lambda: "C:/Steam/steam.exe")
+        monkeypatch.setattr(fixtures_module, "SteamController", FakeSteamController)
+
+        assert fixtures_module._bootstrap_runtime() is True
+        assert calls == [
+            ("init", 60.0, "D:/Games/STS2", "C:/Steam/steam.exe"),
+            "start_steam",
+            "start_game",
+        ]
+
+    def test_start_orchestrator_session_retries_after_bootstrap(self, monkeypatch) -> None:
+        from sts2_autotest.pytest_plugin import fixtures as fixtures_module
+
+        orch = MagicMock()
+        orch.start_session = AsyncMock(side_effect=[False, True])
+        adapter = MagicMock()
+        adapter.cleanup = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            monkeypatch.setattr(fixtures_module, "_bootstrap_runtime", lambda: True)
+            monkeypatch.setattr(fixtures_module, "_wait_for_adapter_ready", lambda _loop, _adapter: True)
+            ok = fixtures_module._start_orchestrator_session(loop, orch, adapter)
+        finally:
+            loop.close()
+
+        assert ok is True
+        assert orch.start_session.await_count == 2
+        adapter.cleanup.assert_awaited_once()
+
+    def test_start_orchestrator_session_allows_external_start_when_bootstrap_fails(self, monkeypatch) -> None:
+        from sts2_autotest.pytest_plugin import fixtures as fixtures_module
+
+        orch = MagicMock()
+        orch.start_session = AsyncMock(side_effect=[False, True])
+        adapter = MagicMock()
+        adapter.cleanup = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            monkeypatch.setattr(fixtures_module, "_bootstrap_runtime", lambda: False)
+            monkeypatch.setattr(fixtures_module, "_wait_for_adapter_ready", lambda _loop, _adapter: True)
+            ok = fixtures_module._start_orchestrator_session(loop, orch, adapter)
+        finally:
+            loop.close()
+
+        assert ok is True
+        assert orch.start_session.await_count == 2
+        adapter.cleanup.assert_awaited_once()
+
+    def test_start_orchestrator_session_returns_false_when_adapter_never_ready(self, monkeypatch) -> None:
+        from sts2_autotest.pytest_plugin import fixtures as fixtures_module
+
+        orch = MagicMock()
+        orch.start_session = AsyncMock(return_value=False)
+        adapter = MagicMock()
+        adapter.cleanup = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            monkeypatch.setattr(fixtures_module, "_bootstrap_runtime", lambda: True)
+            monkeypatch.setattr(fixtures_module, "_wait_for_adapter_ready", lambda _loop, _adapter: False)
+            ok = fixtures_module._start_orchestrator_session(loop, orch, adapter)
+        finally:
+            loop.close()
+
+        assert ok is False
+        assert orch.start_session.await_count == 1
+        adapter.cleanup.assert_awaited_once()
+
 
 class TestLifecycleHooks:
     """Hook register/fire/clear lifecycle."""

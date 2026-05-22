@@ -20,8 +20,8 @@ class TestFrameworkConfig:
     def test_defaults(self) -> None:
         cfg = FrameworkConfig()
         assert cfg.log_level == "INFO"
-        assert cfg.screenshot_dir == "./screenshots"
-        assert cfg.evidence_dir == "./evidence"
+        assert cfg.screenshot_dir == "tests/output/screenshots"
+        assert cfg.evidence_dir == "tests/output"
         assert cfg.evidence_retention == 20
 
     def test_valid_log_levels(self) -> None:
@@ -83,6 +83,18 @@ class TestAdapterConfig:
             agent=AgentAdapterConfig(enabled=True),
         ))
         assert cfg.adapter.agent.enabled is True
+
+    def test_agent_transport_defaults_to_http(self) -> None:
+        cfg = AgentAdapterConfig()
+        assert cfg.transport == "http"
+
+    def test_agent_transport_accepts_mcp(self) -> None:
+        cfg = AgentAdapterConfig(transport="mcp")
+        assert cfg.transport == "mcp"
+
+    def test_agent_transport_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            AgentAdapterConfig(transport="websocket")
 
     def test_mutual_exclusion_both_enabled(self) -> None:
         with pytest.raises(ValidationError, match="Mutual exclusion"):

@@ -1,6 +1,7 @@
 """Tests for core/steam.py — SteamController process management."""
 
 import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,10 @@ from sts2_autotest.core.steam import SteamController
 @pytest.fixture
 def sc() -> SteamController:
     return SteamController()
+
+
+def test_default_app_id_matches_sts2() -> None:
+    assert SteamController().app_id == "2868840"
 
 
 class TestStartSteam:
@@ -55,13 +60,86 @@ class TestStartGame:
                 assert pid == 54321
                 assert sc._game_pid == 54321
 
+    def test_start_game_uses_steam_applaunch(self) -> None:
+        sc = SteamController(steam_exe=r"C:\Program Files (x86)\Steam\steam.exe")
+        sc.startup_timeout = 1.0
+        with patch("subprocess.Popen") as mock_popen:
+            with patch.object(sc, "_find_game_pid", return_value=54321):
+                pid = sc.start_game()
+
+        assert pid == 54321
+        mock_popen.assert_called_once_with([
+            r"C:\Program Files (x86)\Steam\steam.exe",
+            "-applaunch",
+            "2868840",
+        ])
+
     def test_start_game_timeout(self, sc: SteamController) -> None:
         sc.startup_timeout = 0.1
         with patch("subprocess.Popen"):
             with patch.object(sc, "_find_game_pid", return_value=None):
-                with pytest.raises(RuntimeError, match="did not start"):
+                with patch.object(sc, "_start_game_direct") as mock_direct:
+                    with pytest.raises(RuntimeError, match="Steam launch did not start"):
+                        sc.start_game()
+        mock_direct.assert_not_called()
+
+    def test_start_game_does_not_use_direct_fallback_by_default(self, sc: SteamController) -> None:
+        sc.startup_timeout = 0.1
+        with patch("subprocess.Popen"):
+            with patch("time.sleep"):
+                with patch.object(sc, "_find_game_pid", return_value=None):
+                    with patch.object(sc, "_start_game_direct") as mock_direct:
+                        with pytest.raises(RuntimeError, match="Steam launch did not start"):
+                            sc.start_game()
+        mock_direct.assert_not_called()
+
+    def test_start_game_can_use_direct_fallback_when_enabled(self, sc: SteamController) -> None:
+        sc.startup_timeout = 0.1
+        with patch("subprocess.Popen"):
+            with patch.object(sc, "_find_game_pid", return_value=None):
+                with patch.object(sc, "_start_game_direct", return_value=54321) as mock_direct:
+                    pid = sc.start_game(allow_direct_fallback=True)
+        assert pid == 54321
+        mock_direct.assert_called_once()
+
+    def test_start_game_requires_game_dir_for_direct_fallback(self, sc: SteamController) -> None:
+        sc.startup_timeout = 0.1
+        with patch("subprocess.Popen"):
+            with patch.object(sc, "_find_game_pid", return_value=None):
+                with pytest.raises(RuntimeError, match="Direct game launch requires"):
+                    sc.start_game(allow_direct_fallback=True)
                     sc.start_game()
 
+    def test_start_game_direct_launch_sets_cwd_and_appid(self, tmp_path: Path) -> None:
+        sc = SteamController(game_dir=str(tmp_path))
+        sc.startup_timeout = 1.0
+        with patch("subprocess.Popen") as mock_popen:
+            with patch("time.sleep"):
+                with patch.object(sc, "_find_game_pid", return_value=54321):
+                    pid = sc._start_game_direct(set())
+        assert pid == 54321
+        assert sc._game_pid == 54321
+        assert mock_popen.call_count == 1
+        _, direct_kwargs = mock_popen.call_args_list[0]
+        assert direct_kwargs["cwd"] == str(tmp_path)
+        assert (tmp_path / "steam_appid.txt").read_text(encoding="utf-8") == "2868840\n"
+
+    def test_start_game_direct_accepts_existing_appid_without_trailing_newline(
+        self, tmp_path: Path
+    ) -> None:
+        sc = SteamController(game_dir=str(tmp_path))
+        sc.startup_timeout = 1.0
+        appid_path = tmp_path / "steam_appid.txt"
+        appid_path.write_text("2868840", encoding="utf-8")
+
+        with patch("subprocess.Popen") as mock_popen:
+            with patch("time.sleep"):
+                with patch.object(sc, "_find_game_pid", return_value=54321):
+                    pid = sc._start_game_direct(set())
+
+        assert pid == 54321
+        assert mock_popen.call_count == 1
+        assert appid_path.read_text(encoding="utf-8") == "2868840"
 
 class TestIsProcessAlive:
     """AC#3: Process alive detection."""

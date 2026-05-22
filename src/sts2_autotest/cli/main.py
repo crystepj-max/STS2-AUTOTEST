@@ -12,9 +12,10 @@ import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Literal, Sequence, cast
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
 
@@ -55,12 +56,25 @@ def _create_parser() -> Any:
     review.add_argument("--spec-dir", help="Directory containing Markdown spec files")
     review.add_argument("--project", help="Project name from workspace config")
     review.add_argument("--output", help="Output path for review report (default: stdout)")
+    review.add_argument(
+        "--output-dir",
+        help="Directory for review artifacts: report, revised drafts, and source map",
+    )
 
     # autotest compile
     compile_cmd_parser = sub.add_parser("compile", help="Compile specs to pytest test files")
     compile_cmd_parser.add_argument("--spec-dir", help="Directory containing Markdown spec files")
     compile_cmd_parser.add_argument("--output-dir", help="Directory for generated test files")
     compile_cmd_parser.add_argument("--project", help="Project name from workspace config")
+    compile_cmd_parser.add_argument(
+        "--use-revised",
+        action="store_true",
+        help="Compile confirmed revised drafts instead of the original specs",
+    )
+    compile_cmd_parser.add_argument(
+        "--revised-dir",
+        help="Directory containing confirmed revised Markdown drafts",
+    )
 
     # autotest doctor
     doc = sub.add_parser("doctor", help="Check environment readiness")
@@ -111,7 +125,24 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
         A GameAdapterProtocol-compliant adapter instance.
     """
     if adapter_type == "agent":
-        from sts2_autotest.adapters.agent import AgentAdapter
+        from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+
+        transport_raw = _get_env(["STS2_ADAPTER__AGENT__TRANSPORT"], "http")
+        if transport_raw not in ("http", "mcp"):
+            raise ValueError(
+                "STS2_ADAPTER__AGENT__TRANSPORT must be 'http' or 'mcp'"
+            )
+        transport = cast(Literal["http", "mcp"], transport_raw)
+        mcp_client = (
+            FastMcpAgentClient(
+                endpoint=_get_env(
+                    ["STS2_ADAPTER__AGENT__MCP_ENDPOINT"],
+                    "http://127.0.0.1:8765/mcp",
+                )
+            )
+            if transport == "mcp"
+            else None
+        )
 
         return AgentAdapter(
             endpoint=_get_env(
@@ -125,14 +156,16 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
                 ["STS2_ADAPTER__AGENT__DEBUG_ACTIONS"], "false"
             ).lower()
             in ("true", "1", "yes"),
+            mcp_client=mcp_client,
+            transport=transport,
             health_path=_get_env(["STS2_ADAPTER__AGENT__HEALTH_PATH"], "health"),
             state_path=_get_env(
-                ["STS2_ADAPTER__AGENT__STATE_PATH"], "game_state"
+                ["STS2_ADAPTER__AGENT__STATE_PATH"], "state"
             ),
             actions_path=_get_env(
-                ["STS2_ADAPTER__AGENT__ACTIONS_PATH"], "available_actions"
+                ["STS2_ADAPTER__AGENT__ACTIONS_PATH"], "actions/available"
             ),
-            act_path=_get_env(["STS2_ADAPTER__AGENT__ACT_PATH"], "act"),
+            act_path=_get_env(["STS2_ADAPTER__AGENT__ACT_PATH"], "action"),
             wait_path=_get_env(
                 ["STS2_ADAPTER__AGENT__WAIT_PATH"], "wait_until_actionable"
             ),
@@ -174,6 +207,7 @@ def _run_orchestrator_with_adapter(
     *,
     progress_path: str | None = None,
     resumed_from: str | None = None,
+    adapter_factory: Callable[[], GameAdapterProtocol] | None = None,
 ) -> int:
     """Create an orchestrator with the given adapter and run the given case IDs.
 
@@ -184,8 +218,9 @@ def _run_orchestrator_with_adapter(
     from sts2_autotest.core.steam import SteamController
 
     steam = SteamController(startup_timeout=60.0)
+    recreate_factory = adapter_factory or (lambda: _create_adapter("cli"))
     recovery = DefaultRecoveryStrategy(
-        adapter_factory=lambda: _create_adapter("cli"),
+        adapter_factory=recreate_factory,
         game_startup_timeout=60.0,
         steam_controller=steam,
     )
@@ -247,30 +282,114 @@ def _load_workspace() -> Any | None:
 
 def _resolve_spec_dir(args: Any) -> str | None:
     """Resolve spec directory from args or workspace config."""
-    if getattr(args, "spec_dir", None):
-        return args.spec_dir
+    spec_dir = getattr(args, "spec_dir", None)
+    if isinstance(spec_dir, str) and spec_dir:
+        return spec_dir
     project_name = getattr(args, "project", None)
     if project_name:
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
-            if project:
-                return project.spec_dir
+            project_spec_dir = getattr(project, "spec_dir", None) if project else None
+            if isinstance(project_spec_dir, str):
+                return project_spec_dir
     return None
 
 
 def _resolve_output_dir(args: Any, spec_dir: str) -> str:
     """Resolve output directory for generated test files."""
-    if getattr(args, "output_dir", None):
-        return args.output_dir
+    output_dir = getattr(args, "output_dir", None)
+    if isinstance(output_dir, str) and output_dir:
+        return output_dir
     project_name = getattr(args, "project", None)
     if project_name:
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
-            if project and project.output_dir:
-                return project.output_dir
+            project_output_dir = getattr(project, "output_dir", None) if project else None
+            if isinstance(project_output_dir, str) and project_output_dir:
+                return project_output_dir
     return spec_dir
+
+
+def _resolve_compile_input_dir(args: Any, spec_dir: str) -> str:
+    """Resolve original vs revised spec input for compile."""
+    if not getattr(args, "use_revised", False):
+        return spec_dir
+
+    revised_dir = getattr(args, "revised_dir", None)
+    if isinstance(revised_dir, str) and revised_dir:
+        return revised_dir
+
+    candidate = Path(spec_dir) / "revised"
+    if candidate.is_dir():
+        return str(candidate)
+
+    print(
+        "[autotest] --use-revised requires --revised-dir or a revised/ "
+        "directory under --spec-dir"
+    )
+    return ""
+
+
+def _write_review_artifacts(
+    output_dir: str,
+    report_markdown: str,
+    drafts: list[Any],
+) -> None:
+    """Persist review report and revised draft candidates."""
+    root = Path(output_dir)
+    revised_dir = root / "revised"
+    revised_dir.mkdir(parents=True, exist_ok=True)
+    (root / "review-report.md").write_text(report_markdown + "\n", encoding="utf-8")
+
+    source_map: dict[str, dict[str, Any]] = {}
+    for draft in drafts:
+        draft_path = revised_dir / f"{draft.spec_id}.md"
+        draft_path.write_text(draft.markdown_content, encoding="utf-8")
+        source_map[draft.spec_id] = {
+            "original_path": draft.original_path,
+            "revised_path": str(draft_path),
+            "changes_summary": draft.changes_summary,
+        }
+    (revised_dir / ".source-map.json").write_text(
+        json.dumps(source_map, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _looks_like_generated_output_dir(path: Path) -> bool:
+    """Return True when the directory only contains generated pytest artifacts."""
+    if not path.exists():
+        return True
+    for child in path.iterdir():
+        if child.is_dir():
+            if child.name != "__pycache__":
+                return False
+            continue
+        if not (child.name.startswith("test_") and child.suffix == ".py"):
+            return False
+    return True
+
+
+def _ensure_output_dir_writable(output_dir: str) -> None:
+    """Ensure the compile output directory is writable.
+
+    If the directory looks like a pure generated-artifacts directory and the
+    probe file cannot be created, recreate the directory once.
+    """
+    path = Path(output_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    probe = path / ".autotest-write-probe"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return
+    except PermissionError:
+        if not _looks_like_generated_output_dir(path):
+            raise
+        shutil.rmtree(path)
+        path.mkdir(parents=True, exist_ok=True)
 
 
 def review_cmd(args: Any) -> int:
@@ -297,6 +416,7 @@ def review_cmd(args: Any) -> int:
 
     reviewer = SpecReviewer()
     all_passed = True
+    revised_drafts: list[Any] = []
 
     output_lines: list[str] = []
     def _out(line: str = "") -> None:
@@ -313,6 +433,7 @@ def review_cmd(args: Any) -> int:
             for issue in report.issues:
                 _out(f"         - [{issue.category.value}] {issue.location}: {issue.description}")
         draft = reviewer.generate_revised_draft(spec, report)
+        revised_drafts.append(draft)
         if draft.changes_summary and draft.changes_summary != ["No issues found — spec is already clean"]:
             for change in draft.changes_summary:
                 _out(f"           draft: {change}")
@@ -335,6 +456,10 @@ def review_cmd(args: Any) -> int:
     else:
         print(output)
 
+    output_dir = getattr(args, "output_dir", None)
+    if isinstance(output_dir, str) and output_dir:
+        _write_review_artifacts(output_dir, output, revised_drafts)
+
     return 0 if all_passed else 1
 
 
@@ -352,12 +477,23 @@ def compile_cmd(args: Any) -> int:
         print(f"[autotest] Spec directory not found: {spec_dir}")
         return 1
 
+    compile_input_dir = _resolve_compile_input_dir(args, spec_dir)
+    if not compile_input_dir:
+        return 1
+
     output_dir = _resolve_output_dir(args, spec_dir)
+    _ensure_output_dir_writable(output_dir)
     parser = MarkdownParser()
-    cases, suites = parser.discover_specs(spec_dir)
+    cases, suites = parser.discover_specs(compile_input_dir)
+    if compile_input_dir != spec_dir:
+        _, original_suites = parser.discover_specs(spec_dir)
+        existing_suite_ids = {suite.id for suite in suites}
+        suites.extend(
+            suite for suite in original_suites if suite.id not in existing_suite_ids
+        )
 
     if not cases and not suites:
-        print(f"[autotest] No spec files found in {spec_dir}")
+        print(f"[autotest] No spec files found in {compile_input_dir}")
         return 0
 
     generator = CodeGenerator()
@@ -406,7 +542,11 @@ def _dispatch_orchestrator(
         kwargs["resumed_from"] = resumed_from
 
     return _run_orchestrator_with_adapter(
-        adapter, case_ids, timeout=timeout, **kwargs,
+        adapter,
+        case_ids,
+        timeout=timeout,
+        adapter_factory=lambda: _create_adapter("agent" if use_agent else "cli"),
+        **kwargs,
     )
 
 
@@ -509,6 +649,101 @@ def run_cmd(args: Any) -> int:
         return 1
 
 
+def _check_steam_login_state(
+    roots: list[Path],
+    steam_exe: Path | None,
+) -> dict[str, str]:
+    """Check Steam remembered login state using local loginusers.vdf."""
+    if steam_exe is None:
+        return {
+            "status": "NOT_FOUND",
+            "message": "Steam not found; install Steam and log in before running tests",
+        }
+
+    candidates: list[Path] = [steam_exe.parent / "config" / "loginusers.vdf"]
+    candidates.extend(root / "config" / "loginusers.vdf" for root in roots)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            content = candidate.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "AccountName" in content or "MostRecent" in content:
+            return {
+                "status": "OK",
+                "message": f"Steam remembered login found: {candidate}",
+            }
+        return {
+            "status": "FAIL",
+            "message": f"Steam login file has no remembered account: {candidate}",
+        }
+
+    return {
+        "status": "FAIL",
+        "message": "Steam login file not found; open Steam and sign in once",
+    }
+
+
+def _check_cli_version(cli_path: str | None) -> dict[str, str]:
+    """Check STS2-Cli-Mod version output without requiring the game pipe."""
+    if cli_path is None:
+        return {
+            "status": "NOT_FOUND",
+            "message": "sts2 CLI not found; install STS2-Cli-Mod or set STS2_ADAPTER__CLI__CLI_PATH",
+        }
+
+    try:
+        result = subprocess.run(
+            [cli_path, "--version"],
+            capture_output=True,
+            timeout=5.0,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {
+            "status": "NOT_FOUND",
+            "message": f"sts2 CLI executable not found: {cli_path}",
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "FAIL",
+            "message": f"sts2 --version timed out after 5s: {cli_path}",
+        }
+    except OSError as exc:
+        return {
+            "status": "FAIL",
+            "message": f"cannot execute sts2 --version: {exc}",
+        }
+
+    stdout = result.stdout.decode("utf-8", errors="replace").strip()
+    stderr = result.stderr.decode("utf-8", errors="replace").strip()
+    version_output = stdout or stderr
+    if result.returncode != 0:
+        return {
+            "status": "FAIL",
+            "message": f"sts2 --version exited {result.returncode}: {version_output[:200]}",
+        }
+
+    from sts2_autotest.adapters.cli_mod import CliModAdapter
+
+    try:
+        CliModAdapter(cli_path=cli_path, version_output=version_output)
+    except Exception as exc:
+        return {
+            "status": "FAIL",
+            "message": f"incompatible sts2 CLI version: {exc}",
+        }
+
+    return {
+        "status": "OK",
+        "message": version_output,
+    }
+
+
 def _check_env() -> dict[str, dict[str, str]]:
     """Run real environment checks and return structured status dict.
 
@@ -548,6 +783,7 @@ def _check_env() -> dict[str, dict[str, str]]:
         "status": "OK" if steam_exe else "NOT_FOUND",
         "message": str(steam_exe) if steam_exe else "Steam not found",
     }
+    checks["steam_login_state"] = _check_steam_login_state(roots, steam_exe)
 
     # Game installed — scan all Steam library folders
     game_found = _find_game(roots)
@@ -563,6 +799,7 @@ def _check_env() -> dict[str, dict[str, str]]:
         "status": "OK" if cli_path else "NOT_FOUND",
         "message": str(cli_path) if cli_path else "sts2 CLI not found",
     }
+    checks["sts2_cli_version"] = _check_cli_version(cli_path)
 
     # Disk space (C: drive)
     try:

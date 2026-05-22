@@ -6,18 +6,36 @@ main chain (FluentBuilder -> ActionDescriptor -> Orchestrator).
 
 from __future__ import annotations
 
+import re
+import json
 from pathlib import Path
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
 
 _IMPORT_BLOCK = """\
+import json
+from pathlib import Path
+
 import pytest
 
 from sts2_autotest.dsl.fluent import define
 from sts2_autotest.dsl.assertions import (
+    advance_dialogue,
+    choose_event,
+    choose_game_mode,
+    choose_map_node,
+    combat_basic_policy,
+    embark,
+    end_turn,
+    enter_combat,
     game_reached_state,
     no_crash_detected,
     has_travelable_node,
+    play_card,
+    return_to_menu,
+    select_character,
+    skip_card_reward,
+    start_new_run,
 )
 from sts2_autotest.common.state import GameScreen
 from sts2_autotest.core.action_model import ActionDescriptor
@@ -35,6 +53,33 @@ def _step_to_action_call(step: str) -> str:
 
     Falls back to ActionDescriptor if no direct DSL function mapping exists.
     """
+    event_match = re.search(r"第\s*(\d+)\s*个选项", step)
+    if "开局事件" in step and event_match:
+        return f"choose_event({event_match.group(1)})"
+
+    map_node_match = re.search(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)", step)
+    if "地图节点" in step and map_node_match:
+        return f"choose_map_node({map_node_match.group(1)}, {map_node_match.group(2)})"
+
+    if "返回主菜单" in step:
+        return "return_to_menu()"
+    if "选择标准模式" in step:
+        return 'choose_game_mode("standard")'
+    if "开始新 run" in step or "开始新局" in step:
+        return "start_new_run()"
+    if "选择 Ironclad" in step:
+        return 'select_character("IRONCLAD")'
+    if "开始冒险" in step:
+        return "embark()"
+    if "推进事件对话" in step:
+        return "advance_dialogue()"
+    if "进入首次战斗" in step or "进入首场战斗" in step:
+        return "enter_combat()"
+    if "基础策略" in step and "战斗" in step:
+        return "combat_basic_policy()"
+    if "跳过卡牌奖励" in step:
+        return "skip_card_reward()"
+
     step_lower = step.lower()
     for keyword, action in _STEP_TO_ACTION.items():
         if step_lower.startswith(keyword):
@@ -118,6 +163,10 @@ class CodeGenerator:
         lines.append(
             f'        define("{spec.id}", autotest, _session_loop)'
         )
+        if spec.start_state:
+            lines.append(
+                f'        .require_start_state("""{spec.start_state}""")'
+            )
         lines.append("        .setup(")
         for step in setup_steps:
             lines.append(f"            {_step_to_action_call(step)},")
@@ -135,7 +184,23 @@ class CodeGenerator:
             lines.append("            # no assertions defined")
         lines.append("        )")
         lines.append("    )")
-        lines.append("    assert result.passed, result.failures")
+        lines.append("    failure_context = {")
+        lines.append(f'        "case_id": {json.dumps(spec.id, ensure_ascii=False)},')
+        lines.append(f'        "title": {json.dumps(spec.title, ensure_ascii=False)},')
+        lines.append(
+            f'        "start_state": {json.dumps(spec.start_state, ensure_ascii=False)},'
+        )
+        lines.append(
+            f'        "end_state": {json.dumps(spec.end_state, ensure_ascii=False)},'
+        )
+        lines.append(f'        "steps": {json.dumps(spec.steps, ensure_ascii=False)},')
+        lines.append("        \"failures\": result.failures,")
+        lines.append("        \"detail\": result.detail,")
+        lines.append("    }")
+        lines.append(
+            "    assert result.passed, "
+            "'规格执行失败: ' + json.dumps(failure_context, ensure_ascii=False)"
+        )
 
         return "\n".join(lines)
 
@@ -147,38 +212,94 @@ class CodeGenerator:
     def generate_suite_test(
         self, suite: SuiteSpec, specs: dict[str, TestSpec]
     ) -> str:
-        """Generate a pytest test class for a suite of test cases.
+        """Generate a single pytest test function for a shared-session suite."""
+        func_name = _case_id_to_function_name(suite.id)
+        lines: list[str] = [f"def test_{func_name}(autotest, _session_loop):"]
+        lines.append(f'    """{suite.title}"""')
+        if suite.goal:
+            lines.append(f"    # Goal: {suite.goal}")
+        lines.append(f"    # Execution mode: {suite.execution_mode}")
+        for assertion in suite.suite_assertions:
+            lines.append(f"    # Suite assertion: {assertion}")
+        lines.append("    suite_results = []")
+        lines.append("    summary_path = Path('tests/output/suite-summaries') / "
+                     f"{json.dumps(suite.id + '.json', ensure_ascii=False)}")
+        lines.append("")
+        lines.append("    def _write_suite_summary():")
+        lines.append("        summary_path.parent.mkdir(parents=True, exist_ok=True)")
+        lines.append("        first_failed = next((item for item in suite_results if not item['passed']), None)")
+        lines.append("        summary = {")
+        lines.append(f'            "suite_id": {json.dumps(suite.id, ensure_ascii=False)},')
+        lines.append(f'            "title": {json.dumps(suite.title, ensure_ascii=False)},')
+        lines.append("            \"total\": len(suite_results),")
+        lines.append("            \"passed\": sum(1 for item in suite_results if item['passed']),")
+        lines.append("            \"failed\": sum(1 for item in suite_results if not item['passed']),")
+        lines.append("            \"first_failed_case_id\": first_failed['case_id'] if first_failed else None,")
+        lines.append("            \"cases\": suite_results,")
+        lines.append("        }")
+        lines.append("        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8')")
 
-        Builds the class body manually (no textwrap.dedent) to avoid
-        indentation conflicts when combining multiple methods.
-        """
-        class_name = _case_id_to_class_name(suite.id)
+        included_specs = [specs[case_id] for case_id in suite.includes if case_id in specs]
+        if not included_specs:
+            lines.append('    pytest.skip("No included case specs resolved")')
+            body = "\n".join(lines)
+            return _IMPORT_BLOCK.rstrip("\n") + "\n\n" + body
 
-        methods: list[str] = []
-        for case_id in suite.includes:
-            spec = specs.get(case_id)
-            if spec:
-                body = self._generate_case_body(spec)
-                # Indent each non-empty line by 4 spaces for class method scope
-                indented = "\n".join(
-                    f"    {line}" if line.strip() else line
-                    for line in body.splitlines()
+        for spec in included_specs:
+            result_var = f"result_{_case_id_to_function_name(spec.id)}"
+            if spec.givens:
+                for given in spec.givens:
+                    lines.append(f"    # Given ({spec.id}): {given}")
+            lines.append(f"    # Case: {spec.id} - {spec.title}")
+            lines.append(f"    {result_var} = (")
+            lines.append(f'        define("{spec.id}", autotest, _session_loop)')
+            if spec.start_state:
+                lines.append(
+                    f'        .require_start_state("""{spec.start_state}""")'
                 )
-                methods.append(indented)
+            lines.append("        .setup(")
+            for step in (spec.steps[:-1] if len(spec.steps) > 1 else []):
+                lines.append(f"            {_step_to_action_call(step)},")
+            lines.append("        )")
+            lines.append("        .execute(")
+            if spec.steps:
+                lines.append(f"            {_step_to_action_call(spec.steps[-1])},")
+            lines.append("        )")
+            lines.append("        .assert_that(")
+            if spec.assertions:
+                for assertion in spec.assertions:
+                    assertion_lower = assertion.lower()
+                    if "crash" in assertion_lower:
+                        lines.append("            no_crash_detected(),")
+                    elif "map" in assertion_lower or "鍦板浘" in assertion:
+                        lines.append("            game_reached_state(GameScreen.MAP),")
+                    elif "鑺傜偣" in assertion or "node" in assertion_lower:
+                        lines.append("            has_travelable_node(),")
+                    else:
+                        lines.append(f"            # TODO: implement assertion for '{assertion}'")
+            else:
+                lines.append("            # no assertions defined")
+            lines.append("        )")
+            lines.append("    )")
+            lines.append("    case_summary = {")
+            lines.append(f'        "case_id": {json.dumps(spec.id, ensure_ascii=False)},')
+            lines.append(f'        "title": {json.dumps(spec.title, ensure_ascii=False)},')
+            lines.append(f'        "start_state": {json.dumps(spec.start_state, ensure_ascii=False)},')
+            lines.append(f'        "end_state": {json.dumps(spec.end_state, ensure_ascii=False)},')
+            lines.append(f'        "steps": {json.dumps(spec.steps, ensure_ascii=False)},')
+            lines.append(f"        \"passed\": {result_var}.passed,")
+            lines.append(f"        \"failures\": {result_var}.failures,")
+            lines.append(f"        \"detail\": {result_var}.detail,")
+            lines.append("    }")
+            lines.append("    suite_results.append(case_summary)")
+            lines.append("    _write_suite_summary()")
+            lines.append(
+                f'    assert {result_var}.passed, '
+                f'"TC-{spec.id.removeprefix("TC-")} failed: " '
+                "+ json.dumps(case_summary, ensure_ascii=False)"
+            )
 
-        methods_code = "\n\n".join(methods)
-
-        # Build class body
-        parts: list[str] = [f"class {class_name}:"]
-        parts.append(f'    """{suite.title}"""')
-        if suite.suite_assertions:
-            parts.append("")
-            for a in suite.suite_assertions:
-                parts.append(f"    # Suite assertion: {a}")
-        parts.append("")
-        parts.append(methods_code)
-
-        body = "\n".join(parts)
+        body = "\n".join(lines)
         return _IMPORT_BLOCK.rstrip("\n") + "\n\n" + body
 
     def generate_to_file(self, spec: TestSpec, output_dir: str) -> str:

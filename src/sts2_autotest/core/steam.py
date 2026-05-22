@@ -10,7 +10,7 @@ _assign_to_job stubs — full implementation in Epic 4 Beta.
 
 import subprocess
 import time
-from pathlib import PureWindowsPath
+from pathlib import Path, PureWindowsPath
 from typing import Any, cast
 
 import psutil
@@ -21,7 +21,7 @@ logger = get_logger("core.steam")
 
 _STEAM_EXE = "steam.exe"
 _GAME_EXE = "SlayTheSpire2.exe"
-_DEFAULT_APP_ID = "2719470"
+_DEFAULT_APP_ID = "2868840"
 
 
 class SteamController:
@@ -37,12 +37,14 @@ class SteamController:
         game_exe: str = _GAME_EXE,
         app_id: str = _DEFAULT_APP_ID,
         startup_timeout: float = 60.0,
+        game_dir: str | None = None,
     ) -> None:
         self.steam_exe = steam_exe
         self.steam_process_name = PureWindowsPath(steam_exe).name
         self.game_exe = game_exe
         self.app_id = app_id
         self.startup_timeout = startup_timeout
+        self.game_dir = game_dir
         self._steam_pid: int | None = None
         self._game_pid: int | None = None
 
@@ -59,15 +61,12 @@ class SteamController:
         logger.info("Steam started (PID %s)", self._steam_pid)
         return self._steam_pid
 
-    def start_game(self) -> int:
-        """Launch the game via Steam URI and return its PID."""
+    def start_game(self, *, allow_direct_fallback: bool = False) -> int:
+        """Launch the game via Steam and return its PID."""
         logger.info("Starting game (app %s)...", self.app_id)
         existing_pids = self._find_game_pids()
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", f"steam://run/{self.app_id}"],
-            shell=False,
-        )
-        # Wait for game process to appear
+        subprocess.Popen([self.steam_exe, "-applaunch", self.app_id])
+        # Wait for game process to appear.
         start = time.monotonic()
         while time.monotonic() - start < self.startup_timeout:
             pid = self._find_game_pid(exclude_pids=existing_pids)
@@ -76,9 +75,13 @@ class SteamController:
                 logger.info("Game started (PID %s)", pid)
                 return pid
             time.sleep(0.5)
-        raise RuntimeError(
-            f"Game did not start within {self.startup_timeout}s"
-        )
+        if allow_direct_fallback:
+            logger.warning(
+                "Steam launch did not start game within %ss, trying direct launch fallback",
+                self.startup_timeout,
+            )
+            return self._start_game_direct(existing_pids)
+        raise RuntimeError(f"Steam launch did not start game within {self.startup_timeout}s")
 
     def is_process_alive(self, pid: int | None, name: str) -> bool:
         """Check if a process with given PID and name is alive."""
@@ -170,6 +173,49 @@ class SteamController:
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return None
+
+    def _start_game_direct(self, existing_pids: set[int]) -> int:
+        """Launch the game executable directly from the game directory."""
+        game_dir = self._resolve_game_dir()
+        game_path = self._resolve_game_path(game_dir)
+        self._ensure_steam_appid(game_dir)
+        logger.info("Starting game directly from %s", game_path)
+        subprocess.Popen([str(game_path)], cwd=str(game_dir), shell=False)
+        start = time.monotonic()
+        while time.monotonic() - start < self.startup_timeout:
+            pid = self._find_game_pid(exclude_pids=existing_pids)
+            if pid is not None:
+                self._game_pid = pid
+                logger.info("Game started via direct fallback (PID %s)", pid)
+                return pid
+            time.sleep(0.5)
+        raise RuntimeError(f"Game did not start within {self.startup_timeout}s")
+
+    def _resolve_game_dir(self) -> Path:
+        if self.game_dir:
+            return Path(self.game_dir)
+        candidate = Path(self.game_exe)
+        if candidate.parent != Path("."):
+            return candidate.parent
+        raise RuntimeError("Direct game launch requires game_dir or absolute game_exe path")
+
+    def _resolve_game_path(self, game_dir: Path) -> Path:
+        candidate = Path(self.game_exe)
+        if candidate.is_absolute():
+            return candidate
+        return game_dir / candidate.name
+
+    def _ensure_steam_appid(self, game_dir: Path) -> None:
+        appid_path = game_dir / "steam_appid.txt"
+        expected = f"{self.app_id}\n"
+        try:
+            current = appid_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            current = None
+        if current is not None and current.strip() == self.app_id:
+            return
+        if current != expected:
+            appid_path.write_text(expected, encoding="utf-8")
 
     def _terminate_game(self, deadline: float | None = None) -> None:
         self._terminate_process(self._game_pid, self.game_exe, "Game", deadline)

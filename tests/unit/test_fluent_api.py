@@ -72,6 +72,34 @@ class TestFluentBuilder:
         assert isinstance(result, TestResult)
         assert result.status in ("pass", "fail")
 
+    def test_require_start_state_fails_before_action_execution(self, orch: TestOrchestrator) -> None:
+        loop = asyncio.new_event_loop()
+        result = (
+            define("TC-START-GUARD", orch, loop)
+            .require_start_state("- 当前位于主菜单界面")
+            .execute(play_card("Strike"))
+            .assert_that()
+        )
+        loop.close()
+        assert result.status == "fail"
+        assert any("起始状态" in failure for failure in result.failures)
+        assert orch.adapter.act.call_count == 0
+
+    def test_require_start_state_accepts_allowed_screen_list(self, orch: TestOrchestrator) -> None:
+        loop = asyncio.new_event_loop()
+        result = (
+            define("TC-START-ALLOWED-LIST", orch, loop)
+            .require_start_state(
+                "- 任意可恢复状态\n"
+                "- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / MAP / COMBAT / UNKNOWN"
+            )
+            .execute(play_card("Strike"))
+            .assert_that()
+        )
+        loop.close()
+        assert result.status == "pass"
+        assert orch.adapter.act.call_count == 1
+
 
 class TestAssertionFunctions:
     """Game semantic assertion functions."""

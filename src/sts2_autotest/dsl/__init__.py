@@ -1,6 +1,12 @@
 """DSL package — fluent API for authoring test cases."""
 from sts2_autotest.dsl.fluent import FluentBuilder, HandlerFn, define
 from sts2_autotest.dsl.assertions import (
+    advance_dialogue,
+    choose_event,
+    choose_game_mode,
+    choose_map_node,
+    combat_basic_policy,
+    embark,
     end_turn,
     enemy_hp_decreased_by,
     enter_combat,
@@ -11,9 +17,13 @@ from sts2_autotest.dsl.assertions import (
     play_card,
     player_energy_decreased_by,
     player_hp_changed_by,
+    return_to_menu,
+    select_character,
     set_hp,
     set_seed,
+    skip_card_reward,
     start_game,
+    start_new_run,
 )
 from sts2_autotest.dsl.fixtures import FixtureLoader
 from sts2_autotest.dsl.handlers import capture_screenshot, log_state
@@ -22,8 +32,14 @@ __all__ = [
     "FluentBuilder",
     "FixtureLoader",
     "HandlerFn",
+    "advance_dialogue",
     "capture_screenshot",
+    "choose_event",
+    "choose_game_mode",
+    "choose_map_node",
+    "combat_basic_policy",
     "define",
+    "embark",
     "end_turn",
     "enemy_hp_decreased_by",
     "enter_combat",
@@ -35,7 +51,11 @@ __all__ = [
     "play_card",
     "player_energy_decreased_by",
     "player_hp_changed_by",
+    "return_to_menu",
+    "select_character",
     "set_hp",
     "set_seed",
+    "skip_card_reward",
     "start_game",
+    "start_new_run",
 ]

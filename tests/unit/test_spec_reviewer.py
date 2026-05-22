@@ -72,6 +72,46 @@ class TestSpecReviewer:
         unimplementable = [i for i in report.issues if i.category == IssueCategory.UNIMPLEMENTABLE]
         assert any("使用未实现" in i.description for i in unimplementable)
 
+    def test_review_reports_capability_gap_for_unknown_dsl_step(self) -> None:
+        spec = TestSpec(
+            id="TC-CAP-GAP",
+            title="Capability gap",
+            priority="P0",
+            start_state="SHOP",
+            end_state="SHOP",
+            steps=["在商店购买遗物"],
+            assertions=["不 crash"],
+        )
+        report = self.reviewer.review(spec)
+        gaps = [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
+        assert any("没有 DSL 原语" in i.description for i in gaps)
+        assert any("当前不可实现" in i.suggestion for i in gaps)
+
+    def test_review_accepts_first_battle_supported_steps(self) -> None:
+        spec = TestSpec(
+            id="TC-FIRST-BATTLE",
+            title="First battle supported",
+            priority="P0",
+            start_state="MAIN_MENU",
+            end_state="MAP",
+            steps=[
+                "返回主菜单",
+                "选择标准模式",
+                "开始新 run",
+                "选择 Ironclad",
+                "开始冒险",
+                "选择开局事件的第 0 个选项",
+                "推进事件对话",
+                "选择地图节点 (2, 1)",
+                "进入首次战斗",
+                "按基础策略完成战斗",
+                "跳过卡牌奖励",
+            ],
+            assertions=["不 crash", "到达 MAP"],
+        )
+        report = self.reviewer.review(spec)
+        assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
+
     def test_review_multiple_issues(self) -> None:
         spec = TestSpec(
             id="TC-MULTI",

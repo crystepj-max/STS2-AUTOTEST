@@ -161,14 +161,14 @@ class MarkdownParser:
     def discover_specs(
         self, spec_dir: str
     ) -> tuple[list[TestSpec], list[SuiteSpec]]:
-        """Scan a directory for ``.md`` spec files, parse them, split into cases and suites."""
+        """Scan a directory recursively for ``.md`` spec files, parse them, and split into cases/suites."""
         cases: list[TestSpec] = []
         suites: list[SuiteSpec] = []
         path = Path(spec_dir)
         if not path.is_dir():
             return cases, suites
 
-        for f in sorted(path.glob("*.md")):
+        for f in sorted(path.rglob("*.md")):
             try:
                 text = f.read_text(encoding="utf-8")
                 level = detect_level(text)

@@ -85,6 +85,69 @@ def start_game(save: str | None = None) -> ActionDescriptor:
     )
 
 
+def return_to_menu() -> ActionDescriptor:
+    """Return to the main menu."""
+    return ActionDescriptor(action_type="return_to_menu")
+
+
+def choose_game_mode(mode: str) -> ActionDescriptor:
+    """Choose a game mode from the singleplayer submenu."""
+    return ActionDescriptor(
+        action_type="choose_game_mode",
+        params={"mode": mode},
+    )
+
+
+def start_new_run() -> ActionDescriptor:
+    """Open the new run flow from the main menu."""
+    return ActionDescriptor(action_type="start_new_run")
+
+
+def select_character(character_id: str) -> ActionDescriptor:
+    """Select a playable character."""
+    return ActionDescriptor(
+        action_type="select_character",
+        params={"character_id": character_id},
+    )
+
+
+def embark() -> ActionDescriptor:
+    """Confirm character selection and start the run."""
+    return ActionDescriptor(action_type="embark")
+
+
+def choose_event(index: int) -> ActionDescriptor:
+    """Choose an event option by zero-based index."""
+    return ActionDescriptor(
+        action_type="choose_event",
+        params={"index": index},
+    )
+
+
+def advance_dialogue(auto: bool = False) -> ActionDescriptor:
+    """Advance the current event dialogue."""
+    params = {"auto": auto} if auto else {}
+    return ActionDescriptor(action_type="advance_dialogue", params=params)
+
+
+def choose_map_node(col: int, row: int) -> ActionDescriptor:
+    """Choose a travelable map node by column and row."""
+    return ActionDescriptor(
+        action_type="choose_map_node",
+        params={"col": col, "row": row},
+    )
+
+
+def skip_card_reward() -> ActionDescriptor:
+    """Skip the current card reward."""
+    return ActionDescriptor(action_type="skip_card_reward")
+
+
+def combat_basic_policy() -> ActionDescriptor:
+    """Execute the framework's baseline first-battle combat policy."""
+    return ActionDescriptor(action_type="combat_basic_policy")
+
+
 def enter_combat(enemy: str = "") -> ActionDescriptor:
     """Enter combat with the given enemy."""
     return ActionDescriptor(
