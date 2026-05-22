@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sts2_autotest.pytest_plugin.fixtures import SessionInitError, UserError
-from sts2_autotest.pytest_plugin.hooks import clear, fire, register
+from sts2_autotest.pytest_plugin.hooks import HookRegistry, clear, fire, register
 
 
 class TestUserError:
@@ -104,3 +104,14 @@ class TestLifecycleHooks:
         register("session_start", lambda: calls.append("b"))
         fire("session_start")
         assert calls == ["a", "b"]
+
+    def test_registry_instances_are_isolated(self) -> None:
+        calls: list[str] = []
+        first = HookRegistry()
+        second = HookRegistry()
+
+        first.register("session_start", lambda: calls.append("first"))
+        second.fire("session_start")
+        first.fire("session_start")
+
+        assert calls == ["first"]

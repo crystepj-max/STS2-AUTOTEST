@@ -70,6 +70,17 @@ class TestExecuteAction:
         with pytest.raises(STS2Error, match="not available"):
             _run(orch.execute_action(action))
 
+    def test_expected_state_mismatch_is_rejected(self) -> None:
+        mock = _make_mock_adapter()
+        orch = TestOrchestrator(adapter=mock)
+        action = ActionDescriptor(
+            action_type="play_card",
+            expected_state=GameScreen.MAP,
+        )
+
+        with pytest.raises(STS2Error, match="expected state"):
+            _run(orch.execute_action(action))
+
 
 class TestExecuteActionSequence:
     """Sequence execution with state re-read between actions."""

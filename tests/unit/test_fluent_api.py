@@ -72,6 +72,17 @@ class TestFluentBuilder:
         assert isinstance(result, TestResult)
         assert result.status in ("pass", "fail")
 
+    def test_assert_that_without_loop_creates_temporary_loop(
+        self, orch: TestOrchestrator
+    ) -> None:
+        asyncio.set_event_loop(None)
+        try:
+            result = define("TC-NO-LOOP", orch).execute(start_game()).assert_that()
+        finally:
+            asyncio.set_event_loop(None)
+        assert isinstance(result, TestResult)
+        assert result.status in ("pass", "fail")
+
 
 class TestAssertionFunctions:
     """Game semantic assertion functions."""
@@ -219,3 +230,17 @@ class TestUnifiedTestResult:
         # handler should have been invoked if assertion failed
         if result.status == "fail":
             assert calls == ["TC-ERR"]
+
+    def test_on_error_rejects_handler_with_wrong_arity(
+        self, orch: TestOrchestrator
+    ) -> None:
+        builder = define("TC-BAD-HANDLER", orch)
+
+        with pytest.raises(TypeError, match="on_error handler"):
+            builder.on_error(lambda case_id: None)
+
+    def test_on_error_rejects_non_callable(self, orch: TestOrchestrator) -> None:
+        builder = define("TC-BAD-HANDLER", orch)
+
+        with pytest.raises(TypeError, match="on_error handler"):
+            builder.on_error("not callable")  # type: ignore[arg-type]
