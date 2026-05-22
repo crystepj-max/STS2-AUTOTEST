@@ -247,29 +247,31 @@ def _load_workspace() -> Any | None:
 
 def _resolve_spec_dir(args: Any) -> str | None:
     """Resolve spec directory from args or workspace config."""
-    if getattr(args, "spec_dir", None):
-        return args.spec_dir
+    spec_dir = getattr(args, "spec_dir", None)
+    if spec_dir:
+        return str(spec_dir)
     project_name = getattr(args, "project", None)
     if project_name:
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
             if project:
-                return project.spec_dir
+                return str(project.spec_dir)
     return None
 
 
 def _resolve_output_dir(args: Any, spec_dir: str) -> str:
     """Resolve output directory for generated test files."""
-    if getattr(args, "output_dir", None):
-        return args.output_dir
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir:
+        return str(output_dir)
     project_name = getattr(args, "project", None)
     if project_name:
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
             if project and project.output_dir:
-                return project.output_dir
+                return str(project.output_dir)
     return spec_dir
 
 

@@ -13,6 +13,7 @@ from typing import Any
 
 import yaml
 from dotenv import dotenv_values
+from pydantic import BaseModel
 
 from sts2_autotest.config.schema import STS2Config
 
@@ -87,10 +88,12 @@ def _load_dotenv(project_dir: Path) -> dict[str, Any]:
     return result
 
 
-def _coerce_types(overrides: dict[str, Any], schema: type) -> dict[str, Any]:
+def _coerce_types(
+    overrides: dict[str, Any], schema: type[BaseModel]
+) -> dict[str, Any]:
     """Best-effort type coercion for env var strings based on schema field types."""
     coerced: dict[str, Any] = {}
-    schema_fields = schema.model_fields  # type: ignore[attr-defined]
+    schema_fields = schema.model_fields
     for key, value in overrides.items():
         if key in schema_fields and isinstance(value, str):
             field_info = schema_fields[key]
@@ -124,7 +127,10 @@ def _coerce_types(overrides: dict[str, Any], schema: type) -> dict[str, Any]:
             # Recurse into sub-models
             if key in schema_fields:
                 sub_annotation = schema_fields[key].annotation
-                if hasattr(sub_annotation, "model_fields"):
+                if (
+                    isinstance(sub_annotation, type)
+                    and issubclass(sub_annotation, BaseModel)
+                ):
                     coerced[key] = _coerce_types(value, sub_annotation)
                 else:
                     coerced[key] = value
