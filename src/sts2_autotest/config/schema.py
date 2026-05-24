@@ -4,6 +4,8 @@ All config models are frozen pydantic BaseModel instances.
 Field validators enforce business rules at parse time.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -23,6 +25,7 @@ class AgentAdapterConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = False
+    transport: Literal["http", "mcp"] = "http"
     endpoint: str = "http://localhost:8080"
     timeout: float = Field(default=30.0, gt=0)
     tool_profile: str = Field(default="guided", pattern=r"^(guided|layered|full)$")

@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -52,6 +52,64 @@ _SCREEN_MAP: dict[str, GameScreen] = {
 }
 
 
+class AgentMcpClientProtocol(Protocol):
+    """Agent MCP 客户端的最小结构接口。"""
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """发送一次 MCP 请求并返回 JSON 风格字典。"""
+        ...
+
+    async def aclose(self) -> None:
+        """释放客户端资源。"""
+        ...
+
+
+class FastMcpAgentClient:
+    """轻量 MCP 适配层，避免引入 fastmcp 运行时依赖。"""
+
+    def __init__(
+        self,
+        endpoint: str = "http://127.0.0.1:8765/mcp",
+        timeout: float = 30.0,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.endpoint = endpoint
+        self.timeout = timeout
+        self._client = client
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "method": method,
+            "path": path,
+            "json": json_data or {},
+        }
+        resp = await self._get_client().post(self.endpoint, json=payload)
+        if resp.status_code >= 400:
+            resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+        return data
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+
 class AgentAdapter:
     """STS2-Agent HTTP adapter implementing the GameAdapterProtocol.
 
@@ -64,6 +122,8 @@ class AgentAdapter:
         tool_profile:    Agent tool usage profile ("balanced", "aggressive", etc.).
         debug_actions:   Enable debug action capabilities.
         client:          Pre-configured httpx.AsyncClient (for testing injection).
+        transport:       Transport backend ("http" or "mcp").
+        mcp_client:      Pre-configured MCP client (for testing or real MCP use).
         supported_version: Expected major version for version handshake.
     """
 
@@ -82,19 +142,25 @@ class AgentAdapter:
         actions_path: str = "available_actions",
         act_path: str = "act",
         wait_path: str = "wait_until_actionable",
+        transport: Literal["http", "mcp"] = "http",
+        mcp_client: AgentMcpClientProtocol | None = None,
     ) -> None:
+        if transport not in ("http", "mcp"):
+            raise ValueError("transport must be 'http' or 'mcp'")
         if endpoint is None:
             endpoint = "http://localhost:8080"
         self.endpoint = endpoint.rstrip("/")
         self.timeout = timeout
         self.tool_profile = tool_profile
         self.debug_actions = debug_actions
+        self.transport = transport
         self._health_path = health_path
         self._state_path = state_path
         self._actions_path = actions_path
         self._act_path = act_path
         self._wait_path = wait_path
         self._client = client
+        self._mcp_client = mcp_client
         self._version_checked = False
         self._supported_version = supported_version if supported_version is not None else self.SUPPORTED_MAJOR_VERSION
 
@@ -121,6 +187,12 @@ class AgentAdapter:
             self._client = httpx.AsyncClient(timeout=self.timeout)
         return self._client
 
+    def _get_mcp_client(self) -> AgentMcpClientProtocol:
+        """Lazy-init MCP client."""
+        if self._mcp_client is None:
+            self._mcp_client = FastMcpAgentClient(timeout=self.timeout)
+        return self._mcp_client
+
     # ── core HTTP request method ────────────────────────────
 
     async def _request(self, method: str, path: str, json_data: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -136,6 +208,9 @@ class AgentAdapter:
           Other HTTP errors       → ADAPTER_ERROR / NONZERO_EXIT_CODE
           JSON decode failure     → ADAPTER_ERROR / JSON_PARSE_FAILURE
         """
+        if self.transport == "mcp":
+            return await self._mcp_request(method, path, json_data)
+
         url = f"{self.endpoint}/{path}"
         client = self._get_client()
 
@@ -210,6 +285,41 @@ class AgentAdapter:
             )
 
     # ── public async interface (GameAdapterProtocol) ────────
+
+    async def _mcp_request(
+        self,
+        method: str,
+        path: str,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """通过 MCP client 发送请求，并复用适配器错误分类。"""
+        try:
+            return await self._get_mcp_client().request(method, path, json_data)
+        except httpx.TimeoutException:
+            raise STS2Error(
+                category=ErrorCategory.ADAPTER_ERROR,
+                message=f"MCP request timed out: {method} {path}",
+                detail={"subtype": AdapterErrorSubType.TIMEOUT, "path": path, "method": method},
+            )
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            if status in (408, 504):
+                raise STS2Error(
+                    category=ErrorCategory.TIMEOUT_ERROR,
+                    message=f"MCP HTTP timeout: {status}",
+                    detail={"subtype": AdapterErrorSubType.TIMEOUT, "path": path, "status": status},
+                )
+            raise STS2Error(
+                category=ErrorCategory.ADAPTER_ERROR,
+                message=f"MCP HTTP error: {status}",
+                detail={"subtype": AdapterErrorSubType.NONZERO_EXIT_CODE, "path": path, "status": status},
+            )
+        except httpx.RequestError as exc:
+            raise STS2Error(
+                category=ErrorCategory.ADAPTER_ERROR,
+                message=f"MCP request failed: {exc}",
+                detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "path": path, "method": method},
+            )
 
     async def health_check(self) -> HealthStatus:
         """GET {endpoint}/health.
@@ -348,6 +458,12 @@ class AgentAdapter:
             except (asyncio.TimeoutError, Exception) as exc:
                 logger.debug("Error closing HTTP client: %s", exc)
             self._client = None
+        if self._mcp_client is not None:
+            try:
+                await asyncio.wait_for(self._mcp_client.aclose(), timeout=10)
+            except (asyncio.TimeoutError, Exception) as exc:
+                logger.debug("Error closing MCP client: %s", exc)
+            self._mcp_client = None
 
     # ── version handshake ────────────────────────────────────
 
