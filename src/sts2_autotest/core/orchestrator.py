@@ -641,11 +641,18 @@ class TestOrchestrator:
 
         # 6. Verify expected_state if specified
         if action.expected_state is not None and self._current_screen != action.expected_state:
-            logger.warning(
-                "Action '%s': expected state %s but reached %s",
-                action.action_type,
-                action.expected_state.value,
-                self._current_screen.value,
+            raise STS2Error(
+                category=ErrorCategory.GAME_ERROR,
+                message=(
+                    f"Action '{action.action_type}' expected state "
+                    f"{action.expected_state.value} but reached "
+                    f"{self._current_screen.value}"
+                ),
+                detail={
+                    "action": action.action_type,
+                    "expected_state": action.expected_state.value,
+                    "actual_state": self._current_screen.value,
+                },
             )
 
         return result

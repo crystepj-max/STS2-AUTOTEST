@@ -34,8 +34,8 @@ sts2_autotest = "sts2_autotest.pytest_plugin.plugin"
 testpaths = ["tests"]
 addopts = "--ignore=src"
 markers = [
-    "integration: 需要真实 STS2-Cli-Mod 环境的集成测试",
-    "requires_game: 需要 Slay the Spire 2 游戏已运行的测试",
+    "integration: 需要真实 STS2-Cli-Mod CLI 环境的集成测试",
+    "requires_game: 需要 Slay the Spire 2 游戏已运行且 STS2-Cli-Mod 已加载的测试",
 ]
 
 [tool.hatch.build.targets.wheel]

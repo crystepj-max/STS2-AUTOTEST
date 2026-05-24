@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import portalocker
+import psutil
 
 from sts2_autotest.common.logging import get_logger
 
@@ -153,8 +154,4 @@ class LockManager:
         """Check if a PID is alive (cross-platform)."""
         if pid <= 0:
             return False
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        return psutil.pid_exists(pid)

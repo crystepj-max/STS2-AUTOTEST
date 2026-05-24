@@ -1,4 +1,4 @@
-"""Tests for dsl/fluent.py and dsl/assertions.py — Fluent API."""
+"""Tests for dsl/fluent.py and dsl/assertions.py: Fluent API."""
 
 import asyncio
 import itertools
@@ -9,7 +9,9 @@ import pytest
 
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, HealthStatus
 from sts2_autotest.common.state import GameScreen, GameState
+from sts2_autotest.core.action_model import TestResult
 from sts2_autotest.core.orchestrator import TestOrchestrator
+from sts2_autotest.dsl import FluentBuilder, define
 from sts2_autotest.dsl.assertions import (
     end_turn,
     enemy_hp_decreased_by,
@@ -23,19 +25,25 @@ from sts2_autotest.dsl.assertions import (
     set_seed,
     start_game,
 )
-from sts2_autotest.dsl import FluentBuilder, define
-from sts2_autotest.core.action_model import TestResult
 
 
 def _make_adapt() -> Any:
     mock = MagicMock(spec=GameAdapterProtocol)
-    states = itertools.cycle([
-        GameState(screen=GameScreen.MAP),
-        GameState(screen=GameScreen.COMBAT),
-    ])
+    states = itertools.cycle(
+        [
+            GameState(screen=GameScreen.MAP),
+            GameState(screen=GameScreen.COMBAT),
+        ]
+    )
     mock.health_check.return_value = HealthStatus(healthy=True)
     mock.get_state.side_effect = lambda: next(states)
-    mock.get_available_actions.return_value = ["play_card", "end_turn", "enter_combat", "start_game", "probe"]
+    mock.get_available_actions.return_value = [
+        "play_card",
+        "end_turn",
+        "enter_combat",
+        "start_game",
+        "probe",
+    ]
     mock.act.return_value = ActionResult(status="success", state_changed=True)
     mock.wait_until_actionable.return_value = True
     return mock
@@ -61,37 +69,40 @@ class TestFluentBuilder:
 
     def test_full_chain(self, orch: TestOrchestrator) -> None:
         loop = asyncio.new_event_loop()
-        result = define("card-damage", orch, loop).setup(
-            start_game(), enter_combat("JawWorm")
-        ).execute(
-            play_card("VoidSlash", target=0)
-        ).assert_that(
-            game_reached_state(GameScreen.MAP)
+        result = (
+            define("card-damage", orch, loop)
+            .setup(start_game(), enter_combat("JawWorm"))
+            .execute(play_card("VoidSlash", target=0))
+            .assert_that(game_reached_state(GameScreen.MAP))
         )
         loop.close()
         assert isinstance(result, TestResult)
         assert result.status in ("pass", "fail")
 
-    def test_require_start_state_fails_before_action_execution(self, orch: TestOrchestrator) -> None:
+    def test_require_start_state_fails_before_action_execution(
+        self, orch: TestOrchestrator
+    ) -> None:
         loop = asyncio.new_event_loop()
         result = (
             define("TC-START-GUARD", orch, loop)
-            .require_start_state("- 当前位于主菜单界面")
+            .require_start_state("- current screen is MAIN_MENU")
             .execute(play_card("Strike"))
             .assert_that()
         )
         loop.close()
         assert result.status == "fail"
-        assert any("起始状态" in failure for failure in result.failures)
+        assert any("start state" in failure for failure in result.failures)
         assert orch.adapter.act.call_count == 0
 
-    def test_require_start_state_accepts_allowed_screen_list(self, orch: TestOrchestrator) -> None:
+    def test_require_start_state_accepts_allowed_screen_list(
+        self, orch: TestOrchestrator
+    ) -> None:
         loop = asyncio.new_event_loop()
         result = (
             define("TC-START-ALLOWED-LIST", orch, loop)
             .require_start_state(
-                "- 任意可恢复状态\n"
-                "- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / MAP / COMBAT / UNKNOWN"
+                "- resumable state\n"
+                "- current screen may be MAIN_MENU / CHARACTER_SELECT / MAP / COMBAT / UNKNOWN"
             )
             .execute(play_card("Strike"))
             .assert_that()
@@ -99,6 +110,17 @@ class TestFluentBuilder:
         loop.close()
         assert result.status == "pass"
         assert orch.adapter.act.call_count == 1
+
+    def test_assert_that_without_loop_creates_temporary_loop(
+        self, orch: TestOrchestrator
+    ) -> None:
+        asyncio.set_event_loop(None)
+        try:
+            result = define("TC-NO-LOOP", orch).execute(start_game()).assert_that()
+        finally:
+            asyncio.set_event_loop(None)
+        assert isinstance(result, TestResult)
+        assert result.status in ("pass", "fail")
 
 
 class TestAssertionFunctions:
@@ -189,24 +211,29 @@ class TestDslExports:
 
     def test_define_available(self) -> None:
         from sts2_autotest.dsl import define
+
         assert callable(define)
 
     def test_assertion_functions_available(self) -> None:
-        from sts2_autotest.dsl import game_reached_state, enemy_hp_decreased_by
+        from sts2_autotest.dsl import enemy_hp_decreased_by, game_reached_state
+
         assert callable(game_reached_state)
         assert callable(enemy_hp_decreased_by)
 
     def test_handler_functions_available(self) -> None:
         from sts2_autotest.dsl import capture_screenshot, log_state
+
         assert callable(capture_screenshot)
         assert callable(log_state)
 
     def test_fixture_loader_available(self) -> None:
         from sts2_autotest.dsl import FixtureLoader
+
         assert FixtureLoader is not None
 
     def test_handler_fn_type_available(self) -> None:
         from sts2_autotest.dsl import HandlerFn
+
         assert HandlerFn is not None
 
 
@@ -214,12 +241,10 @@ class TestUnifiedTestResult:
     """TestResult is the single result model for both Orchestrator and Fluent API."""
 
     def test_passed_property(self) -> None:
-        from sts2_autotest.core.action_model import TestResult
         r = TestResult(case_id="c1", status="pass")
         assert r.passed is True
 
     def test_failed_not_passed(self) -> None:
-        from sts2_autotest.core.action_model import TestResult
         r = TestResult(case_id="c1", status="fail")
         assert r.passed is False
 
@@ -231,10 +256,11 @@ class TestUnifiedTestResult:
         assert result.case_id == "TC-UNI"
 
     def test_on_error_handler_called_on_failure(self, orch: TestOrchestrator) -> None:
-        from sts2_autotest.dsl.fluent import HandlerFn
         calls: list[str] = []
+
         def handler(o: TestOrchestrator, cid: str) -> None:
             calls.append(cid)
+
         loop = asyncio.new_event_loop()
         result = (
             define("TC-ERR", orch, loop)
@@ -244,6 +270,19 @@ class TestUnifiedTestResult:
         )
         loop.close()
         assert isinstance(result, TestResult)
-        # handler should have been invoked if assertion failed
         if result.status == "fail":
             assert calls == ["TC-ERR"]
+
+    def test_on_error_rejects_handler_with_wrong_arity(
+        self, orch: TestOrchestrator
+    ) -> None:
+        builder = define("TC-BAD-HANDLER", orch)
+
+        with pytest.raises(TypeError, match="on_error handler"):
+            builder.on_error(lambda case_id: None)
+
+    def test_on_error_rejects_non_callable(self, orch: TestOrchestrator) -> None:
+        builder = define("TC-BAD-HANDLER", orch)
+
+        with pytest.raises(TypeError, match="on_error handler"):
+            builder.on_error("not callable")  # type: ignore[arg-type]

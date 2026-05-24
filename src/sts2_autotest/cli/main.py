@@ -285,6 +285,8 @@ def _resolve_spec_dir(args: Any) -> str | None:
     spec_dir = getattr(args, "spec_dir", None)
     if isinstance(spec_dir, str) and spec_dir:
         return spec_dir
+    if spec_dir:
+        return str(spec_dir)
     project_name = getattr(args, "project", None)
     if project_name:
         ws = _load_workspace()
@@ -293,6 +295,8 @@ def _resolve_spec_dir(args: Any) -> str | None:
             project_spec_dir = getattr(project, "spec_dir", None) if project else None
             if isinstance(project_spec_dir, str):
                 return project_spec_dir
+            if project_spec_dir:
+                return str(project_spec_dir)
     return None
 
 
@@ -301,6 +305,8 @@ def _resolve_output_dir(args: Any, spec_dir: str) -> str:
     output_dir = getattr(args, "output_dir", None)
     if isinstance(output_dir, str) and output_dir:
         return output_dir
+    if output_dir:
+        return str(output_dir)
     project_name = getattr(args, "project", None)
     if project_name:
         ws = _load_workspace()
@@ -309,6 +315,8 @@ def _resolve_output_dir(args: Any, spec_dir: str) -> str:
             project_output_dir = getattr(project, "output_dir", None) if project else None
             if isinstance(project_output_dir, str) and project_output_dir:
                 return project_output_dir
+            if project_output_dir:
+                return str(project_output_dir)
     return spec_dir
 
 
