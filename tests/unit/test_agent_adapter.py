@@ -109,6 +109,22 @@ class TestAgentAdapterTransport:
 
         assert client.endpoint == "http://127.0.0.1:8765/mcp"
 
+    def test_mcp_non_json_response_maps_to_parse_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=b"not valid json")
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        mcp = FastMcpAgentClient(endpoint="http://127.0.0.1:8765/mcp", client=client)
+        adapter = AgentAdapter(transport="mcp", mcp_client=mcp)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+
+        assert exc.value.category == ErrorCategory.ADAPTER_ERROR
+        assert exc.value.detail.get("subtype") == AdapterErrorSubType.JSON_PARSE_FAILURE
+        assert exc.value.detail.get("path") == "game_state"
+        assert exc.value.detail.get("method") == "POST"
+
 
 class TestAgentAdapterHealthCheck:
     """health_check() maps to GET {endpoint}/health"""

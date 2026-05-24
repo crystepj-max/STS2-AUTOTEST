@@ -320,6 +320,12 @@ class AgentAdapter:
                 message=f"MCP request failed: {exc}",
                 detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "path": path, "method": method},
             )
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise STS2Error(
+                category=ErrorCategory.ADAPTER_ERROR,
+                message=f"Invalid MCP JSON response: {exc}",
+                detail={"subtype": AdapterErrorSubType.JSON_PARSE_FAILURE, "path": path, "method": method},
+            )
 
     async def health_check(self) -> HealthStatus:
         """GET {endpoint}/health.
