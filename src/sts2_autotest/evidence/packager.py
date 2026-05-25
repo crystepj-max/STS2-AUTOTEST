@@ -8,7 +8,7 @@ import json
 import os
 import shutil
 import xml.etree.ElementTree as ET
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +44,9 @@ class ArtifactExportJob:
         """Wait for the export to finish and return the ZIP path when available."""
         try:
             result = self._future.result(timeout=timeout)
+        except TimeoutError:
+            self.status = "PENDING"
+            return None
         except Exception as exc:
             self.status = "FAILED"
             self.error = str(exc) or exc.__class__.__name__

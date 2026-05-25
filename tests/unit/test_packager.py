@@ -565,7 +565,10 @@ class TestArtifactExport:
             assert summary_path.is_file()
 
             assert archive_started.wait(timeout=2.0)
+            pending_result = job.wait(timeout=0.01)
+            assert pending_result is None
             assert job.status == "PENDING"
+            assert job.error is None
             allow_archive.set()
             zip_path = job.wait(timeout=5.0)
 
