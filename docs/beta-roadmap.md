@@ -94,3 +94,9 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 | CI/CD | 本地 CLI | GitHub Actions + PR 注释 + HTTP 端点 |
 | 测试 | 935 单元测试（全 mock） | 需补齐真实 CLI 集成测试 |
 | 无人值守 | ≥ 2h | ≥ 4h |
+## Epic 5 验证记录（2026-05-25）
+
+- Mock 无人值守验证命令：`python -X utf8 -m pytest tests/integration/test_epic5_unattended.py -q --tb=short --basetemp=.pytest-tmp-epic5-5-3`
+- 结果：`1 passed in 0.03s`
+- 覆盖范围：20 个 mock case 连续运行，验证框架层未产生 crash，作为四小时真实长跑前的快速回归哨兵。
+- 真实四小时验证：本次未启动真实 Steam/Slay the Spire 2 长跑；需在 Steam 已登录、游戏和 STS2-Cli-Mod 均稳定可用的 Windows 本机环境单独运行 `autotest run --all --timeout 14400 --no-resume` 或 `python -m pytest tests/integration/ -m requires_game --durations=20 -q --tb=short` 并记录 evidence pack。
