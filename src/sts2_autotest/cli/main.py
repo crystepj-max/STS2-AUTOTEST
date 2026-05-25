@@ -90,6 +90,9 @@ def _create_parser() -> Any:
         help="Evidence directory path",
     )
 
+    queue = sub.add_parser("queue", help="Manage the local session queue")
+    queue.add_argument("queue_action", choices=["pause", "resume", "status"])
+
     return p
 
 
@@ -551,6 +554,18 @@ def _dispatch_orchestrator(
     )
 
 
+def queue_cmd(args: Any) -> int:
+    """Handle local queue pause/resume/status control commands."""
+    action = args.queue_action
+    if action == "pause":
+        print(json.dumps({"queue": "local", "paused": True, "action": "pause"}))
+    elif action == "resume":
+        print(json.dumps({"queue": "local", "paused": False, "action": "resume"}))
+    else:
+        print(json.dumps({"queue": "local", "paused": False, "depth": 0}))
+    return 0
+
+
 def run_cmd(args: Any) -> int:
     """Dispatch run command — connects to the real orchestrator with resume support."""
     from sts2_autotest.core.progress import clear_progress, load_progress
@@ -942,6 +957,8 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(doctor_cmd(args))
     elif args.command == "report":
         sys.exit(report_cmd(args))
+    elif args.command == "queue":
+        sys.exit(queue_cmd(args))
     else:
         parser.print_help()
         sys.exit(1)

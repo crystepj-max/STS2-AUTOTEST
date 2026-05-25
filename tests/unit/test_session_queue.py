@@ -158,3 +158,29 @@ class TestSessionQueue:
         assert q.is_full is False
         # A new request should be accepted
         assert q.enqueue(SessionRequest(session_id="b")) is True
+
+    def test_pause_prevents_dequeue_without_dropping_items(self) -> None:
+        q = SessionQueue()
+        req = SessionRequest(session_id="s1")
+        assert q.enqueue(req) is True
+
+        q.pause()
+
+        assert q.is_paused is True
+        assert q.dequeue() is None
+        assert q.queue_depth == 1
+        assert q.peek() is req
+
+    def test_resume_restores_priority_fifo_dequeue(self) -> None:
+        q = SessionQueue()
+        low = SessionRequest(session_id="low", priority=QueuePriority.LOW)
+        high = SessionRequest(session_id="high", priority=QueuePriority.HIGH)
+        q.enqueue(low)
+        q.enqueue(high)
+        q.pause()
+
+        q.resume()
+
+        assert q.is_paused is False
+        assert q.dequeue() is high
+        assert q.dequeue() is low

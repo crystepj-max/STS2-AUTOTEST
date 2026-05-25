@@ -12,6 +12,7 @@ from sts2_autotest.cli.main import (
     _create_adapter,
     _create_parser,
     doctor_cmd,
+    queue_cmd,
     report_cmd,
     run_cmd,
 )
@@ -49,6 +50,21 @@ class TestCLIParser:
         args = _create_parser().parse_args(["report", "--evidence-dir", "/tmp/evidence"])
         assert args.evidence_dir == "/tmp/evidence"
 
+    def test_queue_pause_command_parses(self) -> None:
+        args = _create_parser().parse_args(["queue", "pause"])
+        assert args.command == "queue"
+        assert args.queue_action == "pause"
+
+    def test_queue_resume_command_parses(self) -> None:
+        args = _create_parser().parse_args(["queue", "resume"])
+        assert args.command == "queue"
+        assert args.queue_action == "resume"
+
+    def test_queue_status_command_parses(self) -> None:
+        args = _create_parser().parse_args(["queue", "status"])
+        assert args.command == "queue"
+        assert args.queue_action == "status"
+
 
 class TestCLICommands:
     """CLI command dispatch."""
@@ -85,6 +101,10 @@ class TestCLICommands:
             _create_parser().parse_args([])
         except SystemExit:
             pass  # expected when no command given
+
+    def test_queue_cmd_returns_zero(self) -> None:
+        args = _create_parser().parse_args(["queue", "status"])
+        assert queue_cmd(args) == 0
 
 
 class TestCreateAdapter:
