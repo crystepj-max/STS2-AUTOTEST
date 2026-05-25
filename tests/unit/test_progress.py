@@ -97,6 +97,27 @@ class TestSaveLoadRoundTrip:
         assert loaded is not None
         assert loaded.current_case == "TC-002"
 
+    def test_runtime_status_fields_round_trip(self, tmp_path: Path) -> None:
+        path = tmp_path / "runtime.json"
+        record = ProgressRecord(
+            session_id="sess-rt",
+            completed_cases=["TC-1"],
+            pending_cases=["TC-2"],
+            current_case="TC-2",
+            current_step="play-card",
+            game_screen="COMBAT",
+            recovery_status="FAST_PATH",
+            paused=True,
+        )
+        assert save_progress(record, path) is True
+
+        loaded = load_progress(path)
+        assert loaded is not None
+        assert loaded.current_step == "play-card"
+        assert loaded.game_screen == "COMBAT"
+        assert loaded.recovery_status == "FAST_PATH"
+        assert loaded.paused is True
+
     def test_no_temp_file_left(self, tmp_path: Path) -> None:
         """Atomic write leaves no .tmp file behind."""
         path = tmp_path / "clean.json"

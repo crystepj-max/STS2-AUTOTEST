@@ -12,6 +12,7 @@ from sts2_autotest.cli.main import (
     _create_adapter,
     _create_parser,
     doctor_cmd,
+    progress_cmd,
     queue_cmd,
     report_cmd,
     run_cmd,
@@ -65,6 +66,10 @@ class TestCLIParser:
         assert args.command == "queue"
         assert args.queue_action == "status"
 
+    def test_progress_command_parses(self) -> None:
+        args = _create_parser().parse_args(["progress"])
+        assert args.command == "progress"
+
 
 class TestCLICommands:
     """CLI command dispatch."""
@@ -105,6 +110,42 @@ class TestCLICommands:
     def test_queue_cmd_returns_zero(self) -> None:
         args = _create_parser().parse_args(["queue", "status"])
         assert queue_cmd(args) == 0
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    def test_progress_cmd_reads_runtime_status(
+        self, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        from sts2_autotest.core.progress import ProgressRecord, save_progress
+
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+        save_progress(
+            ProgressRecord(
+                session_id="sess-1",
+                completed_cases=["TC-1"],
+                pending_cases=["TC-2"],
+                current_case="TC-2",
+                current_step="play-card",
+                game_screen="COMBAT",
+                recovery_status="FAST_PATH",
+                paused=True,
+            ),
+            progress_file,
+        )
+
+        args = _create_parser().parse_args(["progress"])
+        assert progress_cmd(args) == 0
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    def test_progress_cmd_returns_one_for_corrupted_progress(
+        self, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+        progress_file.write_text("not-json", encoding="utf-8")
+
+        args = _create_parser().parse_args(["progress"])
+        assert progress_cmd(args) == 1
 
 
 class TestCreateAdapter:

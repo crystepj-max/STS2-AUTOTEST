@@ -93,6 +93,8 @@ def _create_parser() -> Any:
     queue = sub.add_parser("queue", help="Manage the local session queue")
     queue.add_argument("queue_action", choices=["pause", "resume", "status"])
 
+    sub.add_parser("progress", help="Show saved runtime progress")
+
     return p
 
 
@@ -566,6 +568,29 @@ def queue_cmd(args: Any) -> int:
     return 0
 
 
+def progress_cmd(args: Any) -> int:
+    """Print the last saved runtime progress snapshot."""
+    from sts2_autotest.core.progress import load_progress
+
+    record = load_progress(_get_progress_path())
+    if record is None:
+        print("[autotest] Progress file missing or corrupted.")
+        return 1
+
+    print(json.dumps({
+        "session_id": record.session_id,
+        "current_case": record.current_case,
+        "current_step": record.current_step,
+        "game_screen": record.game_screen,
+        "recovery_status": record.recovery_status,
+        "paused": record.paused,
+        "completed_cases": record.completed_cases,
+        "pending_cases": record.pending_cases,
+        "last_updated": record.last_updated,
+    }, ensure_ascii=False))
+    return 0
+
+
 def run_cmd(args: Any) -> int:
     """Dispatch run command — connects to the real orchestrator with resume support."""
     from sts2_autotest.core.progress import clear_progress, load_progress
@@ -959,6 +984,8 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(report_cmd(args))
     elif args.command == "queue":
         sys.exit(queue_cmd(args))
+    elif args.command == "progress":
+        sys.exit(progress_cmd(args))
     else:
         parser.print_help()
         sys.exit(1)
