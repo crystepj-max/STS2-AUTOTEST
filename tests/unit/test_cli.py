@@ -9,6 +9,7 @@ import pytest
 from sts2_autotest.cli.main import (
     DEFAULT_EVIDENCE_DIR,
     _check_env,
+    _create_adapter,
     _create_parser,
     doctor_cmd,
     report_cmd,
@@ -84,6 +85,38 @@ class TestCLICommands:
             _create_parser().parse_args([])
         except SystemExit:
             pass  # expected when no command given
+
+
+class TestCreateAdapter:
+    """_create_adapter reads agent transport env vars."""
+
+    def test_agent_mcp_endpoint_inherits_agent_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__TRANSPORT", "mcp")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__ENDPOINT", "http://example.test/custom")
+        monkeypatch.delenv("STS2_ADAPTER__AGENT__MCP_ENDPOINT", raising=False)
+
+        adapter = _create_adapter("agent")
+
+        assert isinstance(adapter, AgentAdapter)
+        assert adapter.endpoint == "http://example.test/custom"
+        assert isinstance(adapter._mcp_client, FastMcpAgentClient)
+        assert adapter._mcp_client.endpoint == "http://example.test/custom"
+
+    def test_agent_mcp_endpoint_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__TRANSPORT", "mcp")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__ENDPOINT", "http://example.test/custom")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__MCP_ENDPOINT", "http://mcp.example.test/override")
+
+        adapter = _create_adapter("agent")
+
+        assert isinstance(adapter, AgentAdapter)
+        assert adapter.endpoint == "http://example.test/custom"
+        assert isinstance(adapter._mcp_client, FastMcpAgentClient)
+        assert adapter._mcp_client.endpoint == "http://mcp.example.test/override"
 
 
 class TestDoctorEnvCheck:

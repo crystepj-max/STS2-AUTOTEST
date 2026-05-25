@@ -133,11 +133,14 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
                 "STS2_ADAPTER__AGENT__TRANSPORT must be 'http' or 'mcp'"
             )
         transport = cast(Literal["http", "mcp"], transport_raw)
+        agent_endpoint = _get_env(
+            ["STS2_ADAPTER__AGENT__ENDPOINT"], "http://localhost:8080"
+        )
         mcp_client = (
             FastMcpAgentClient(
                 endpoint=_get_env(
                     ["STS2_ADAPTER__AGENT__MCP_ENDPOINT"],
-                    "http://127.0.0.1:8765/mcp",
+                    agent_endpoint,
                 )
             )
             if transport == "mcp"
@@ -145,9 +148,7 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
         )
 
         return AgentAdapter(
-            endpoint=_get_env(
-                ["STS2_ADAPTER__AGENT__ENDPOINT"], "http://localhost:8080"
-            ),
+            endpoint=agent_endpoint,
             timeout=float(_get_env(["STS2_ADAPTER__AGENT__TIMEOUT"], "30")),
             tool_profile=_get_env(
                 ["STS2_ADAPTER__AGENT__TOOL_PROFILE"], "guided"
