@@ -89,6 +89,7 @@ def _create_parser() -> Any:
         default=DEFAULT_EVIDENCE_DIR,
         help="Evidence directory path",
     )
+    rep.add_argument("--coverage", action="store_true", help="Show scene coverage report")
 
     queue = sub.add_parser("queue", help="Manage the local session queue")
     queue.add_argument("queue_action", choices=["pause", "resume", "status"])
@@ -938,6 +939,22 @@ def report_cmd(args: Any) -> int:
     """Show test run summary from evidence directory."""
     evidence_dir = Path(args.evidence_dir)
     run_id = args.run_id or "latest"
+
+    if getattr(args, "coverage", False):
+        coverage_path = evidence_dir / run_id / "reports" / "scene-coverage.md"
+        if not coverage_path.is_file():
+            print(
+                "[autotest] Scene coverage report not found: "
+                f"{coverage_path}"
+            )
+            print("[autotest] Generate it with EvidencePackager.write_scene_coverage_report().")
+            return 1
+        try:
+            print(coverage_path.read_text(encoding="utf-8"))
+            return 0
+        except OSError as exc:
+            print(f"[autotest] Failed to read coverage report: {exc}")
+            return 1
 
     summary_path = evidence_dir / run_id / "summary.json"
     if not summary_path.exists():

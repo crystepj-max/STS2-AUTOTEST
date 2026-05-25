@@ -599,3 +599,23 @@ class TestArtifactExport:
         assert job.error is not None
         assert "mock zip failure" in job.error
         assert summary_path.is_file()
+
+    def test_write_scene_coverage_report_creates_json_and_markdown(
+        self, tmp_path: Path,
+    ) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_cov")
+        coverage = {
+            "COMBAT": {"visits": 2, "cases": ["TC-1", "TC-2"]},
+            "SHOP": {"visits": 0, "cases": []},
+        }
+
+        paths = pkgr.write_scene_coverage_report("run_cov", coverage)
+
+        assert paths["json"].name == "scene-coverage.json"
+        assert paths["markdown"].name == "scene-coverage.md"
+        assert paths["json"].is_file()
+        assert paths["markdown"].is_file()
+        data = json.loads(paths["json"].read_text(encoding="utf-8"))
+        assert data["COMBAT"]["visits"] == 2
+        assert "COMBAT" in paths["markdown"].read_text(encoding="utf-8")

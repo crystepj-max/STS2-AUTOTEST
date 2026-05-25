@@ -51,6 +51,11 @@ class TestCLIParser:
         args = _create_parser().parse_args(["report", "--evidence-dir", "/tmp/evidence"])
         assert args.evidence_dir == "/tmp/evidence"
 
+    def test_report_coverage_flag(self) -> None:
+        args = _create_parser().parse_args(["report", "run-001", "--coverage"])
+        assert args.run_id == "run-001"
+        assert args.coverage is True
+
     def test_queue_pause_command_parses(self) -> None:
         args = _create_parser().parse_args(["queue", "pause"])
         assert args.command == "queue"
@@ -269,6 +274,24 @@ class TestReportFromEvidence:
         args = _create_parser().parse_args(["report", "latest", "--evidence-dir", str(tmp_path)])
         result = report_cmd(args)
         assert result == 1  # no summary.json, but should list runs
+
+    def test_report_coverage_reads_markdown(self, tmp_path: Path) -> None:
+        report_path = tmp_path / "run-cov" / "reports" / "scene-coverage.md"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text("# Scene Coverage\n\n| COMBAT | 2 |", encoding="utf-8")
+
+        args = _create_parser().parse_args(
+            ["report", "run-cov", "--coverage", "--evidence-dir", str(tmp_path)]
+        )
+        assert report_cmd(args) == 0
+
+    def test_report_coverage_missing_file_returns_one(self, tmp_path: Path) -> None:
+        (tmp_path / "run-cov" / "reports").mkdir(parents=True)
+
+        args = _create_parser().parse_args(
+            ["report", "run-cov", "--coverage", "--evidence-dir", str(tmp_path)]
+        )
+        assert report_cmd(args) == 1
 
 
 class TestCLIEntryPoint:

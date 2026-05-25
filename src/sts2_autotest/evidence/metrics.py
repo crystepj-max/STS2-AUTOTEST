@@ -65,6 +65,8 @@ class MetricsCollector:
         self._screenshots = 0
         self._screenshot_total_ms = 0
         self._resource_usage: dict[str, list[float]] = {}
+        self._scene_cases: dict[str, set[str]] = {}
+        self._scene_visits: dict[str, int] = {}
         self._max_resource_entries = max_resource_entries
 
     @property
@@ -151,6 +153,23 @@ class MetricsCollector:
             "metric": metric,
             "value": value,
         })
+
+    def record_scene_visit(self, case_id: str, scene: str) -> None:
+        """Record that a test case visited a game scene."""
+        scene_key = scene.strip().upper()
+        self._scene_visits[scene_key] = self._scene_visits.get(scene_key, 0) + 1
+        self._scene_cases.setdefault(scene_key, set()).add(case_id)
+        self._record("scene_visit", {"case_id": case_id, "scene": scene_key})
+
+    def get_scene_coverage(self) -> dict[str, dict[str, object]]:
+        """Return JSON-serialisable scene coverage counters."""
+        coverage: dict[str, dict[str, object]] = {}
+        for scene in sorted(self._scene_visits):
+            coverage[scene] = {
+                "visits": self._scene_visits[scene],
+                "cases": sorted(self._scene_cases.get(scene, set())),
+            }
+        return coverage
 
     def get_summary(self) -> dict[str, object]:
         """Return session-level summary statistics from running counters (AC1/FR31).

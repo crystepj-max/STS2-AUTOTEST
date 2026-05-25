@@ -442,6 +442,46 @@ class EvidencePackager:
         )
         return job
 
+    def write_scene_coverage_report(
+        self,
+        pack_id: str,
+        coverage: dict[str, dict[str, object]],
+    ) -> dict[str, Path]:
+        """Write scene coverage reports as JSON and Markdown."""
+        report_dir = self._evidence_dir / pack_id / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+
+        json_path = report_dir / "scene-coverage.json"
+        markdown_path = report_dir / "scene-coverage.md"
+        json_data: dict[str, object] = {scene: entry for scene, entry in coverage.items()}
+        self._write_json(json_path, json_data)
+
+        lines = [
+            "# Scene Coverage",
+            "",
+            "| Scene | Visits | Cases |",
+            "|---|---:|---|",
+        ]
+        for scene in sorted(coverage):
+            entry = coverage[scene]
+            visits = entry.get("visits", 0)
+            raw_cases = entry.get("cases", [])
+            cases = ", ".join(str(case) for case in raw_cases) if isinstance(raw_cases, list) else ""
+            lines.append(f"| {scene} | {visits} | {cases} |")
+
+        tmp = markdown_path.with_suffix(".md.tmp")
+        try:
+            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            os.replace(str(tmp), str(markdown_path))
+        except OSError:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+
+        return {"json": json_path, "markdown": markdown_path}
+
     # ── internal ────────────────────────────────────────────
 
     def _write_json(self, path: Path, data: dict[str, object]) -> None:
