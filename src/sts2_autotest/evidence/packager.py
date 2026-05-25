@@ -8,6 +8,8 @@ import json
 import os
 import shutil
 import xml.etree.ElementTree as ET
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +27,39 @@ from sts2_autotest.common.types import EvidencePackagerSettings
 from sts2_autotest.core.disk_guard import check_disk_space
 
 logger = get_logger("evidence.packager")
+
+
+@dataclass
+class ArtifactExportJob:
+    """Background artifact export job."""
+
+    pack_id: str
+    original_pack_dir: Path
+    _future: Future[Path | None]
+    status: str = "PENDING"
+    error: str | None = None
+    _error_ref: list[str | None] | None = None
+
+    def wait(self, timeout: float | None = None) -> Path | None:
+        """Wait for the export to finish and return the ZIP path when available."""
+        try:
+            result = self._future.result(timeout=timeout)
+        except Exception as exc:
+            self.status = "FAILED"
+            self.error = str(exc) or exc.__class__.__name__
+            return None
+
+        if result is None:
+            self.status = "FAILED"
+            if self._error_ref is not None:
+                self.error = self._error_ref[0]
+            if self.error is None:
+                self.error = "Artifact export failed"
+            return None
+
+        self.status = "DONE"
+        self.error = None
+        return result
 
 
 class EvidencePackager:
@@ -52,6 +87,8 @@ class EvidencePackager:
         self._framework = framework
         self._adapter = adapter
         self._game = game
+        self._artifact_executor: ThreadPoolExecutor | None = None
+        self._last_artifact_error: str | None = None
 
     # ── public API ──────────────────────────────────────────
 
@@ -334,8 +371,10 @@ class EvidencePackager:
         Returns the ZIP path on success, None on failure.
         """
         pack_dir = self._evidence_dir / pack_id
+        self._last_artifact_error = None
         if not pack_dir.is_dir():
             logger.warning("Cannot export artifact: pack %s not found", pack_id)
+            self._last_artifact_error = f"Evidence pack not found: {pack_id}"
             return None
 
         output_dir = self._evidence_dir / "artifacts"
@@ -372,7 +411,33 @@ class EvidencePackager:
             return result_path
         except OSError as exc:
             logger.warning("Failed to create artifact ZIP for %s: %s", pack_id, exc)
+            self._last_artifact_error = str(exc)
             return None
+
+    def export_artifact_async(
+        self, pack_id: str, result: str = "unknown",
+    ) -> ArtifactExportJob:
+        """Export an evidence pack as a ZIP artifact in the background."""
+        if self._artifact_executor is None:
+            self._artifact_executor = ThreadPoolExecutor(max_workers=1)
+
+        pack_dir = self._evidence_dir / pack_id
+        job_error: list[str | None] = [None]
+
+        def export() -> Path | None:
+            result_path = self.export_artifact(pack_id, result=result)
+            if result_path is None:
+                job_error[0] = self._last_artifact_error
+            return result_path
+
+        future = self._artifact_executor.submit(export)
+        job = ArtifactExportJob(
+            pack_id=pack_id,
+            original_pack_dir=pack_dir,
+            _future=future,
+            _error_ref=job_error,
+        )
+        return job
 
     # ── internal ────────────────────────────────────────────
 
