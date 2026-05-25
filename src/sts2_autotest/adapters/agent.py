@@ -190,7 +190,7 @@ class AgentAdapter:
     def _get_mcp_client(self) -> AgentMcpClientProtocol:
         """Lazy-init MCP client."""
         if self._mcp_client is None:
-            self._mcp_client = FastMcpAgentClient(timeout=self.timeout)
+            self._mcp_client = FastMcpAgentClient(endpoint=self.endpoint, timeout=self.timeout)
         return self._mcp_client
 
     # ── core HTTP request method ────────────────────────────
@@ -320,7 +320,7 @@ class AgentAdapter:
                 message=f"MCP request failed: {exc}",
                 detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "path": path, "method": method},
             )
-        except (json.JSONDecodeError, ValueError) as exc:
+        except json.JSONDecodeError as exc:
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
                 message=f"Invalid MCP JSON response: {exc}",

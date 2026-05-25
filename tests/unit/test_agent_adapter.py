@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -80,6 +80,21 @@ class MockMcpClient:
         self.closed = True
 
 
+class ValueErrorMcpClient:
+    """用于验证业务 ValueError 不会被误报为 JSON 解析失败。"""
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        raise ValueError("business rule rejected")
+
+    async def aclose(self) -> None:
+        pass
+
+
 class TestAgentAdapterTransport:
     """AgentAdapter 传输方式选择。"""
 
@@ -109,6 +124,13 @@ class TestAgentAdapterTransport:
 
         assert client.endpoint == "http://127.0.0.1:8765/mcp"
 
+    def test_default_mcp_client_uses_adapter_endpoint(self) -> None:
+        adapter = AgentAdapter(endpoint="http://example.test/custom", transport="mcp")
+
+        client = cast(FastMcpAgentClient, adapter._get_mcp_client())
+
+        assert client.endpoint == "http://example.test/custom"
+
     def test_mcp_non_json_response_maps_to_parse_error(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, content=b"not valid json")
@@ -124,6 +146,12 @@ class TestAgentAdapterTransport:
         assert exc.value.detail.get("subtype") == AdapterErrorSubType.JSON_PARSE_FAILURE
         assert exc.value.detail.get("path") == "game_state"
         assert exc.value.detail.get("method") == "POST"
+
+    def test_mcp_business_value_error_is_not_json_parse_failure(self) -> None:
+        adapter = AgentAdapter(transport="mcp", mcp_client=ValueErrorMcpClient())
+
+        with pytest.raises(ValueError, match="business rule rejected"):
+            _run(adapter.get_state())
 
 
 class TestAgentAdapterHealthCheck:
