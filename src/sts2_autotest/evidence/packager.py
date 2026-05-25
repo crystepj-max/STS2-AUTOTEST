@@ -448,7 +448,11 @@ class EvidencePackager:
         coverage: dict[str, dict[str, object]],
     ) -> dict[str, Path]:
         """Write scene coverage reports as JSON and Markdown."""
-        report_dir = self._evidence_dir / pack_id / "reports"
+        pack_dir = self._evidence_dir / pack_id
+        if not pack_dir.is_dir():
+            raise FileNotFoundError(f"Evidence pack not found: {pack_dir}")
+
+        report_dir = pack_dir / "reports"
         report_dir.mkdir(parents=True, exist_ok=True)
 
         json_path = report_dir / "scene-coverage.json"

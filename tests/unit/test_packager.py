@@ -619,3 +619,13 @@ class TestArtifactExport:
         data = json.loads(paths["json"].read_text(encoding="utf-8"))
         assert data["COMBAT"]["visits"] == 2
         assert "COMBAT" in paths["markdown"].read_text(encoding="utf-8")
+
+    def test_write_scene_coverage_report_missing_pack_raises(
+        self, tmp_path: Path,
+    ) -> None:
+        pkgr = EvidencePackager(tmp_path)
+
+        with pytest.raises(FileNotFoundError, match="Evidence pack not found"):
+            pkgr.write_scene_coverage_report("missing", {})
+
+        assert not (tmp_path / "missing").exists()
