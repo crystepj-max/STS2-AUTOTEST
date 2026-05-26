@@ -74,7 +74,9 @@ class TestCodeGenerator:
         code = self.generator.generate_case_test(spec)
 
         assert "return_to_menu()" in code
-        assert 'choose_game_mode("standard")' in code
+        # choose_game_mode was removed because 'sts2 choose_game_mode' requires
+        # SINGLEPLAYER_SUBMENU but the game starts at MENU. new_run works directly.
+        assert 'start_new_run()' in code
         assert "start_new_run()" in code
         assert 'select_character("IRONCLAD")' in code
         assert "embark()" in code

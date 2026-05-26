@@ -63,8 +63,6 @@ def _step_to_action_call(step: str) -> str:
 
     if "返回主菜单" in step:
         return "return_to_menu()"
-    if "选择标准模式" in step:
-        return 'choose_game_mode("standard")'
     if "开始新 run" in step or "开始新局" in step:
         return "start_new_run()"
     if "选择 Ironclad" in step:

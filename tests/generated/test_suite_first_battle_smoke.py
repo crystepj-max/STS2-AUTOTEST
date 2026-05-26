@@ -57,7 +57,6 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
 - 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN""")
         .setup(
             return_to_menu(),
-            choose_game_mode("standard"),
             start_new_run(),
             select_character("IRONCLAD"),
             embark(),
@@ -76,7 +75,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
         "title": "进入新局地图",
         "start_state": "- 任意可恢复状态\n- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN",
         "end_state": "- 到达 Act 1 地图\n- 当前可选择首个可达节点",
-        "steps": ["返回主菜单", "选择标准模式", "开始新 run", "选择 Ironclad", "开始冒险", "推进事件对话"],
+        "steps": ["返回主菜单", "开始新 run", "选择 Ironclad", "开始冒险", "推进事件对话"],
         "passed": result_tc_prepare_new_run.passed,
         "failures": result_tc_prepare_new_run.failures,
         "detail": result_tc_prepare_new_run.detail,
