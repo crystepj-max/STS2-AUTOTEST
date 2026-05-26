@@ -313,6 +313,10 @@ class CliModAdapter:
         self, action: str, args: dict[str, Any] | None = None
     ) -> ActionResult:
         """Execute a game action via CLI subprocess."""
+        # probe is a synthetic no-op used by the orchestrator to verify
+        # adapter responsiveness — no CLI command needed.
+        if action == "probe":
+            return ActionResult(status="success", state_changed=False)
         cli_args = _build_cli_args(action, args)
         try:
             raw = self._run_cli(*cli_args)
@@ -416,19 +420,19 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
     game's state machine; the actual available actions may vary.
     """
     _ACTIONS: dict[GameScreen, list[str]] = {
-        GameScreen.MAIN_MENU: ["new_run", "continue_run", "abandon_run", "choose_game_mode"],
-        GameScreen.CHARACTER_SELECT: ["select_character", "set_ascension", "embark"],
-        GameScreen.MAP: ["choose_map_node", "proceed"],
-        GameScreen.COMBAT: ["play_card", "end_turn", "use_potion"],
-        GameScreen.SHOP: ["shop_buy_card", "shop_buy_relic", "shop_buy_potion", "shop_remove_card"],
-        GameScreen.REST: ["choose_rest_option"],
-        GameScreen.EVENT: ["choose_event", "advance_dialogue"],
-        GameScreen.CHEST: ["open_chest", "pick_relic"],
-        GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip"],
-        GameScreen.CARD_REWARD: ["reward_choose_card", "reward_skip_card", "reward_claim"],
-        GameScreen.RELIC_REWARD: ["reward_claim", "relic_select", "relic_skip"],
-        GameScreen.GAME_OVER: ["return_to_menu"],
-        GameScreen.VICTORY: ["return_to_menu"],
+        GameScreen.MAIN_MENU: ["new_run", "continue_run", "abandon_run", "choose_game_mode", "probe"],
+        GameScreen.CHARACTER_SELECT: ["select_character", "set_ascension", "embark", "probe"],
+        GameScreen.MAP: ["choose_map_node", "proceed", "probe"],
+        GameScreen.COMBAT: ["play_card", "end_turn", "use_potion", "probe"],
+        GameScreen.SHOP: ["shop_buy_card", "shop_buy_relic", "shop_buy_potion", "shop_remove_card", "probe"],
+        GameScreen.REST: ["choose_rest_option", "probe"],
+        GameScreen.EVENT: ["choose_event", "advance_dialogue", "probe"],
+        GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
+        GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
+        GameScreen.CARD_REWARD: ["reward_choose_card", "reward_skip_card", "reward_claim", "probe"],
+        GameScreen.RELIC_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
+        GameScreen.GAME_OVER: ["return_to_menu", "probe"],
+        GameScreen.VICTORY: ["return_to_menu", "probe"],
     }
     return _ACTIONS.get(screen, [])
 
