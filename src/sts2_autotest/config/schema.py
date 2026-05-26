@@ -102,6 +102,16 @@ class StateMachineConfig(BaseModel):
     poll_interval: float = Field(default=0.5, gt=0)
 
 
+class ServerConfig(BaseModel):
+    """Health check HTTP server configuration (B17)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = Field(default=8766, ge=1024, le=65535)
+
+
 class ProjectConfigModel(BaseModel):
     """Configuration for a single MOD project in the workspace."""
     model_config = ConfigDict(frozen=True)
@@ -132,6 +142,7 @@ class STS2Config(BaseModel):
     adapter: AdapterConfig = AdapterConfig()
     execution: ExecutionConfig = ExecutionConfig()
     state_machine: StateMachineConfig = StateMachineConfig()
+    server: ServerConfig = ServerConfig()
     workspace: WorkspaceConfigModel = WorkspaceConfigModel()
 
     @model_validator(mode="after")

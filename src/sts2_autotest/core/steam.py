@@ -31,6 +31,8 @@ class SteamController:
     game first, then Steam, with 10s timeout enforcement.
     """
 
+    _IS_WINDOWS: bool = hasattr(__import__("os", fromlist=["name"]), "name") and __import__("os", fromlist=["name"]).name == "nt"
+
     def __init__(
         self,
         steam_exe: str = _STEAM_EXE,
@@ -47,6 +49,7 @@ class SteamController:
         self.game_dir = game_dir
         self._steam_pid: int | None = None
         self._game_pid: int | None = None
+        self._job_handle: Any = self._create_job_object()
 
     # ── public API ──────────────────────────────────────────
 
@@ -72,6 +75,7 @@ class SteamController:
             pid = self._find_game_pid(exclude_pids=existing_pids)
             if pid is not None:
                 self._game_pid = pid
+                self._assign_to_job(pid)
                 logger.info("Game started (PID %s)", pid)
                 return pid
             time.sleep(0.5)
@@ -133,15 +137,86 @@ class SteamController:
                 self._steam_pid, self.steam_process_name, "Steam", deadline
             )
 
-    # ── Job Object stubs (FR44, Epic 4 Beta) ────────────────
+    # ── Job Object (B15 / Story 4.8) ───────────────────────
 
     def _create_job_object(self) -> Any:
-        """Reserved: create Windows Job Object for sandboxing."""
-        return None
+        """Create a Windows Job Object for process sandboxing.
+
+        Configures KILL_ON_JOB_CLOSE so that when the job handle is
+        closed (process exit / cleanup), all assigned processes are
+        automatically terminated. Falls back safely on non-Windows.
+        Returns the kernel handle, or None on failure.
+        """
+        if not self._IS_WINDOWS:
+            return None
+        import ctypes
+        try:
+            kernel32 = ctypes.windll.kernel32
+            # CreateJobObjectW(NULL, name) — name=None creates unnamed
+            job = kernel32.CreateJobObjectW(None, None)
+            if not job:
+                logger.warning("CreateJobObjectW failed (error %d)", kernel32.GetLastError())
+                return None
+
+            # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+            # https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/ns-jobapi2-jobobject_extended_limit_information
+            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+                _fields_ = [
+                    ("BasicLimitInformation", ctypes.c_ulong * 4),
+                    ("IoInfo", ctypes.c_ulong * 4),
+                    ("ProcessLimitInformation", ctypes.c_ulong * 2),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t),
+                ]
+
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+
+            info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            info.BasicLimitInformation[0] = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+
+            # SetInformationJobObject(job, JobObjectExtendedLimitInformation, info, size)
+            rc = kernel32.SetInformationJobObject(
+                job,
+                9,  # JobObjectExtendedLimitInformation
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            )
+            if not rc:
+                kernel32.CloseHandle(job)
+                logger.warning("SetInformationJobObject failed (error %d)", kernel32.GetLastError())
+                return None
+
+            logger.info("Job object created (KILL_ON_JOB_CLOSE)")
+            return job
+        except (AttributeError, OSError) as exc:
+            logger.warning("Failed to create job object: %s", exc)
+            return None
 
     def _assign_to_job(self, pid: int) -> None:
-        """Reserved: assign process to Job Object."""
-        pass
+        """Assign a process to the job object for sandboxing."""
+        if self._job_handle is None:
+            return
+        import ctypes
+        try:
+            kernel32 = ctypes.windll.kernel32
+            # OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, pid)
+            PROCESS_SET_QUOTA = 0x0100
+            PROCESS_TERMINATE = 0x0001
+            ACCESS = PROCESS_SET_QUOTA | PROCESS_TERMINATE
+            proc_handle = kernel32.OpenProcess(ACCESS, False, pid)
+            if not proc_handle:
+                logger.warning("OpenProcess(%d) failed (error %d)", pid, kernel32.GetLastError())
+                return
+            try:
+                rc = kernel32.AssignProcessToJobObject(self._job_handle, proc_handle)
+                if rc:
+                    logger.info("Assigned PID %d to job object", pid)
+                else:
+                    logger.warning("AssignProcessToJobObject(%d) failed (error %d)", pid, kernel32.GetLastError())
+            finally:
+                kernel32.CloseHandle(proc_handle)
+        except (AttributeError, OSError) as exc:
+            logger.warning("Failed to assign PID %d to job: %s", pid, exc)
 
     # ── internals ───────────────────────────────────────────
 
@@ -186,6 +261,7 @@ class SteamController:
             pid = self._find_game_pid(exclude_pids=existing_pids)
             if pid is not None:
                 self._game_pid = pid
+                self._assign_to_job(pid)
                 logger.info("Game started via direct fallback (PID %s)", pid)
                 return pid
             time.sleep(0.5)

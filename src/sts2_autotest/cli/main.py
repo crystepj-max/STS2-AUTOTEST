@@ -922,6 +922,12 @@ def _check_env() -> dict[str, dict[str, str]]:
     return checks
 
 
+def serve_cmd(args: Any) -> int:
+    """Start the health check HTTP server."""
+    from sts2_autotest.cli.health_server import serve_cmd as _serve
+    return _serve(args)
+
+
 def doctor_cmd(args: Any) -> int:
     """Check environment readiness with real checks."""
     checks = _check_env()

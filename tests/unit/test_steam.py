@@ -241,10 +241,18 @@ class TestContextManager:
 class TestJobObject:
     """AC#6: Job Object stubs reserved for Beta."""
 
-    def test_create_job_object_returns_none(self, sc: SteamController) -> None:
-        assert sc._create_job_object() is None
+    def test_create_job_object_returns_value_or_none(self, sc: SteamController) -> None:
+        """On Windows returns a kernel handle, on other platforms None."""
+        result = sc._create_job_object()
+        if sc._IS_WINDOWS:
+            # On Windows, result may be a valid handle or None on failure;
+            # either is acceptable — the contract is "does not raise".
+            pass
+        else:
+            assert result is None
 
-    def test_assign_to_job_is_noop(self, sc: SteamController) -> None:
+    def test_assign_to_job_does_not_raise(self, sc: SteamController) -> None:
+        """Assign a non-existent PID — should not raise."""
         sc._assign_to_job(12345)  # should not raise
 
 
