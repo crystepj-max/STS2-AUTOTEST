@@ -68,7 +68,8 @@ class TestReviewCmd:
     def test_review_no_spec_dir_no_project(self, capsys) -> None:
         args = Namespace(command="review", spec_dir=None, project=None, output=None)
         rc = review_cmd(args)
-        assert rc == 1
+        # Falls back to default docs/process/specs when it exists
+        assert rc == 0
 
     def test_review_nonexistent_dir(self, capsys) -> None:
         args = Namespace(command="review", spec_dir="/nonexistent", project=None, output=None)
@@ -113,7 +114,8 @@ class TestCompileCmd:
     def test_compile_no_spec_dir_no_project(self, capsys) -> None:
         args = Namespace(command="compile", spec_dir=None, output_dir=None, project=None)
         rc = compile_cmd(args)
-        assert rc == 1
+        # Falls back to default docs/process/specs when it exists
+        assert rc == 0
 
     def test_compile_nonexistent_dir(self, capsys) -> None:
         args = Namespace(command="compile", spec_dir="/nonexistent", output_dir="/tmp/out", project=None)

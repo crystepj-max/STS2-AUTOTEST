@@ -304,6 +304,10 @@ def _resolve_spec_dir(args: Any) -> str | None:
                 return project_spec_dir
             if project_spec_dir:
                 return str(project_spec_dir)
+    # Fall back to default spec directory
+    default_spec = "docs/process/specs"
+    if os.path.isdir(default_spec):
+        return default_spec
     return None
 
 
@@ -324,7 +328,7 @@ def _resolve_output_dir(args: Any, spec_dir: str) -> str:
                 return project_output_dir
             if project_output_dir:
                 return str(project_output_dir)
-    return spec_dir
+    return "tests/generated"
 
 
 def _resolve_compile_input_dir(args: Any, spec_dir: str) -> str:
@@ -668,9 +672,11 @@ def run_cmd(args: Any) -> int:
             if compile_rc != 0:
                 print("[autotest] Compile failed - aborting pipeline")
                 return 1
-            print("[autotest] Running compiled tests...")
-        else:
-            print("[autotest] Running all cases (no spec pipeline)...")
+            print("[autotest] Running compiled tests with pytest...")
+            import subprocess as _sp
+            rc = _sp.call([sys.executable, "-m", "pytest", output_dir, "-v", "--tb=short"])
+            return rc
+        print("[autotest] Running all cases (no spec pipeline)...")
         return _dispatch_orchestrator(
             adapter, ["all"], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,

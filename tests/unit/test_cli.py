@@ -310,8 +310,9 @@ class TestResume:
 
     @patch("sts2_autotest.cli.main._get_progress_path")
     @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
+    @patch("sts2_autotest.cli.main._resolve_spec_dir", return_value=None)
     def test_normal_run_passes_progress_path(
-        self, mock_run: patch, mock_path: patch, tmp_path: Path,
+        self, _mock_spec: patch, mock_run: patch, mock_path: patch, tmp_path: Path,
     ) -> None:
         """Normal run passes the default progress path to orchestrator."""
         progress_file = tmp_path / "progress.json"
@@ -360,8 +361,9 @@ class TestResume:
 
     @patch("sts2_autotest.cli.main._get_progress_path")
     @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
+    @patch("sts2_autotest.cli.main._resolve_spec_dir", return_value=None)
     def test_resume_corrupted_degrades_to_full_run(
-        self, mock_run: patch, mock_path: patch, tmp_path: Path,
+        self, _mock_spec: patch, mock_run: patch, mock_path: patch, tmp_path: Path,
     ) -> None:
         """AC4: corrupted progress with --resume --all runs full suite."""
         progress_file = tmp_path / "progress.json"
@@ -391,8 +393,9 @@ class TestResume:
 
     @patch("sts2_autotest.cli.main._get_progress_path")
     @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
+    @patch("sts2_autotest.cli.main._resolve_spec_dir", return_value=None)
     def test_no_resume_clears_progress(
-        self, mock_run: patch, mock_path: patch, tmp_path: Path,
+        self, _mock_spec: patch, mock_run: patch, mock_path: patch, tmp_path: Path,
     ) -> None:
         """--no-resume deletes old progress and runs fresh."""
         from sts2_autotest.core.progress import ProgressRecord, save_progress

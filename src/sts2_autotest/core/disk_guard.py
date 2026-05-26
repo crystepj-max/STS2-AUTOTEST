@@ -33,10 +33,20 @@ class DiskGuard:
     def can_write(self) -> bool:
         """Check whether the disk containing *path* has enough free space.
 
-        Returns True if free space >= threshold, False otherwise.
+        Walks up the directory tree to find an existing ancestor when
+        the requested path does not yet exist (e.g. a progress directory
+        that hasn't been created yet). Returns True if free space >=
+        threshold, False on any error.
         """
+        target = Path(self._path)
+        while not target.exists():
+            parent = target.parent
+            if parent == target:
+                # Filesystem root — usually exists; if not, fallback
+                break
+            target = parent
         try:
-            usage = shutil.disk_usage(self._path)
+            usage = shutil.disk_usage(str(target))
             return usage.free >= self._threshold_bytes
         except OSError:
             logger.warning("Cannot check disk usage for %s", self._path)
