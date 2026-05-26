@@ -28,6 +28,27 @@ _UNIMPLEMENTABLE_KEYWORDS: list[str] = [
     "使用未实现", "未实现的功能",
 ]
 
+_SUPPORTED_STEP_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(pattern)
+    for pattern in (
+        r"启动游戏|返回主菜单|选择标准模式|开始新\s*run|开始新局",
+        r"选择\s+Ironclad|开始冒险",
+        r"开局事件.*第\s*\d+\s*个选项|推进事件对话",
+        r"地图节点.*\(\s*\d+\s*,\s*\d+\s*\)|进入首次战斗|进入首场战斗",
+        r"基础策略.*战斗|跳过卡牌奖励",
+        r"结束回合|使用\s+.+",
+    )
+]
+
+_SUPPORTED_ASSERTION_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"crash",
+        r"到达\s*MAP|位于\s*MAP|\bMAP\b|地图",
+        r"节点|node",
+    )
+]
+
 
 class SpecReviewer:
     """Reviews TestSpec for clarity, completeness, and feasibility."""
@@ -147,6 +168,7 @@ class SpecReviewer:
     def _check_feasibility(self, spec: TestSpec, issues: list[ReviewIssue]) -> None:
         """Check steps against known framework capabilities."""
         for step in spec.steps:
+            unimplemented = False
             for keyword in _UNIMPLEMENTABLE_KEYWORDS:
                 if keyword in step:
                     issues.append(ReviewIssue(
@@ -155,7 +177,26 @@ class SpecReviewer:
                         description=f"Step references unimplemented capability: {keyword}",
                         suggestion="Remove this step or implement the required framework capability first",
                     ))
+                    unimplemented = True
                     break
+            if unimplemented:
+                continue
+            if not any(pattern.search(step) for pattern in _SUPPORTED_STEP_PATTERNS):
+                issues.append(ReviewIssue(
+                    category=IssueCategory.CAPABILITY_GAP,
+                    location=f"When step: '{step}'",
+                    description=f"当前没有 DSL 原语或可靠组合策略可实现该步骤: {step}",
+                    suggestion="当前不可实现；请改写为已有 DSL 支持的步骤，或登记新的 capability_gap 后再实现。",
+                ))
+
+        for assertion in spec.assertions:
+            if not any(pattern.search(assertion) for pattern in _SUPPORTED_ASSERTION_PATTERNS):
+                issues.append(ReviewIssue(
+                    category=IssueCategory.CAPABILITY_GAP,
+                    location=f"Then assertion: '{assertion}'",
+                    description=f"当前没有断言 DSL 可稳定验证该期望: {assertion}",
+                    suggestion="当前不可实现；请改写为 screen / crash / travelable node 等已有断言，或补充新的断言原语。",
+                ))
 
     def _spec_to_markdown(self, spec: TestSpec) -> str:
         """Render a TestSpec back to Markdown format."""

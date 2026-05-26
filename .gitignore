@@ -60,6 +60,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .import_linter_cache/
+.pytest-tmp*/
 
 # BMad
 _bmad/
@@ -67,6 +68,13 @@ _bmad-output/
 
 # Claude Code local config
 .claude/
+
+# Codex local config
+.agents/
+
+# Local external downloads and runtime evidence
+.external/
+tests/output/
 
 # Local agent collaboration protocol and handoffs
 .agent-collab/

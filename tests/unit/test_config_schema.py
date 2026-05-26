@@ -84,6 +84,18 @@ class TestAdapterConfig:
         ))
         assert cfg.adapter.agent.enabled is True
 
+    def test_agent_transport_defaults_to_http(self) -> None:
+        cfg = AgentAdapterConfig()
+        assert cfg.transport == "http"
+
+    def test_agent_transport_accepts_mcp(self) -> None:
+        cfg = AgentAdapterConfig(transport="mcp")
+        assert cfg.transport == "mcp"
+
+    def test_agent_transport_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            AgentAdapterConfig(transport="websocket")
+
     def test_mutual_exclusion_both_enabled(self) -> None:
         with pytest.raises(ValidationError, match="Mutual exclusion"):
             STS2Config(adapter=AdapterConfig(

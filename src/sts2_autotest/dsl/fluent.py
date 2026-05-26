@@ -1,4 +1,4 @@
-"""Fluent API for STS2-AUTOTEST — game-semantic test authoring (FR13).
+"""Fluent API for STS2-AUTOTEST game-semantic test authoring (FR13).
 
 The FluentBuilder provides a chainable DSL for defining test cases.
 Terminal method .assert_that() is synchronous (uses user-provided loop).
@@ -9,14 +9,24 @@ from __future__ import annotations
 __test__ = False
 
 import asyncio
+from dataclasses import dataclass
 import inspect
+import re
 from typing import Any, Callable
 
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.orchestrator import TestOrchestrator
 from sts2_autotest.dsl.assertions import AssertionFn
 
 HandlerFn = Callable[[TestOrchestrator, str], None]
+
+
+@dataclass(frozen=True)
+class StartStateRequirements:
+    screen: GameScreen | None = None
+    allowed_screens: tuple[GameScreen, ...] = ()
+    needs_travelable_node: bool = False
 
 
 class FluentBuilder:
@@ -41,6 +51,11 @@ class FluentBuilder:
         self._setup_actions: list[ActionDescriptor] = []
         self._execute_actions: list[ActionDescriptor] = []
         self._error_handlers: list[HandlerFn] = []
+        self._start_state_text: str = ""
+
+    def require_start_state(self, start_state: str) -> "FluentBuilder":
+        self._start_state_text = start_state.strip()
+        return self
 
     def setup(self, *actions: ActionDescriptor) -> "FluentBuilder":
         self._setup_actions.extend(actions)
@@ -60,8 +75,8 @@ class FluentBuilder:
     def assert_that(self, *assertions: AssertionFn) -> TestResult:
         """Execute all accumulated actions and run assertions. Terminal.
 
-        Synchronous — uses the loop provided at construction time.
-        Returns TestResult with failures and state_snapshot populated.
+        Synchronous: uses the loop provided at construction time or creates a
+        temporary loop when no usable event loop exists.
         """
         all_actions = self._setup_actions + self._execute_actions
         if not all_actions:
@@ -69,6 +84,14 @@ class FluentBuilder:
 
         loop, owns_loop = self._resolve_loop()
         try:
+            start_failures = self._check_start_state(loop)
+            if start_failures:
+                self._run_handlers()
+                return TestResult(
+                    case_id=self._case_id,
+                    status="fail",
+                    failures=start_failures,
+                )
             loop.run_until_complete(
                 self._orchestrator.execute_action_sequence(all_actions)
             )
@@ -92,7 +115,6 @@ class FluentBuilder:
             if owns_loop:
                 loop.close()
 
-        # Run assertions
         failures: list[str] = []
         for assertion in assertions:
             ok, msg = assertion(final_state)
@@ -118,6 +140,45 @@ class FluentBuilder:
                 handler(self._orchestrator, self._case_id)
             except Exception:
                 pass
+
+    def _check_start_state(self, loop: asyncio.AbstractEventLoop) -> list[str]:
+        if not self._start_state_text:
+            return []
+
+        state = loop.run_until_complete(self._orchestrator.adapter.get_state())
+        available = loop.run_until_complete(
+            self._orchestrator.adapter.get_available_actions()
+        )
+        requirements = _parse_start_state_requirements(self._start_state_text)
+        failures: list[str] = []
+
+        if (
+            requirements.allowed_screens
+            and state.screen not in requirements.allowed_screens
+        ):
+            allowed = ", ".join(screen.value for screen in requirements.allowed_screens)
+            failures.append(
+                "start state is not satisfied: "
+                f"current screen={state.screen.value}, "
+                f"allowed screens=[{allowed}], "
+                f"raw Start State: {self._start_state_text!r}"
+            )
+        elif requirements.screen is not None and state.screen != requirements.screen:
+            failures.append(
+                "start state is not satisfied: "
+                f"current screen={state.screen.value}, "
+                f"required screen={requirements.screen.value}, "
+                f"raw Start State: {self._start_state_text!r}"
+            )
+
+        if requirements.needs_travelable_node and "choose_map_node" not in available:
+            failures.append(
+                "start state is not satisfied: "
+                "spec requires a reachable map node, "
+                f"but available_actions={available}"
+            )
+
+        return failures
 
     def _validate_handler(self, handler: HandlerFn) -> None:
         if not callable(handler):
@@ -161,6 +222,52 @@ class FluentBuilder:
         return loop, False
 
 
+_SCREEN_PATTERNS: list[tuple[re.Pattern[str], GameScreen]] = [
+    (re.compile(r"MAIN_MENU|\u4e3b\u83dc\u5355"), GameScreen.MAIN_MENU),
+    (
+        re.compile(r"CHARACTER_SELECT|\u89d2\u8272\u9009\u62e9"),
+        GameScreen.CHARACTER_SELECT,
+    ),
+    (re.compile(r"\bMAP\b|\u5730\u56fe"), GameScreen.MAP),
+    (re.compile(r"\bCOMBAT\b|\u6218\u6597"), GameScreen.COMBAT),
+    (re.compile(r"\bEVENT\b|\u4e8b\u4ef6"), GameScreen.EVENT),
+    (
+        re.compile(r"CARD_REWARD|\u5361\u724c\u5956\u52b1|\u5956\u52b1\u754c\u9762"),
+        GameScreen.CARD_REWARD,
+    ),
+    (
+        re.compile(r"RELIC_REWARD|\u9057\u7269\u5956\u52b1"),
+        GameScreen.RELIC_REWARD,
+    ),
+    (re.compile(r"GAME_OVER"), GameScreen.GAME_OVER),
+    (re.compile(r"VICTORY"), GameScreen.VICTORY),
+    (re.compile(r"UNKNOWN"), GameScreen.UNKNOWN),
+]
+
+
+def _parse_start_state_requirements(text: str) -> StartStateRequirements:
+    matched_screens = tuple(
+        candidate for pattern, candidate in _SCREEN_PATTERNS if pattern.search(text)
+    )
+    uses_screen_list = "/" in text or len(matched_screens) > 1
+    screen = None if uses_screen_list else next(iter(matched_screens), None)
+    allowed_screens = matched_screens if uses_screen_list else ()
+
+    needs_travelable_node = (
+        "\u8282\u70b9" in text
+        and (
+            "\u53ef\u8fbe" in text
+            or "\u5230\u8fbe" in text
+            or "travelable" in text.lower()
+        )
+    )
+    return StartStateRequirements(
+        screen=screen,
+        allowed_screens=allowed_screens,
+        needs_travelable_node=needs_travelable_node,
+    )
+
+
 def define(
     case_id: str,
     orchestrator: TestOrchestrator,
@@ -170,6 +277,6 @@ def define(
     return FluentBuilder(case_id=case_id, orchestrator=orchestrator, loop=loop)
 
 
-# Alias matching AC/PRD example: test("卡牌伤害").setup(...)
+# Alias matching AC/PRD example: test("card damage").setup(...)
 # Named `define` as primary to avoid shadowing pytest's `test` fixture.
 test = define

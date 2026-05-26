@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -52,6 +52,47 @@ _SCREEN_MAP: dict[str, GameScreen] = {
 }
 
 
+class FastMcpAgentClient:
+    """Minimal async client for STS2-Agent MCP transport endpoints."""
+
+    def __init__(
+        self,
+        endpoint: str = "http://127.0.0.1:8765/mcp",
+        timeout: float = 30.0,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self.endpoint = endpoint.rstrip("/")
+        self.timeout = timeout
+        self._client = client
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        client = self._get_client()
+        url = f"{self.endpoint}/{path}"
+        response = (
+            await client.get(url)
+            if method == "GET"
+            else await client.post(url, json=json_data or {})
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else {"result": data}
+
+    async def cleanup(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+
 class AgentAdapter:
     """STS2-Agent HTTP adapter implementing the GameAdapterProtocol.
 
@@ -76,6 +117,8 @@ class AgentAdapter:
         tool_profile: str = "guided",
         debug_actions: bool = False,
         client: httpx.AsyncClient | None = None,
+        transport: Literal["http", "mcp"] = "http",
+        mcp_client: FastMcpAgentClient | None = None,
         supported_version: int | None = None,
         health_path: str = "health",
         state_path: str = "game_state",
@@ -89,6 +132,8 @@ class AgentAdapter:
         self.timeout = timeout
         self.tool_profile = tool_profile
         self.debug_actions = debug_actions
+        self.transport = transport
+        self._mcp_client = mcp_client
         self._health_path = health_path
         self._state_path = state_path
         self._actions_path = actions_path
@@ -137,9 +182,13 @@ class AgentAdapter:
           JSON decode failure     → ADAPTER_ERROR / JSON_PARSE_FAILURE
         """
         url = f"{self.endpoint}/{path}"
-        client = self._get_client()
-
         try:
+            if self.transport == "mcp":
+                if self._mcp_client is None:
+                    self._mcp_client = FastMcpAgentClient(timeout=self.timeout)
+                return await self._mcp_client.request(method, path, json_data)
+
+            client = self._get_client()
             if method == "GET":
                 resp = await client.get(url)
             else:
@@ -153,8 +202,12 @@ class AgentAdapter:
         except httpx.ConnectError:
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
-                message=f"Connection refused: {url}",
-                detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "url": url, "method": method},
+                message=f"Connection refused: {self.endpoint}/{path}",
+                detail={
+                    "subtype": AdapterErrorSubType.PROCESS_EXIT,
+                    "url": f"{self.endpoint}/{path}",
+                    "method": method,
+                },
             )
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
@@ -173,7 +226,11 @@ class AgentAdapter:
             raise STS2Error(
                 category=ErrorCategory.ADAPTER_ERROR,
                 message=f"HTTP request failed: {exc}",
-                detail={"subtype": AdapterErrorSubType.PROCESS_EXIT, "url": url, "method": method},
+                detail={
+                    "subtype": AdapterErrorSubType.PROCESS_EXIT,
+                    "url": f"{self.endpoint}/{path}",
+                    "method": method,
+                },
             )
 
         # Raise HTTPStatusError for 4xx/5xx responses not caught by httpx
@@ -348,6 +405,12 @@ class AgentAdapter:
             except (asyncio.TimeoutError, Exception) as exc:
                 logger.debug("Error closing HTTP client: %s", exc)
             self._client = None
+        if self._mcp_client is not None:
+            try:
+                await asyncio.wait_for(self._mcp_client.cleanup(), timeout=10)
+            except (asyncio.TimeoutError, Exception) as exc:
+                logger.debug("Error closing MCP client: %s", exc)
+            self._mcp_client = None
 
     # ── version handshake ────────────────────────────────────
 

@@ -165,3 +165,15 @@ class TestMarkdownParser:
         assert len(suites) == 1
         assert cases[0].id == "TC-PREPARE-NEW-RUN"
         assert suites[0].id == "SUITE-FIRST-BATTLE-SMOKE"
+
+    def test_discover_specs_recursively_from_root_specs_dir(self, tmp_path) -> None:
+        root = tmp_path / "specs"
+        cases_dir = root / "cases"
+        suites_dir = root / "suites"
+        cases_dir.mkdir(parents=True)
+        suites_dir.mkdir(parents=True)
+        (cases_dir / "TC-001.md").write_text(SAMPLE_CASE_MD, encoding="utf-8")
+        (suites_dir / "SUITE-001.md").write_text(SAMPLE_SUITE_MD, encoding="utf-8")
+        cases, suites = self.parser.discover_specs(str(root))
+        assert len(cases) == 1
+        assert len(suites) == 1

@@ -180,3 +180,4 @@ class TestSpecPipelineE2E:
             compile(code, "<test>", "exec")
         except SyntaxError as e:
             pytest.fail(f"Suite generated code has syntax error: {e}")
+        assert "def test_suite_first_battle_smoke" in code
