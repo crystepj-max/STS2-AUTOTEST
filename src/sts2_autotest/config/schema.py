@@ -23,6 +23,7 @@ class AgentAdapterConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool = False
+    transport: str = Field(default="http", pattern=r"^(http|mcp)$")
     endpoint: str = "http://localhost:8080"
     timeout: float = Field(default=30.0, gt=0)
     tool_profile: str = Field(default="guided", pattern=r"^(guided|layered|full)$")

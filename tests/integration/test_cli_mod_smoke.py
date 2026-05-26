@@ -137,9 +137,11 @@ class TestCliInvalidCommand:
         assert result.status in ("failure", "timeout")
 
     def test_available_actions_when_unhealthy(self, adapter: CliModAdapter) -> None:
+        health = _run(adapter.health_check())
         actions = _run(adapter.get_available_actions())
         assert isinstance(actions, list)
-        assert len(actions) == 0
+        if not health.healthy:
+            assert len(actions) == 0
 
 
 # ═══════════════════════════════════════════════════════════

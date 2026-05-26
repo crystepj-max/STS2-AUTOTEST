@@ -115,11 +115,86 @@ class TestOrchestrator:
         self._lock_manager: LockManager | None = (
             LockManager(lock_path) if lock_path else None
         )
+        self._startup_checkpoints: dict[str, dict[str, str]] = {}
+        self._last_startup_failure: dict[str, str] | None = None
+
+    @property
+    def startup_checkpoints(self) -> dict[str, dict[str, str]]:
+        """Return startup checkpoint results from the last start attempt."""
+        return {key: dict(value) for key, value in self._startup_checkpoints.items()}
+
+    @property
+    def last_startup_failure(self) -> dict[str, str] | None:
+        """Return the failed startup checkpoint, if any."""
+        if self._last_startup_failure is None:
+            return None
+        return dict(self._last_startup_failure)
 
     def _release_lock_if_held(self) -> None:
         """Release the process lock if it was acquired."""
         if self._lock_manager is not None:
             self._lock_manager.release_lock()
+
+    def _record_startup_checkpoint(
+        self,
+        checkpoint: str,
+        status: str,
+        message: str,
+    ) -> None:
+        self._startup_checkpoints[checkpoint] = {
+            "status": status,
+            "message": message,
+        }
+        if status == "FAIL":
+            self._last_startup_failure = {
+                "checkpoint": checkpoint,
+                "message": message,
+            }
+
+    def _check_startup_process_checkpoints(self) -> bool:
+        """Validate optional adapter-exposed process/window checkpoints."""
+        self._startup_checkpoints = {}
+        self._last_startup_failure = None
+        missing = object()
+
+        for attr_name, checkpoint, label in (
+            ("steam_pid", "steam_pid", "Steam PID"),
+            ("game_pid", "game_pid", "Game PID"),
+        ):
+            value = getattr(self.adapter, attr_name, missing)
+            if value is missing:
+                self._record_startup_checkpoint(
+                    checkpoint,
+                    "SKIPPED",
+                    f"{label} is not exposed by adapter",
+                )
+                continue
+            if not isinstance(value, int) or value <= 0:
+                self._record_startup_checkpoint(
+                    checkpoint,
+                    "FAIL",
+                    f"{label} is not available",
+                )
+                return False
+            self._record_startup_checkpoint(checkpoint, "OK", str(value))
+
+        window_ready = getattr(self.adapter, "window_ready", missing)
+        if window_ready is missing:
+            self._record_startup_checkpoint(
+                "window_ready",
+                "SKIPPED",
+                "Window state is not exposed by adapter",
+            )
+            return True
+        if window_ready is not True:
+            self._record_startup_checkpoint(
+                "window_ready",
+                "FAIL",
+                "Game window is not ready",
+            )
+            return False
+        self._record_startup_checkpoint("window_ready", "OK", "ready")
+        return True
 
     # ── state validation ─────────────────────────────────────
 
@@ -215,6 +290,12 @@ class TestOrchestrator:
         # Checkpoint 0: process-level mutex lock
         if self._lock_manager is not None and not self._lock_manager.acquire_lock(timeout=0):
             logger.error("Another session is running — lock file held: %s", self._lock_path)
+            return False
+
+        # Checkpoint 0.5: optional process/window readiness exposed by adapter.
+        if not self._check_startup_process_checkpoints():
+            logger.error("Startup checkpoint failed: %s", self._last_startup_failure)
+            self._release_lock_if_held()
             return False
 
         # Checkpoint 1: adapter health (with degradation detection)

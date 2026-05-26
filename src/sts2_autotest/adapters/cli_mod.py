@@ -19,6 +19,7 @@ import asyncio
 import json
 import re
 import subprocess
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,6 +27,7 @@ from sts2_autotest.adapters.base import ActionResult, HealthStatus
 from sts2_autotest.adapters.discovery import discover_sts2_cli
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
+from sts2_autotest.common.types import Capabilities
 
 # CLI 命令返回的 screen 值 → GameScreen 枚举映射
 _SCREEN_MAP: dict[str, GameScreen] = {
@@ -70,6 +72,7 @@ class CliModAdapter:
         self._cached_state: GameState | None = None
         self._version_checked = False
         self._available_actions_cache: list[str] | None = None
+        self._cache_lock = threading.RLock()
 
         # Resolve CLI path: explicit → env → discovery
         if cli_path is not None:
@@ -81,6 +84,10 @@ class CliModAdapter:
         # Version handshake
         if version_output is not None:
             self._check_version(version_output)
+
+    def get_capabilities(self) -> Capabilities:
+        """Return runtime capabilities for STS2-Cli-Mod."""
+        return Capabilities()
 
     # ── subprocess helper ─────────────────────────────────────
 
@@ -260,9 +267,10 @@ class CliModAdapter:
 
     async def cleanup(self) -> None:
         """Release resources. Clear cache, mark stale."""
-        self._cached_state = None
-        self._cache_stale = True
-        self._available_actions_cache = None
+        with self._cache_lock:
+            self._cached_state = None
+            self._cache_stale = True
+            self._available_actions_cache = None
 
     # ── synchronous internals (wrapped by asyncio.to_thread) ──
 
@@ -277,54 +285,57 @@ class CliModAdapter:
 
     def _get_state_sync(self) -> GameState:
         """Query game state via sts2 state command."""
-        if not self._cache_stale and self._cached_state is not None:
-            return self._cached_state
+        with self._cache_lock:
+            if not self._cache_stale and self._cached_state is not None:
+                return self._cached_state
 
-        raw = self._run_cli("state")
-        data = self._parse_response(raw)
+            raw = self._run_cli("state")
+            data = self._parse_response(raw)
 
-        # Map CLI screen name to GameScreen enum
-        screen_raw = data.get("screen", "UNKNOWN")
-        screen = self._map_screen(screen_raw)
+            # Map CLI screen name to GameScreen enum
+            screen_raw = data.get("screen", "UNKNOWN")
+            screen = self._map_screen(screen_raw)
 
-        # Build GameState with screen + extra fields from CLI
-        state = GameState(screen=screen, **_filter_state_extra(data))
-        self._cached_state = state
-        self._cache_stale = False
-        self._available_actions_cache = None  # screen changed, invalidate actions
-        return state
+            # Build GameState with screen + extra fields from CLI
+            state = GameState(screen=screen, **_filter_state_extra(data))
+            self._cached_state = state
+            self._cache_stale = False
+            self._available_actions_cache = None  # screen changed, invalidate actions
+            return state
 
     def _get_available_actions_sync(self) -> list[str]:
         """Derive available actions from current game screen state."""
-        if self._available_actions_cache is not None:
-            return self._available_actions_cache
+        with self._cache_lock:
+            if self._available_actions_cache is not None:
+                return self._available_actions_cache
 
-        try:
-            state = self._get_state_sync()
-        except STS2Error:
-            return []
+            try:
+                state = self._get_state_sync()
+            except STS2Error:
+                return []
 
-        actions = _screen_to_actions(state.screen)
-        self._available_actions_cache = actions
-        return actions
+            actions = _screen_to_actions(state.screen)
+            self._available_actions_cache = actions
+            return actions
 
     def _act_sync(
         self, action: str, args: dict[str, Any] | None = None
     ) -> ActionResult:
         """Execute a game action via CLI subprocess."""
-        cli_args = _build_cli_args(action, args)
-        try:
-            raw = self._run_cli(*cli_args)
-            self._parse_response(raw)
-            self._cache_stale = True
-            self._available_actions_cache = None
-            return ActionResult(status="success", state_changed=True)
-        except STS2Error as exc:
-            self._cache_stale = True
-            self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+        with self._cache_lock:
+            cli_args = _build_cli_args(action, args)
+            try:
+                raw = self._run_cli(*cli_args)
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                return ActionResult(status="success", state_changed=True)
+            except STS2Error as exc:
+                self._cache_stale = True
+                self._available_actions_cache = None
+                if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                    return ActionResult(status="timeout", state_changed=False, detail=exc.message)
+                return ActionResult(status="failure", state_changed=False, detail=exc.message)
 
     def _wait_until_actionable_sync(self, timeout: float) -> bool:
         """Poll until health_check passes and actions are available."""
@@ -346,7 +357,8 @@ class CliModAdapter:
             state = self._get_state_sync()
             actions = self._get_available_actions_sync()
         except STS2Error:
-            state = self._cached_state or GameState(screen=GameScreen.UNKNOWN)
+            with self._cache_lock:
+                state = self._cached_state or GameState(screen=GameScreen.UNKNOWN)
             actions = []
 
         return {

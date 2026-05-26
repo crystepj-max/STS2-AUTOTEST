@@ -86,6 +86,24 @@ class TestSessionLifecycle:
         result = _run(orchestrator.start_session())
         assert result is False
 
+    def test_start_session_reports_failed_game_pid_checkpoint(self) -> None:
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.steam_pid = 111
+        mock_adapter.game_pid = None
+        mock_adapter.window_ready = True
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+
+        result = _run(orchestrator.start_session())
+
+        assert result is False
+        assert orchestrator.last_startup_failure == {
+            "checkpoint": "game_pid",
+            "message": "Game PID is not available",
+        }
+        assert orchestrator.startup_checkpoints["steam_pid"]["status"] == "OK"
+        assert orchestrator.startup_checkpoints["game_pid"]["status"] == "FAIL"
+        mock_adapter.health_check.assert_not_called()
+
     def test_stop_session(self, orchestrator: TestOrchestrator) -> None:
         _run(orchestrator.start_session())
         _run(orchestrator.stop_session())

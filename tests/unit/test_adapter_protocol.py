@@ -8,7 +8,9 @@ from sts2_autotest.adapters.base import (
     ActionResult,
     GameAdapterProtocol,
     HealthStatus,
+    get_adapter_capabilities,
 )
+from sts2_autotest.common.types import Capabilities
 
 
 class TestActionResult:
@@ -98,3 +100,27 @@ class TestGameAdapterProtocol:
 
         incomplete = IncompleteAdapter()
         assert not isinstance(incomplete, GameAdapterProtocol)
+
+
+class TestAdapterCapabilities:
+    """Runtime capability discovery contract (Story 6.3 / B14)."""
+
+    def test_get_adapter_capabilities_uses_adapter_method(self) -> None:
+        class CapabilityAwareAdapter:
+            def get_capabilities(self) -> Capabilities:
+                return Capabilities(
+                    supports_multiplayer=True,
+                    supports_metadata=True,
+                    supports_debug_actions=True,
+                )
+
+        caps = get_adapter_capabilities(CapabilityAwareAdapter())
+
+        assert caps.supports_multiplayer is True
+        assert caps.supports_metadata is True
+        assert caps.supports_debug_actions is True
+
+    def test_get_adapter_capabilities_defaults_for_legacy_adapter(self) -> None:
+        caps = get_adapter_capabilities(object())
+
+        assert caps == Capabilities()

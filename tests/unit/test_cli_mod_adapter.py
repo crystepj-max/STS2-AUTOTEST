@@ -6,8 +6,10 @@ real CLI.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import subprocess
+import threading
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -371,3 +373,46 @@ class TestMockReplaceability:
         mock = self.MockAdapter()
         adapter_ref: GameAdapterProtocol = mock  # type: ignore[assignment]
         assert adapter_ref is not None
+
+
+class TestCliModAdapterCapabilities:
+    """Runtime capabilities for STS2-Cli-Mod adapter (Story 6.3 / B14)."""
+
+    def test_get_capabilities_returns_baseline_flags(self, adapter: CliModAdapter) -> None:
+        caps = adapter.get_capabilities()
+
+        assert caps.supports_multiplayer is False
+        assert caps.supports_metadata is False
+        assert caps.supports_debug_actions is False
+
+
+class TestCliModAdapterCacheConcurrency:
+    """Cache updates are serialized around action/state races (Story 6.6 / B22)."""
+
+    def test_action_during_state_refresh_leaves_cache_stale(self) -> None:
+        class RaceAdapter(CliModAdapter):
+            def __init__(self) -> None:
+                super().__init__(cli_path="sts2", timeout=30.0)
+                self.state_started = threading.Event()
+                self.allow_state_finish = threading.Event()
+
+            def _run_cli(self, *args: str) -> dict[str, Any]:
+                if args[0] == "state":
+                    self.state_started.set()
+                    assert self.allow_state_finish.wait(timeout=1.0)
+                    return {"ok": True, "data": {"screen": "MENU"}}
+                return {"ok": True, "data": {}}
+
+        race_adapter = RaceAdapter()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            state_future = pool.submit(race_adapter._get_state_sync)
+            assert race_adapter.state_started.wait(timeout=1.0)
+            action_future = pool.submit(race_adapter._act_sync, "end_turn", None)
+            race_adapter.allow_state_finish.set()
+
+            assert state_future.result(timeout=1.0).screen == GameScreen.MAIN_MENU
+            assert action_future.result(timeout=1.0).status == "success"
+
+        assert race_adapter._cache_stale is True
+        assert race_adapter._available_actions_cache is None

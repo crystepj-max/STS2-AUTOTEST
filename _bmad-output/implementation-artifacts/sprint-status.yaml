@@ -1,5 +1,5 @@
 # generated: 2026-05-10
-# last_updated: 2026-05-21
+# last_updated: 2026-05-24
 # project: STS2-AUTOTEST
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-10
-last_updated: 2026-05-21
+last_updated: 2026-05-24
 # Epic 1 auto-transitioned to in-progress (first story created)
 project: STS2-AUTOTEST
 project_key: NOKEY
@@ -96,22 +96,22 @@ development_status:
   epic-5-retrospective: optional
 
   # Epic 6: Beta Adapters & Real Environment Integration
-  epic-6: in-progress
+  epic-6: done
   6-1-agentadapter-http-baseline: done
-  6-2-agentadapter-mcp-native-control: backlog
-  6-3-adapter-capabilities-contract: in-progress
+  6-2-agentadapter-mcp-native-control: done
+  6-3-adapter-capabilities-contract: done
   6-4-real-climodadapter-cli-integration-tests: done
-  6-5-game-running-cli-smoke-validation: backlog
-  6-6-climodadapter-cache-race-fix: backlog
-  6-7-start-session-process-checkpoints: backlog
-  6-8-doctor-steam-login-and-version-checks: backlog
+  6-5-game-running-cli-smoke-validation: done
+  6-6-climodadapter-cache-race-fix: done
+  6-7-start-session-process-checkpoints: done
+  6-8-doctor-steam-login-and-version-checks: done
   epic-6-retrospective: optional
 
   # Epic 7: Beta Natural Language Test Pipeline
-  epic-7: in-progress
+  epic-7: done
   7-1-markdown-spec-review-compile-run-pipeline: done
-  7-2-generated-dsl-action-coverage: in-progress
-  7-3-default-specs-and-user-manual: in-progress
+  7-2-generated-dsl-action-coverage: done
+  7-3-default-specs-and-user-manual: done
   7-4-spec-pipeline-real-regression: done
   epic-7-retrospective: optional
 
@@ -130,10 +130,10 @@ development_status:
   epic-9-retrospective: optional
 
   # Epic 10: Beta Technical Debt Burn-down
-  epic-10: in-progress
-  10-1-hooks-multi-session-leak-fix: in-progress
-  10-2-assert-that-loop-lifecycle-fix: backlog
-  10-3-setup-scenario-auto-validation: backlog
-  10-4-on-error-handler-type-safety: backlog
-  10-5-remove-coerce-types-type-ignore: backlog
+  epic-10: done
+  10-1-hooks-multi-session-leak-fix: done
+  10-2-assert-that-loop-lifecycle-fix: done
+  10-3-setup-scenario-auto-validation: done
+  10-4-on-error-handler-type-safety: done
+  10-5-remove-coerce-types-type-ignore: done
   epic-10-retrospective: optional

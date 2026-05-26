@@ -56,6 +56,27 @@ class MockAsyncClient:
         self._closed = True
 
 
+class MockMcpClient:
+    """Minimal mock for STS2-Agent MCP-native tool calls."""
+
+    def __init__(self) -> None:
+        self.responses: list[Any] = []
+        self.exceptions: list[Exception] = []
+        self.calls: list[dict[str, Any]] = []
+
+    def add_response(self, data: Any) -> None:
+        self.responses.append(data)
+
+    def add_exception(self, exc: Exception) -> None:
+        self.exceptions.append(exc)
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+        self.calls.append({"tool_name": tool_name, "arguments": arguments})
+        if self.exceptions:
+            raise self.exceptions.pop(0)
+        return self.responses.pop(0) if self.responses else {}
+
+
 class TestAgentAdapterHealthCheck:
     """health_check() maps to GET {endpoint}/health"""
 
@@ -68,6 +89,25 @@ class TestAgentAdapterHealthCheck:
 
         assert result.healthy is True
         assert mock._requests[0]["url"] == "http://localhost:8080/health"
+
+    def test_real_agent_ready_wrapper_is_healthy(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "status": "ready",
+                    "mod_version": "0.5.4",
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.health_check())
+
+        assert result.healthy is True
+        assert adapter._version_checked is True
 
     def test_unhealthy(self) -> None:
         mock = MockAsyncClient()
@@ -101,6 +141,23 @@ class TestAgentAdapterGetState:
         assert isinstance(state, GameState)
         assert state.screen == GameScreen.MAIN_MENU
 
+    def test_real_agent_state_path_and_wrapper(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {"screen": "MAIN_MENU", "available_actions": ["open_timeline"]},
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        state = _run(adapter.get_state())
+
+        assert state.screen == GameScreen.MAIN_MENU
+        assert mock._requests[0]["method"] == "GET"
+        assert mock._requests[0]["url"] == "http://localhost:8080/state"
+
     def test_unknown_screen_maps_to_unknown(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"screen": "SOME_NEW_SCREEN"})
@@ -132,6 +189,29 @@ class TestAgentAdapterAvailableActions:
 
         assert actions == ["play_card", "end_turn"]
 
+    def test_real_agent_action_payload_returns_names(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAIN_MENU",
+                    "actions": [
+                        {"name": "open_character_select", "requires_index": False},
+                        {"name": "open_timeline", "requires_index": False},
+                    ],
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["open_character_select", "open_timeline"]
+        assert mock._requests[0]["method"] == "GET"
+        assert mock._requests[0]["url"] == "http://localhost:8080/actions/available"
+
     def test_empty_list(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"actions": []})
@@ -154,6 +234,28 @@ class TestAgentAdapterAct:
 
         assert isinstance(result, ActionResult)
         assert result.status == "success"
+
+    def test_real_agent_act_uses_flat_action_payload(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {"status": "completed", "stable": True, "message": "ok"},
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("play_card", {"card_index": 0, "target_index": 1}))
+
+        assert result.status == "success"
+        assert result.state_changed is True
+        assert mock._requests[0]["url"] == "http://localhost:8080/action"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "play_card",
+            "card_index": 0,
+            "target_index": 1,
+        }
 
     def test_failure(self) -> None:
         mock = MockAsyncClient()
@@ -185,6 +287,25 @@ class TestAgentAdapterWaitUntilActionable:
         result = _run(adapter.wait_until_actionable(10.0))
 
         assert result is True
+
+    def test_http_wait_polls_real_available_actions_endpoint(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [{"name": "open_character_select"}],
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.wait_until_actionable(1.0))
+
+        assert result is True
+        assert mock._requests[0]["method"] == "GET"
+        assert mock._requests[0]["url"] == "http://localhost:8080/actions/available"
 
     def test_returns_false_on_timeout(self) -> None:
         mock = MockAsyncClient()
@@ -425,3 +546,89 @@ class TestProtocolCompliance:
         assert hasattr(adapter, "wait_until_actionable")
         assert hasattr(adapter, "capture_bug_snapshot")
         assert hasattr(adapter, "cleanup")
+
+
+class TestAgentAdapterCapabilities:
+    """Runtime capabilities for STS2-Agent integration (Story 6.1 / B7.1)."""
+
+    def test_get_capabilities_matches_property(self) -> None:
+        adapter = AgentAdapter(debug_actions=True)
+
+        caps = adapter.get_capabilities()
+
+        assert caps == adapter.capabilities
+        assert caps.supports_multiplayer is True
+        assert caps.supports_metadata is True
+        assert caps.supports_debug_actions is True
+
+    def test_debug_actions_disabled_by_default(self) -> None:
+        adapter = AgentAdapter()
+
+        caps = adapter.get_capabilities()
+
+        assert caps.supports_debug_actions is False
+
+
+class TestAgentAdapterMcpTransport:
+    """MCP-native control path (Story 6.2 / B7.2)."""
+
+    def test_health_check_uses_mcp_tool(self) -> None:
+        mcp = MockMcpClient()
+        mcp.add_response({"status": "ok", "version": "0.1.0"})
+        adapter = AgentAdapter(transport="mcp", mcp_client=mcp)
+
+        result = _run(adapter.health_check())
+
+        assert result.healthy is True
+        assert mcp.calls == [{"tool_name": "health_check", "arguments": {}}]
+
+    def test_state_actions_act_wait_use_mcp_tools(self) -> None:
+        mcp = MockMcpClient()
+        mcp.add_response({"screen": "COMBAT", "hp": 50})
+        mcp.add_response([
+            {"name": "play_card", "requires_index": True},
+            {"name": "end_turn", "requires_index": False},
+        ])
+        mcp.add_response({"status": "completed", "stable": True})
+        mcp.add_response({"actions": [{"name": "end_turn"}]})
+        adapter = AgentAdapter(transport="mcp", mcp_client=mcp)
+
+        state = _run(adapter.get_state())
+        actions = _run(adapter.get_available_actions())
+        act_result = _run(adapter.act("play_card", {"card_index": 0, "target_index": 1}))
+        ready = _run(adapter.wait_until_actionable(1.0))
+
+        assert state.screen == GameScreen.COMBAT
+        assert actions == ["play_card", "end_turn"]
+        assert act_result.status == "success"
+        assert ready is True
+        assert [call["tool_name"] for call in mcp.calls] == [
+            "get_game_state",
+            "get_available_actions",
+            "act",
+            "wait_until_actionable",
+        ]
+        assert mcp.calls[2]["arguments"] == {
+            "action": "play_card",
+            "card_index": 0,
+            "target_index": 1,
+        }
+        assert mcp.calls[3]["arguments"] == {"timeout_seconds": 1.0}
+
+    def test_mcp_timeout_maps_to_action_timeout(self) -> None:
+        mcp = MockMcpClient()
+        mcp.add_exception(TimeoutError("MCP timed out"))
+        adapter = AgentAdapter(transport="mcp", mcp_client=mcp)
+
+        result = _run(adapter.act("play_card"))
+
+        assert result.status == "timeout"
+        assert result.state_changed is False
+
+    def test_mcp_requires_client(self) -> None:
+        adapter = AgentAdapter(transport="mcp")
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+
+        assert exc.value.category == ErrorCategory.ADAPTER_ERROR

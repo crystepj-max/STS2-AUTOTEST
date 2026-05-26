@@ -2,14 +2,18 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from sts2_autotest.cli.main import (
     DEFAULT_EVIDENCE_DIR,
     _check_env,
+    _create_adapter,
     _create_parser,
+    _dispatch_orchestrator,
+    _run_orchestrator_with_adapter,
     doctor_cmd,
     report_cmd,
     run_cmd,
@@ -106,6 +110,15 @@ class TestDoctorEnvCheck:
         """Python >= 3.11 should always pass in this project."""
         checks = _check_env()
         assert checks["python"]["status"] == "OK"
+
+    def test_has_beta_doctor_keys(self) -> None:
+        checks = _check_env()
+        expected_keys = (
+            "steam_login_state",
+            "sts2_cli_version",
+        )
+        for key in expected_keys:
+            assert key in checks, f"Missing key: {key}"
 
 
 class TestDoctorCI:
@@ -260,6 +273,68 @@ class TestResume:
         args_list, kwargs = call_args[0], call_args[1]
         assert args_list[1] == ["all"]
         assert kwargs.get("timeout") == 30
+
+
+class TestAgentRecoveryFactory:
+    """Agent runs must recreate AgentAdapter, not CliModAdapter (Story 6.1 / B7.1)."""
+
+    @patch("sts2_autotest.cli.main._run_orchestrator_with_adapter")
+    @patch("sts2_autotest.cli.main._create_adapter")
+    def test_dispatch_agent_passes_agent_adapter_factory(
+        self, mock_create: MagicMock, mock_run: MagicMock,
+    ) -> None:
+        adapter = MagicMock()
+
+        _dispatch_orchestrator(adapter, ["TC-001"], timeout=30, use_agent=True)
+
+        kwargs = mock_run.call_args.kwargs
+        factory = kwargs["adapter_factory"]
+        factory()
+        mock_create.assert_called_once_with("agent")
+
+    @patch("sts2_autotest.core.steam.SteamController")
+    @patch("sts2_autotest.core.recovery.DefaultRecoveryStrategy")
+    @patch("sts2_autotest.core.orchestrator.TestOrchestrator")
+    def test_run_orchestrator_uses_supplied_adapter_factory(
+        self,
+        mock_orchestrator_cls: MagicMock,
+        mock_recovery_cls: MagicMock,
+        mock_steam_cls: MagicMock,
+    ) -> None:
+        adapter = MagicMock()
+        adapter_factory = MagicMock(return_value=adapter)
+        summary = SimpleNamespace(
+            session_id="session-1",
+            passed=1,
+            failed=0,
+            crashed=0,
+            skipped=0,
+            is_failed=False,
+        )
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run_all = AsyncMock(return_value=summary)
+        mock_orchestrator_cls.return_value = mock_orchestrator
+
+        result = _run_orchestrator_with_adapter(
+            adapter,
+            ["TC-001"],
+            timeout=30,
+            adapter_factory=adapter_factory,
+        )
+
+        assert result == 0
+        assert mock_recovery_cls.call_args.kwargs["adapter_factory"] is adapter_factory
+        mock_steam_cls.assert_called_once()
+
+    def test_create_agent_adapter_reads_transport_env(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__TRANSPORT", "mcp")
+
+        adapter = _create_adapter("agent")
+
+        assert getattr(adapter, "transport") == "mcp"
+        assert getattr(adapter, "_mcp_client") is not None
 
     @patch("sts2_autotest.cli.main._get_progress_path")
     def test_auto_detect_prompts_user(self, mock_path: patch, tmp_path: Path) -> None:

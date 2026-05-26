@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from sts2_autotest.common.state import GameState
+from sts2_autotest.common.types import Capabilities
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,22 @@ class HealthStatus:
 
     healthy: bool
     message: str | None = None
+
+
+@runtime_checkable
+class CapabilityProviderProtocol(Protocol):
+    """Optional adapter capability provider."""
+
+    def get_capabilities(self) -> Capabilities:
+        """Return runtime adapter capabilities."""
+        ...
+
+
+def get_adapter_capabilities(adapter: object) -> Capabilities:
+    """Return adapter capabilities, falling back to the safe baseline."""
+    if isinstance(adapter, CapabilityProviderProtocol):
+        return adapter.get_capabilities()
+    return Capabilities()
 
 
 @runtime_checkable
