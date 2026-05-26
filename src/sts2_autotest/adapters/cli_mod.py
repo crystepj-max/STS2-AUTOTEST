@@ -313,10 +313,18 @@ class CliModAdapter:
         self, action: str, args: dict[str, Any] | None = None
     ) -> ActionResult:
         """Execute a game action via CLI subprocess."""
-        # probe is a synthetic no-op used by the orchestrator to verify
-        # adapter responsiveness — no CLI command needed.
+        # probe/return_to_menu at MAIN_MENU are synthetic no-ops — no CLI
+        # command needed. probe verifies adapter responsiveness;
+        # return_to_menu is a setup recovery step that is already satisfied.
         if action == "probe":
             return ActionResult(status="success", state_changed=False)
+        if action == "return_to_menu" and self._cached_state is not None:
+            try:
+                cur = self._get_state_sync()
+            except STS2Error:
+                cur = self._cached_state
+            if cur.screen == GameScreen.MAIN_MENU:
+                return ActionResult(status="success", state_changed=False)
         cli_args = _build_cli_args(action, args)
         try:
             raw = self._run_cli(*cli_args)
@@ -420,7 +428,7 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
     game's state machine; the actual available actions may vary.
     """
     _ACTIONS: dict[GameScreen, list[str]] = {
-        GameScreen.MAIN_MENU: ["new_run", "continue_run", "abandon_run", "choose_game_mode", "probe"],
+        GameScreen.MAIN_MENU: ["new_run", "continue_run", "abandon_run", "choose_game_mode", "probe", "return_to_menu"],
         GameScreen.CHARACTER_SELECT: ["select_character", "set_ascension", "embark", "probe"],
         GameScreen.MAP: ["choose_map_node", "proceed", "probe"],
         GameScreen.COMBAT: ["play_card", "end_turn", "use_potion", "probe"],
