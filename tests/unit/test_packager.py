@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -528,3 +530,102 @@ class TestArtifactExport:
             result = pkgr.export_artifact("run_err", result="passed")
 
         assert result is None
+
+    def test_export_artifact_async_returns_job_before_zip_completion(
+        self, tmp_path: Path,
+    ) -> None:
+        """export_artifact_async returns immediately while the pack remains readable."""
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_async", run_result="passed")
+        summary_path = tmp_path / "run_async" / "summary.json"
+        original_make_archive = shutil.make_archive
+        archive_started = threading.Event()
+        allow_archive = threading.Event()
+
+        def delayed_make_archive(
+            base_name: str,
+            format: str,
+            root_dir: str | None = None,
+            base_dir: str | None = None,
+        ) -> str:
+            archive_started.set()
+            allow_archive.wait(timeout=5.0)
+            return original_make_archive(
+                base_name, format, root_dir=root_dir, base_dir=base_dir,
+            )
+
+        with patch(
+            "sts2_autotest.evidence.packager.shutil.make_archive",
+            side_effect=delayed_make_archive,
+        ):
+            job = pkgr.export_artifact_async("run_async", result="passed")
+            assert job.pack_id == "run_async"
+            assert job.original_pack_dir == tmp_path / "run_async"
+            assert job.status == "PENDING"
+            assert summary_path.is_file()
+
+            assert archive_started.wait(timeout=2.0)
+            pending_result = job.wait(timeout=0.01)
+            assert pending_result is None
+            assert job.status == "PENDING"
+            assert job.error is None
+            allow_archive.set()
+            zip_path = job.wait(timeout=5.0)
+
+        assert zip_path is not None
+        assert zip_path.suffix == ".zip"
+        assert zip_path.exists()
+        assert job.status == "DONE"
+        assert job.error is None
+        assert summary_path.is_file()
+
+    def test_export_artifact_async_failure_preserves_original_pack(
+        self, tmp_path: Path,
+    ) -> None:
+        """Async export reports failures and keeps summary.json in place."""
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_async_err", run_result="passed")
+        summary_path = tmp_path / "run_async_err" / "summary.json"
+
+        with patch(
+            "sts2_autotest.evidence.packager.shutil.make_archive",
+            side_effect=OSError("mock zip failure"),
+        ):
+            job = pkgr.export_artifact_async("run_async_err", result="failed")
+            result = job.wait(timeout=5.0)
+
+        assert result is None
+        assert job.status == "FAILED"
+        assert job.error is not None
+        assert "mock zip failure" in job.error
+        assert summary_path.is_file()
+
+    def test_write_scene_coverage_report_creates_json_and_markdown(
+        self, tmp_path: Path,
+    ) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_cov")
+        coverage = {
+            "COMBAT": {"visits": 2, "cases": ["TC-1", "TC-2"]},
+            "SHOP": {"visits": 0, "cases": []},
+        }
+
+        paths = pkgr.write_scene_coverage_report("run_cov", coverage)
+
+        assert paths["json"].name == "scene-coverage.json"
+        assert paths["markdown"].name == "scene-coverage.md"
+        assert paths["json"].is_file()
+        assert paths["markdown"].is_file()
+        data = json.loads(paths["json"].read_text(encoding="utf-8"))
+        assert data["COMBAT"]["visits"] == 2
+        assert "COMBAT" in paths["markdown"].read_text(encoding="utf-8")
+
+    def test_write_scene_coverage_report_missing_pack_raises(
+        self, tmp_path: Path,
+    ) -> None:
+        pkgr = EvidencePackager(tmp_path)
+
+        with pytest.raises(FileNotFoundError, match="Evidence pack not found"):
+            pkgr.write_scene_coverage_report("missing", {})
+
+        assert not (tmp_path / "missing").exists()

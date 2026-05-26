@@ -26,6 +26,10 @@ class ProgressRecord:
     completed_cases: list[str] = field(default_factory=list)
     pending_cases: list[str] = field(default_factory=list)
     current_case: str | None = None
+    current_step: str | None = None
+    game_screen: str | None = None
+    recovery_status: str | None = None
+    paused: bool = False
     last_updated: str = ""
 
     def to_dict(self) -> dict[str, object]:
@@ -36,6 +40,10 @@ class ProgressRecord:
             "completed_cases": self.completed_cases,
             "pending_cases": self.pending_cases,
             "current_case": self.current_case,
+            "current_step": self.current_step,
+            "game_screen": self.game_screen,
+            "recovery_status": self.recovery_status,
+            "paused": self.paused,
             "last_updated": self.last_updated,
         }
 
@@ -44,12 +52,20 @@ class ProgressRecord:
         raw_completed: object = data.get("completed_cases", [])
         raw_pending: object = data.get("pending_cases", [])
         raw_current: object | None = data.get("current_case")
+        raw_step: object | None = data.get("current_step")
+        raw_screen: object | None = data.get("game_screen")
+        raw_recovery: object | None = data.get("recovery_status")
+        raw_paused: object = data.get("paused", False)
         return cls(
             schema_version=int(str(data.get("_schema_version", 1))),
             session_id=str(data.get("session_id", "")),
             completed_cases=list(raw_completed) if isinstance(raw_completed, list) else [],
             pending_cases=list(raw_pending) if isinstance(raw_pending, list) else [],
             current_case=str(raw_current) if raw_current is not None else None,
+            current_step=str(raw_step) if raw_step is not None else None,
+            game_screen=str(raw_screen) if raw_screen is not None else None,
+            recovery_status=str(raw_recovery) if raw_recovery is not None else None,
+            paused=bool(raw_paused) if isinstance(raw_paused, bool) else False,
             last_updated=str(data.get("last_updated", "")),
         )
 

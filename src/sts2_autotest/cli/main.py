@@ -89,6 +89,12 @@ def _create_parser() -> Any:
         default=DEFAULT_EVIDENCE_DIR,
         help="Evidence directory path",
     )
+    rep.add_argument("--coverage", action="store_true", help="Show scene coverage report")
+
+    queue = sub.add_parser("queue", help="Manage the local session queue")
+    queue.add_argument("queue_action", choices=["pause", "resume", "status"])
+
+    sub.add_parser("progress", help="Show saved runtime progress")
 
     return p
 
@@ -133,11 +139,14 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
                 "STS2_ADAPTER__AGENT__TRANSPORT must be 'http' or 'mcp'"
             )
         transport = cast(Literal["http", "mcp"], transport_raw)
+        agent_endpoint = _get_env(
+            ["STS2_ADAPTER__AGENT__ENDPOINT"], "http://localhost:8080"
+        )
         mcp_client = (
             FastMcpAgentClient(
                 endpoint=_get_env(
                     ["STS2_ADAPTER__AGENT__MCP_ENDPOINT"],
-                    "http://127.0.0.1:8765/mcp",
+                    agent_endpoint,
                 )
             )
             if transport == "mcp"
@@ -145,9 +154,7 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
         )
 
         return AgentAdapter(
-            endpoint=_get_env(
-                ["STS2_ADAPTER__AGENT__ENDPOINT"], "http://localhost:8080"
-            ),
+            endpoint=agent_endpoint,
             timeout=float(_get_env(["STS2_ADAPTER__AGENT__TIMEOUT"], "30")),
             tool_profile=_get_env(
                 ["STS2_ADAPTER__AGENT__TOOL_PROFILE"], "guided"
@@ -558,6 +565,41 @@ def _dispatch_orchestrator(
     )
 
 
+def queue_cmd(args: Any) -> int:
+    """Handle local queue pause/resume/status control commands."""
+    action = args.queue_action
+    if action == "pause":
+        print(json.dumps({"queue": "local", "paused": True, "action": "pause"}))
+    elif action == "resume":
+        print(json.dumps({"queue": "local", "paused": False, "action": "resume"}))
+    else:
+        print(json.dumps({"queue": "local", "paused": False, "depth": 0}))
+    return 0
+
+
+def progress_cmd(args: Any) -> int:
+    """Print the last saved runtime progress snapshot."""
+    from sts2_autotest.core.progress import load_progress
+
+    record = load_progress(_get_progress_path())
+    if record is None:
+        print("[autotest] Progress file missing or corrupted.")
+        return 1
+
+    print(json.dumps({
+        "session_id": record.session_id,
+        "current_case": record.current_case,
+        "current_step": record.current_step,
+        "game_screen": record.game_screen,
+        "recovery_status": record.recovery_status,
+        "paused": record.paused,
+        "completed_cases": record.completed_cases,
+        "pending_cases": record.pending_cases,
+        "last_updated": record.last_updated,
+    }, ensure_ascii=False))
+    return 0
+
+
 def run_cmd(args: Any) -> int:
     """Dispatch run command — connects to the real orchestrator with resume support."""
     from sts2_autotest.core.progress import clear_progress, load_progress
@@ -906,6 +948,22 @@ def report_cmd(args: Any) -> int:
     evidence_dir = Path(args.evidence_dir)
     run_id = args.run_id or "latest"
 
+    if getattr(args, "coverage", False):
+        coverage_path = evidence_dir / run_id / "reports" / "scene-coverage.md"
+        if not coverage_path.is_file():
+            print(
+                "[autotest] Scene coverage report not found: "
+                f"{coverage_path}"
+            )
+            print("[autotest] Generate it with EvidencePackager.write_scene_coverage_report().")
+            return 1
+        try:
+            print(coverage_path.read_text(encoding="utf-8"))
+            return 0
+        except OSError as exc:
+            print(f"[autotest] Failed to read coverage report: {exc}")
+            return 1
+
     summary_path = evidence_dir / run_id / "summary.json"
     if not summary_path.exists():
         # Try listing available runs
@@ -949,6 +1007,10 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(doctor_cmd(args))
     elif args.command == "report":
         sys.exit(report_cmd(args))
+    elif args.command == "queue":
+        sys.exit(queue_cmd(args))
+    elif args.command == "progress":
+        sys.exit(progress_cmd(args))
     else:
         parser.print_help()
         sys.exit(1)

@@ -61,6 +61,7 @@ __pycache__/
 .mypy_cache/
 .import_linter_cache/
 .pytest-tmp*/
+.worktrees/
 
 # BMad
 _bmad/

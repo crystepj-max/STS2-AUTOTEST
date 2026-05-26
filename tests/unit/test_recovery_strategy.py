@@ -16,6 +16,7 @@ from sts2_autotest.core.recovery import (
     crash_signature,
     is_p0_exception,
 )
+from sts2_autotest.core.popup_disposal import PopupDisposition
 
 
 # ── RecoveryAction enum ────────────────────────────────────
@@ -527,6 +528,64 @@ class TestExecuteGameRestart:
         assert success is True
         assert result_adapter is new_adapter_mock
 
+    def test_game_restart_manual_intervention_skips_restart(self) -> None:
+        mock_steam = MagicMock()
+        mock_steam.restart_game = MagicMock(return_value=12345)
+        new_adapter_mock = self._make_healthy_adapter()
+        mock_factory = MagicMock(return_value=new_adapter_mock)
+        popup_handler = MagicMock(return_value=PopupDisposition.MANUAL_INTERVENTION)
+        strategy = DefaultRecoveryStrategy(
+            adapter_factory=mock_factory,
+            steam_controller=mock_steam,
+            popup_handler=popup_handler,
+        )
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.GAME_RESTART, old_adapter))
+
+        assert success is False
+        assert result_adapter is None
+        popup_handler.assert_called_once()
+        mock_steam.restart_game.assert_not_called()
+        mock_factory.assert_not_called()
+
+    def test_game_restart_preserve_continues_recovery(self) -> None:
+        mock_steam = MagicMock()
+        mock_steam.restart_game = MagicMock(return_value=12345)
+        new_adapter_mock = self._make_healthy_adapter()
+        mock_factory = MagicMock(return_value=new_adapter_mock)
+        popup_handler = MagicMock(return_value=PopupDisposition.PRESERVE)
+        strategy = DefaultRecoveryStrategy(
+            adapter_factory=mock_factory,
+            steam_controller=mock_steam,
+            popup_handler=popup_handler,
+        )
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.GAME_RESTART, old_adapter))
+
+        assert success is True
+        assert result_adapter is new_adapter_mock
+        popup_handler.assert_called_once()
+        mock_steam.restart_game.assert_called_once()
+
+    def test_game_restart_popup_handler_exception_skips_restart(self) -> None:
+        mock_steam = MagicMock()
+        mock_steam.restart_game = MagicMock(return_value=12345)
+        popup_handler = MagicMock(side_effect=RuntimeError("popup inspect failed"))
+        strategy = DefaultRecoveryStrategy(
+            steam_controller=mock_steam,
+            popup_handler=popup_handler,
+        )
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.GAME_RESTART, old_adapter))
+
+        assert success is False
+        assert result_adapter is None
+        popup_handler.assert_called_once()
+        mock_steam.restart_game.assert_not_called()
+
 
 # ── DefaultRecoveryStrategy.execute() — FULL_RESTART ─────────
 
@@ -586,3 +645,26 @@ class TestExecuteFullRestart:
         # Falls back to RECREATE — should still succeed
         assert success is True
         assert result_adapter is new_adapter_mock
+
+    def test_full_restart_manual_intervention_skips_restart(self) -> None:
+        mock_steam = MagicMock()
+        mock_steam.stop_game = MagicMock()
+        mock_steam.stop_steam = MagicMock()
+        mock_steam.start_steam = MagicMock(return_value=9999)
+        mock_steam.start_game = MagicMock(return_value=12345)
+        popup_handler = MagicMock(return_value=PopupDisposition.MANUAL_INTERVENTION)
+        strategy = DefaultRecoveryStrategy(
+            steam_controller=mock_steam,
+            popup_handler=popup_handler,
+        )
+        old_adapter = self._make_healthy_adapter()
+
+        success, result_adapter = _run(strategy.execute(RecoveryAction.FULL_RESTART, old_adapter))
+
+        assert success is False
+        assert result_adapter is None
+        popup_handler.assert_called_once()
+        mock_steam.stop_game.assert_not_called()
+        mock_steam.stop_steam.assert_not_called()
+        mock_steam.start_steam.assert_not_called()
+        mock_steam.start_game.assert_not_called()

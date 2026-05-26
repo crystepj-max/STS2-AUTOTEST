@@ -109,6 +109,7 @@ class TestOrchestrator:
         self._progress_path: str | None = progress_path
         self._resumed_from: str | None = resumed_from
         self._shutdown_requested: bool = False
+        self._pause_requested: bool = False
         self._progress_saved_on_shutdown: bool = False
         self._adapter_replaced: bool = False
         self._lock_path: str | None = lock_path
@@ -190,6 +191,8 @@ class TestOrchestrator:
     async def _save_progress_snapshot(
         self, completed: list[str], pending: list[str],
         current_case: str | None = None,
+        *,
+        paused: bool = False,
     ) -> None:
         """Save a progress snapshot if progress_path is configured."""
         if self._progress_path is None:
@@ -199,8 +202,14 @@ class TestOrchestrator:
             completed_cases=completed,
             pending_cases=pending,
             current_case=current_case,
+            game_screen=self._current_screen.value,
+            paused=paused,
         )
         save_progress(record, Path(self._progress_path))
+
+    def request_pause(self) -> None:
+        """Request a safe pause after the current case completes."""
+        self._pause_requested = True
 
     # ── session lifecycle ───────────────────────────────────
 
@@ -339,6 +348,14 @@ class TestOrchestrator:
 
             # Save progress after each completed case (AC1)
             await self._save_progress_snapshot(completed, pending)
+
+            if self._pause_requested:
+                logger.info("Pause requested — saving progress and stopping")
+                await self._save_progress_snapshot(completed, pending, paused=True)
+                self._progress_saved_on_shutdown = True
+                for remaining in pending:
+                    results.append(TestResult(remaining, "skip", "Paused by operator"))
+                break
 
             if self._shutdown_requested:
                 logger.info("Shutdown requested — saving final progress and stopping")

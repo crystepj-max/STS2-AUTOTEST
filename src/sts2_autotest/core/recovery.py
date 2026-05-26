@@ -15,6 +15,7 @@ from sts2_autotest.adapters.base import HealthStatus
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen
+from sts2_autotest.core.popup_disposal import PopupDisposition
 
 if TYPE_CHECKING:
     from sts2_autotest.adapters.base import GameAdapterProtocol
@@ -156,10 +157,12 @@ class DefaultRecoveryStrategy:
         adapter_factory: Callable[[], GameAdapterProtocol] | None = None,
         game_startup_timeout: float = 60.0,
         steam_controller: Any = None,
+        popup_handler: Callable[[], PopupDisposition] | None = None,
     ) -> None:
         self._adapter_factory = adapter_factory
         self._game_startup_timeout = game_startup_timeout
         self._steam_controller = steam_controller
+        self._popup_handler = popup_handler
 
     def decide(
         self,
@@ -344,6 +347,8 @@ class DefaultRecoveryStrategy:
         self, adapter: GameAdapterProtocol,
     ) -> tuple[bool, GameAdapterProtocol | None]:
         """Level 1: restart game → recreate adapter → health check."""
+        if not self._prepare_restart_popup("GAME_RESTART"):
+            return False, None
         if self._steam_controller is None:
             logger.warning("GAME_RESTART: no steam_controller — falling back to RECREATE")
             return await self._execute_recreate(adapter)
@@ -359,6 +364,8 @@ class DefaultRecoveryStrategy:
         self, adapter: GameAdapterProtocol,
     ) -> tuple[bool, GameAdapterProtocol | None]:
         """Level 2: stop game+Steam → start Steam+game → recreate adapter."""
+        if not self._prepare_restart_popup("FULL_RESTART"):
+            return False, None
         if self._steam_controller is None:
             logger.warning("FULL_RESTART: no steam_controller — falling back to RECREATE")
             return await self._execute_recreate(adapter)
@@ -372,3 +379,19 @@ class DefaultRecoveryStrategy:
             logger.error("FULL_RESTART: restart failed: %s", exc)
             return False, None
         return await self._execute_recreate(adapter)
+
+    def _prepare_restart_popup(self, action_name: str) -> bool:
+        if self._popup_handler is None:
+            return True
+        try:
+            disposition = self._popup_handler()
+        except Exception as exc:
+            logger.warning("%s: popup handler failed: %s", action_name, exc)
+            return False
+
+        if disposition == PopupDisposition.MANUAL_INTERVENTION:
+            logger.warning("%s: popup requires manual intervention", action_name)
+            return False
+        if disposition == PopupDisposition.PRESERVE:
+            logger.info("%s: preserving popup evidence before recovery", action_name)
+        return True

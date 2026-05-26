@@ -54,6 +54,7 @@ class SessionQueue:
         self._max_depth = max_depth
         self._heap: list[_QueueEntry] = []
         self._pending: dict[str, SessionRequest] = {}
+        self._paused = False
 
     @property
     def max_depth(self) -> int:
@@ -68,6 +69,19 @@ class SessionQueue:
     def is_full(self) -> bool:
         """Queue depth has reached max_depth — backpressure active."""
         return self.queue_depth >= self._max_depth
+
+    @property
+    def is_paused(self) -> bool:
+        """Whether scheduling new queued requests is currently paused."""
+        return self._paused
+
+    def pause(self) -> None:
+        """Pause dequeue scheduling without dropping queued requests."""
+        self._paused = True
+
+    def resume(self) -> None:
+        """Resume dequeue scheduling."""
+        self._paused = False
 
     def enqueue(self, request: SessionRequest) -> bool:
         """Add a request to the queue.
@@ -95,6 +109,9 @@ class SessionQueue:
 
         Returns None if the queue is empty.
         """
+        if self._paused:
+            return None
+
         while self._heap:
             entry = heappop(self._heap)
             req: SessionRequest = entry.request

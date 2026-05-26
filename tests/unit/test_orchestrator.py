@@ -11,6 +11,7 @@ from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import TestResult
 from sts2_autotest.core.orchestrator import SessionSummary, TestOrchestrator
+from sts2_autotest.core.progress import load_progress
 from sts2_autotest.core.recovery import (
     DefaultRecoveryStrategy,
     FailureRecord,
@@ -134,6 +135,28 @@ class TestExecutionModes:
         ]
         summary = _run(orchestrator.run_failed())
         assert summary.total == 0
+
+    def test_run_all_pauses_after_current_case_and_saves_progress(
+        self, tmp_path: Path,
+    ) -> None:
+        progress_path = tmp_path / "progress.json"
+        orch = TestOrchestrator(
+            adapter=_make_mock_adapter(),
+            progress_path=str(progress_path),
+        )
+        orch.request_pause()
+
+        summary = _run(orch.run_all(["TC-1", "TC-2"]))
+
+        assert summary.results[0].case_id == "TC-1"
+        assert summary.results[0].status == "pass"
+        assert summary.results[1].case_id == "TC-2"
+        assert summary.results[1].status == "skip"
+        assert summary.results[1].detail == "Paused by operator"
+        saved = load_progress(progress_path)
+        assert saved is not None
+        assert saved.paused is True
+        assert saved.pending_cases == ["TC-2"]
 
 
 class TestResultClassification:

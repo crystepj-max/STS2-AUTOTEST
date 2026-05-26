@@ -398,6 +398,21 @@ class TestGetSummary:
         assert "resource_usage" not in summary
 
 
+class TestSceneCoverage:
+    def test_scene_coverage_summary_counts_known_scenes(self, tmp_path: Path) -> None:
+        mc = MetricsCollector(tmp_path)
+        mc.record_scene_visit("TC-1", "COMBAT")
+        mc.record_scene_visit("TC-1", "MAP")
+        mc.record_scene_visit("TC-2", "COMBAT")
+
+        coverage = mc.get_scene_coverage()
+
+        assert coverage["COMBAT"]["visits"] == 2
+        assert coverage["COMBAT"]["cases"] == ["TC-1", "TC-2"]
+        assert coverage["MAP"]["visits"] == 1
+        assert coverage["MAP"]["cases"] == ["TC-1"]
+
+
 # ── from_config ──────────────────────────────────────────────
 
 class TestFromConfig:

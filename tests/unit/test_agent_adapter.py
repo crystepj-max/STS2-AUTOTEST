@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 
-from sts2_autotest.adapters.agent import AgentAdapter
+from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
 from sts2_autotest.adapters.base import ActionResult, HealthStatus
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
@@ -54,6 +54,104 @@ class MockAsyncClient:
 
     async def aclose(self) -> None:
         self._closed = True
+
+
+class MockMcpClient:
+    """用于验证 MCP 传输路径的轻量测试替身。"""
+
+    def __init__(self) -> None:
+        self.responses: list[dict[str, Any]] = []
+        self.requests: list[dict[str, Any]] = []
+        self.closed = False
+
+    def add_response(self, json_data: dict[str, Any]) -> None:
+        self.responses.append(json_data)
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.requests.append({"method": method, "path": path, "json_data": json_data})
+        return self.responses.pop(0) if self.responses else {}
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class ValueErrorMcpClient:
+    """用于验证业务 ValueError 不会被误报为 JSON 解析失败。"""
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        json_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        raise ValueError("business rule rejected")
+
+    async def aclose(self) -> None:
+        pass
+
+
+class TestAgentAdapterTransport:
+    """AgentAdapter 传输方式选择。"""
+
+    def test_default_transport_uses_http_client(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"status": "ok"})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.health_check())
+
+        assert result.healthy is True
+        assert adapter.transport == "http"
+        assert mock._requests[0]["url"] == "http://localhost:8080/health"
+
+    def test_mcp_transport_uses_injected_client(self) -> None:
+        mcp = MockMcpClient()
+        mcp.add_response({"status": "ok"})
+        adapter = AgentAdapter(transport="mcp", mcp_client=mcp)
+
+        result = _run(adapter.health_check())
+
+        assert result.healthy is True
+        assert mcp.requests == [{"method": "GET", "path": "health", "json_data": None}]
+
+    def test_fast_mcp_client_name_is_available(self) -> None:
+        client = FastMcpAgentClient(endpoint="http://127.0.0.1:8765/mcp")
+
+        assert client.endpoint == "http://127.0.0.1:8765/mcp"
+
+    def test_default_mcp_client_uses_adapter_endpoint(self) -> None:
+        adapter = AgentAdapter(endpoint="http://example.test/custom", transport="mcp")
+
+        client = cast(FastMcpAgentClient, adapter._get_mcp_client())
+
+        assert client.endpoint == "http://example.test/custom"
+
+    def test_mcp_non_json_response_maps_to_parse_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=b"not valid json")
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        mcp = FastMcpAgentClient(endpoint="http://127.0.0.1:8765/mcp", client=client)
+        adapter = AgentAdapter(transport="mcp", mcp_client=mcp)
+
+        with pytest.raises(STS2Error) as exc:
+            _run(adapter.get_state())
+
+        assert exc.value.category == ErrorCategory.ADAPTER_ERROR
+        assert exc.value.detail.get("subtype") == AdapterErrorSubType.JSON_PARSE_FAILURE
+        assert exc.value.detail.get("path") == "game_state"
+        assert exc.value.detail.get("method") == "POST"
+
+    def test_mcp_business_value_error_is_not_json_parse_failure(self) -> None:
+        adapter = AgentAdapter(transport="mcp", mcp_client=ValueErrorMcpClient())
+
+        with pytest.raises(ValueError, match="business rule rejected"):
+            _run(adapter.get_state())
 
 
 class TestAgentAdapterHealthCheck:

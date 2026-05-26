@@ -9,8 +9,11 @@ import pytest
 from sts2_autotest.cli.main import (
     DEFAULT_EVIDENCE_DIR,
     _check_env,
+    _create_adapter,
     _create_parser,
     doctor_cmd,
+    progress_cmd,
+    queue_cmd,
     report_cmd,
     run_cmd,
 )
@@ -48,6 +51,30 @@ class TestCLIParser:
         args = _create_parser().parse_args(["report", "--evidence-dir", "/tmp/evidence"])
         assert args.evidence_dir == "/tmp/evidence"
 
+    def test_report_coverage_flag(self) -> None:
+        args = _create_parser().parse_args(["report", "run-001", "--coverage"])
+        assert args.run_id == "run-001"
+        assert args.coverage is True
+
+    def test_queue_pause_command_parses(self) -> None:
+        args = _create_parser().parse_args(["queue", "pause"])
+        assert args.command == "queue"
+        assert args.queue_action == "pause"
+
+    def test_queue_resume_command_parses(self) -> None:
+        args = _create_parser().parse_args(["queue", "resume"])
+        assert args.command == "queue"
+        assert args.queue_action == "resume"
+
+    def test_queue_status_command_parses(self) -> None:
+        args = _create_parser().parse_args(["queue", "status"])
+        assert args.command == "queue"
+        assert args.queue_action == "status"
+
+    def test_progress_command_parses(self) -> None:
+        args = _create_parser().parse_args(["progress"])
+        assert args.command == "progress"
+
 
 class TestCLICommands:
     """CLI command dispatch."""
@@ -84,6 +111,78 @@ class TestCLICommands:
             _create_parser().parse_args([])
         except SystemExit:
             pass  # expected when no command given
+
+    def test_queue_cmd_returns_zero(self) -> None:
+        args = _create_parser().parse_args(["queue", "status"])
+        assert queue_cmd(args) == 0
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    def test_progress_cmd_reads_runtime_status(
+        self, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        from sts2_autotest.core.progress import ProgressRecord, save_progress
+
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+        save_progress(
+            ProgressRecord(
+                session_id="sess-1",
+                completed_cases=["TC-1"],
+                pending_cases=["TC-2"],
+                current_case="TC-2",
+                current_step="play-card",
+                game_screen="COMBAT",
+                recovery_status="FAST_PATH",
+                paused=True,
+            ),
+            progress_file,
+        )
+
+        args = _create_parser().parse_args(["progress"])
+        assert progress_cmd(args) == 0
+
+    @patch("sts2_autotest.cli.main._get_progress_path")
+    def test_progress_cmd_returns_one_for_corrupted_progress(
+        self, mock_path: patch, tmp_path: Path,
+    ) -> None:
+        progress_file = tmp_path / "progress.json"
+        mock_path.return_value = progress_file
+        progress_file.write_text("not-json", encoding="utf-8")
+
+        args = _create_parser().parse_args(["progress"])
+        assert progress_cmd(args) == 1
+
+
+class TestCreateAdapter:
+    """_create_adapter reads agent transport env vars."""
+
+    def test_agent_mcp_endpoint_inherits_agent_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__TRANSPORT", "mcp")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__ENDPOINT", "http://example.test/custom")
+        monkeypatch.delenv("STS2_ADAPTER__AGENT__MCP_ENDPOINT", raising=False)
+
+        adapter = _create_adapter("agent")
+
+        assert isinstance(adapter, AgentAdapter)
+        assert adapter.endpoint == "http://example.test/custom"
+        assert isinstance(adapter._mcp_client, FastMcpAgentClient)
+        assert adapter._mcp_client.endpoint == "http://example.test/custom"
+
+    def test_agent_mcp_endpoint_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__TRANSPORT", "mcp")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__ENDPOINT", "http://example.test/custom")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__MCP_ENDPOINT", "http://mcp.example.test/override")
+
+        adapter = _create_adapter("agent")
+
+        assert isinstance(adapter, AgentAdapter)
+        assert adapter.endpoint == "http://example.test/custom"
+        assert isinstance(adapter._mcp_client, FastMcpAgentClient)
+        assert adapter._mcp_client.endpoint == "http://mcp.example.test/override"
 
 
 class TestDoctorEnvCheck:
@@ -175,6 +274,24 @@ class TestReportFromEvidence:
         args = _create_parser().parse_args(["report", "latest", "--evidence-dir", str(tmp_path)])
         result = report_cmd(args)
         assert result == 1  # no summary.json, but should list runs
+
+    def test_report_coverage_reads_markdown(self, tmp_path: Path) -> None:
+        report_path = tmp_path / "run-cov" / "reports" / "scene-coverage.md"
+        report_path.parent.mkdir(parents=True)
+        report_path.write_text("# Scene Coverage\n\n| COMBAT | 2 |", encoding="utf-8")
+
+        args = _create_parser().parse_args(
+            ["report", "run-cov", "--coverage", "--evidence-dir", str(tmp_path)]
+        )
+        assert report_cmd(args) == 0
+
+    def test_report_coverage_missing_file_returns_one(self, tmp_path: Path) -> None:
+        (tmp_path / "run-cov" / "reports").mkdir(parents=True)
+
+        args = _create_parser().parse_args(
+            ["report", "run-cov", "--coverage", "--evidence-dir", str(tmp_path)]
+        )
+        assert report_cmd(args) == 1
 
 
 class TestCLIEntryPoint:
