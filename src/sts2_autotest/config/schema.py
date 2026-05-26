@@ -27,7 +27,6 @@ class AgentAdapterConfig(BaseModel):
     enabled: bool = False
     transport: Literal["http", "mcp"] = "http"
     endpoint: str = "http://localhost:8080"
-    transport: Literal["http", "mcp"] = "http"
     mcp_endpoint: str = "http://127.0.0.1:8765/mcp"
     timeout: float = Field(default=30.0, gt=0)
     tool_profile: str = Field(default="guided", pattern=r"^(guided|layered|full)$")
