@@ -47,7 +47,7 @@ _TERMINAL_STATES: frozenset[GameScreen] = frozenset({
 
 _ALLOWED_TRANSITIONS: dict[GameScreen, frozenset[GameScreen]] = {
     GameScreen.MAIN_MENU: frozenset({GameScreen.CHARACTER_SELECT}),
-    GameScreen.CHARACTER_SELECT: frozenset({GameScreen.MAP}),
+    GameScreen.CHARACTER_SELECT: frozenset({GameScreen.EVENT, GameScreen.MAP}),
     GameScreen.MAP: frozenset({
         GameScreen.COMBAT, GameScreen.SHOP, GameScreen.REST,
         GameScreen.EVENT, GameScreen.CHEST, GameScreen.GAME_OVER,

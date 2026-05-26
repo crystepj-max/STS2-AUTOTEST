@@ -80,6 +80,7 @@ class TestScreenToActions:
 
     def test_main_menu_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.MAIN_MENU)
+        assert "start_new_run" in actions
         assert "new_run" in actions
         assert "continue_run" in actions
         assert "abandon_run" in actions
@@ -93,11 +94,25 @@ class TestScreenToActions:
 
     def test_map_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.MAP)
+        assert "return_to_menu" in actions
+        assert "start_new_run" in actions
+        assert "select_character" in actions
+        assert "embark" in actions
         assert "choose_map_node" in actions
         assert "proceed" in actions
+        assert "choose_event" in actions
+        assert "advance_dialogue" in actions
 
     def test_combat_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.COMBAT)
+        assert "return_to_menu" in actions
+        assert "start_new_run" in actions
+        assert "select_character" in actions
+        assert "embark" in actions
+        assert "enter_combat" in actions
+        assert "choose_map_node" in actions
+        assert "advance_dialogue" in actions
+        assert "choose_event" in actions
         assert "play_card" in actions
         assert "end_turn" in actions
         assert "use_potion" in actions
@@ -115,6 +130,10 @@ class TestScreenToActions:
 
     def test_event_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.EVENT)
+        assert "return_to_menu" in actions
+        assert "start_new_run" in actions
+        assert "select_character" in actions
+        assert "embark" in actions
         assert "choose_event" in actions
         assert "advance_dialogue" in actions
 
@@ -133,6 +152,7 @@ class TestScreenToActions:
         actions = _screen_to_actions(GameScreen.CARD_REWARD)
         assert "reward_choose_card" in actions
         assert "reward_skip_card" in actions
+        assert "skip_card_reward" in actions
         assert "reward_claim" in actions
 
     def test_relic_reward_actions(self) -> None:

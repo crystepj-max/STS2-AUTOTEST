@@ -65,9 +65,9 @@ class TestAllowedTransitions:
         transitions = GameScreen.MAIN_MENU.allowed_transitions
         assert transitions == frozenset({GameScreen.CHARACTER_SELECT})
 
-    def test_character_select_to_map(self) -> None:
+    def test_character_select_to_event_or_map(self) -> None:
         transitions = GameScreen.CHARACTER_SELECT.allowed_transitions
-        assert transitions == frozenset({GameScreen.MAP})
+        assert transitions == frozenset({GameScreen.EVENT, GameScreen.MAP})
 
     def test_map_has_multiple_transitions(self) -> None:
         transitions = GameScreen.MAP.allowed_transitions

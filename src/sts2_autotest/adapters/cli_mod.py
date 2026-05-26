@@ -19,6 +19,7 @@ import asyncio
 import json
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,9 +39,11 @@ _SCREEN_MAP: dict[str, GameScreen] = {
     "REST": GameScreen.REST,
     "REST_SITE": GameScreen.REST,
     "EVENT": GameScreen.EVENT,
+    "GRID_CARD_SELECT": GameScreen.EVENT,
     "TREASURE": GameScreen.CHEST,
     "CHEST": GameScreen.CHEST,
     "BOSS_REWARD": GameScreen.BOSS_REWARD,
+    "REWARD": GameScreen.CARD_REWARD,
     "CARD_REWARD": GameScreen.CARD_REWARD,
     "RELIC_REWARD": GameScreen.RELIC_REWARD,
     "GAME_OVER": GameScreen.GAME_OVER,
@@ -305,7 +308,7 @@ class CliModAdapter:
         except STS2Error:
             return []
 
-        actions = _screen_to_actions(state.screen)
+        actions = _state_to_actions(state)
         self._available_actions_cache = actions
         return actions
 
@@ -318,6 +321,48 @@ class CliModAdapter:
         # return_to_menu is a setup recovery step that is already satisfied.
         if action == "probe":
             return ActionResult(status="success", state_changed=False)
+        if action in {"return_to_menu", "start_new_run", "select_character", "embark"}:
+            cur = self._cached_state
+            if cur is not None and cur.screen in {GameScreen.EVENT, GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+                return ActionResult(status="success", state_changed=False)
+        if action == "advance_dialogue" and self._cached_state is not None:
+            cur = self._cached_state
+            if cur.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+                return ActionResult(status="success", state_changed=False)
+            grid = getattr(cur, "grid_card_select", {})
+            if cur.screen == GameScreen.EVENT and isinstance(grid, dict):
+                cards = grid.get("cards", [])
+                if cards:
+                    first = cards[0]
+                    if isinstance(first, dict) and first.get("card_id"):
+                        raw = self._run_cli("grid_select_card", str(first["card_id"]))
+                        self._parse_response(raw)
+                        self._cache_stale = True
+                        self._available_actions_cache = None
+                        return ActionResult(status="success", state_changed=True)
+            event = getattr(cur, "event", {})
+            if (
+                cur.screen == GameScreen.EVENT
+                and isinstance(event, dict)
+                and event.get("options")
+                and not event.get("is_in_dialogue", False)
+            ):
+                return ActionResult(status="success", state_changed=False)
+        if action == "choose_event" and self._cached_state is not None:
+            if self._cached_state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+                return ActionResult(status="success", state_changed=False)
+        if action == "choose_map_node" and self._cached_state is not None:
+            if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+                return ActionResult(status="success", state_changed=False)
+            args = _resolve_map_node_args(self._cached_state, args)
+        if action == "enter_combat" and self._cached_state is not None:
+            if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+                return ActionResult(status="success", state_changed=False)
+        if action == "combat_basic_policy":
+            return self._combat_basic_policy_sync()
+        if action == "skip_card_reward":
+            action = "reward_skip_card"
+            args = {"type": "card", **(args or {})}
         if action == "return_to_menu" and self._cached_state is not None:
             try:
                 cur = self._get_state_sync()
@@ -325,6 +370,8 @@ class CliModAdapter:
                 cur = self._cached_state
             if cur.screen == GameScreen.MAIN_MENU:
                 return ActionResult(status="success", state_changed=False)
+        if action == "start_new_run":
+            return self._start_new_run_sync()
         cli_args = _build_cli_args(action, args)
         try:
             raw = self._run_cli(*cli_args)
@@ -339,14 +386,90 @@ class CliModAdapter:
                 return ActionResult(status="timeout", state_changed=False, detail=exc.message)
             return ActionResult(status="failure", state_changed=False, detail=exc.message)
 
+    def _combat_basic_policy_sync(self) -> ActionResult:
+        deadline = time.monotonic() + min(self.timeout, 60.0)
+        steps = 0
+        try:
+            while time.monotonic() < deadline and steps < 80:
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                if state.screen != GameScreen.COMBAT:
+                    return ActionResult(status="success", state_changed=True)
+
+                combat = getattr(state, "combat", {})
+                if not isinstance(combat, dict):
+                    return ActionResult(status="failure", state_changed=False, detail="Combat payload missing")
+
+                if not combat.get("is_player_turn", False) or combat.get("is_player_actions_disabled", False):
+                    time.sleep(0.5)
+                    continue
+
+                play_args = _choose_basic_combat_card(combat)
+                if play_args is not None:
+                    raw = self._run_cli(*_build_cli_args("play_card", play_args))
+                else:
+                    raw = self._run_cli("end_turn")
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                steps += 1
+
+            return ActionResult(status="timeout", state_changed=True, detail="combat_basic_policy timed out")
+        except STS2Error as exc:
+            self._cache_stale = True
+            self._available_actions_cache = None
+            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                return ActionResult(status="timeout", state_changed=True, detail=exc.message)
+            return ActionResult(status="failure", state_changed=True, detail=exc.message)
+
+    def _start_new_run_sync(self) -> ActionResult:
+        """Execute the semantic new-run flow across menu sub-screens."""
+        try:
+            state = self._get_state_sync()
+            if getattr(state, "singleplayer_submenu", None) is None:
+                raw = self._run_cli("new_run")
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._poll_state_after_new_run()
+
+            if getattr(state, "singleplayer_submenu", None) is not None:
+                raw = self._run_cli("choose_game_mode", "standard")
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+
+            return ActionResult(status="success", state_changed=True)
+        except STS2Error as exc:
+            self._cache_stale = True
+            self._available_actions_cache = None
+            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
+            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+
+    def _poll_state_after_new_run(self) -> GameState:
+        deadline = time.monotonic() + min(self.timeout, 5.0)
+        state = self._get_state_sync()
+        while (
+            state.screen == GameScreen.MAIN_MENU
+            and getattr(state, "singleplayer_submenu", None) is None
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.2)
+            self._cache_stale = True
+            self._available_actions_cache = None
+            state = self._get_state_sync()
+        return state
+
     def _wait_until_actionable_sync(self, timeout: float) -> bool:
         """Poll until health_check passes and actions are available."""
-        import time
-
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             health = self._health_check_sync()
             if health.healthy:
+                self._cache_stale = True
+                self._available_actions_cache = None
                 actions = self._get_available_actions_sync()
                 if actions:
                     return True
@@ -428,21 +551,121 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
     game's state machine; the actual available actions may vary.
     """
     _ACTIONS: dict[GameScreen, list[str]] = {
-        GameScreen.MAIN_MENU: ["new_run", "continue_run", "abandon_run", "choose_game_mode", "probe", "return_to_menu"],
+        GameScreen.MAIN_MENU: ["start_new_run", "new_run", "continue_run", "abandon_run", "choose_game_mode", "probe", "return_to_menu"],
         GameScreen.CHARACTER_SELECT: ["select_character", "set_ascension", "embark", "probe"],
-        GameScreen.MAP: ["choose_map_node", "proceed", "probe"],
-        GameScreen.COMBAT: ["play_card", "end_turn", "use_potion", "probe"],
+        GameScreen.MAP: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_map_node", "proceed", "choose_event", "advance_dialogue", "probe"],
+        GameScreen.COMBAT: ["return_to_menu", "start_new_run", "select_character", "embark", "enter_combat", "choose_map_node", "choose_event", "advance_dialogue", "combat_basic_policy", "play_card", "end_turn", "use_potion", "probe"],
         GameScreen.SHOP: ["shop_buy_card", "shop_buy_relic", "shop_buy_potion", "shop_remove_card", "probe"],
         GameScreen.REST: ["choose_rest_option", "probe"],
-        GameScreen.EVENT: ["choose_event", "advance_dialogue", "probe"],
+        GameScreen.EVENT: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "probe"],
         GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
         GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
-        GameScreen.CARD_REWARD: ["reward_choose_card", "reward_skip_card", "reward_claim", "probe"],
+        GameScreen.CARD_REWARD: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],
         GameScreen.RELIC_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
         GameScreen.GAME_OVER: ["return_to_menu", "probe"],
         GameScreen.VICTORY: ["return_to_menu", "probe"],
     }
     return _ACTIONS.get(screen, [])
+
+
+def _state_to_actions(state: GameState) -> list[str]:
+    if getattr(state, "grid_card_select", None) is not None:
+        return [
+            "return_to_menu",
+            "start_new_run",
+            "select_character",
+            "embark",
+            "grid_select_card",
+            "grid_select_skip",
+            "advance_dialogue",
+            "probe",
+        ]
+    return _screen_to_actions(state.screen)
+
+
+def _resolve_map_node_args(
+    state: GameState,
+    args: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if state.screen != GameScreen.MAP:
+        return args
+    map_payload = getattr(state, "map", None)
+    if not isinstance(map_payload, dict):
+        return args
+
+    requested = None
+    if args is not None:
+        col = args.get("col")
+        row = args.get("row")
+        if isinstance(col, int) and isinstance(row, int):
+            requested = (col, row)
+
+    travelable = map_payload.get("travelable_coords", [])
+    node_by_coord: dict[tuple[int, int], dict[str, Any]] = {}
+    for node in map_payload.get("nodes", []):
+        col = node.get("col")
+        row = node.get("row")
+        if isinstance(col, int) and isinstance(row, int):
+            node_by_coord[(col, row)] = node
+
+    travelable_coords: list[tuple[int, int]] = []
+    for coord in travelable:
+        if not isinstance(coord, dict):
+            continue
+        col = coord.get("col")
+        row = coord.get("row")
+        if isinstance(col, int) and isinstance(row, int):
+            travelable_coords.append((col, row))
+
+    if requested in travelable_coords and requested in node_by_coord:
+        return args
+
+    for coord in travelable_coords:
+        node = node_by_coord.get(coord, {})
+        if str(node.get("type", "")).upper() == "MONSTER":
+            return {"col": coord[0], "row": coord[1]}
+
+    if travelable_coords:
+        first = travelable_coords[0]
+        return {"col": first[0], "row": first[1]}
+    return args
+
+
+def _choose_basic_combat_card(combat: dict[str, Any]) -> dict[str, Any] | None:
+    hand = combat.get("hand", [])
+    if not isinstance(hand, list):
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    for preferred_type in ("Attack", "Skill"):
+        for card in hand:
+            if (
+                isinstance(card, dict)
+                and card.get("can_play", True)
+                and str(card.get("type", "")) == preferred_type
+                and card.get("id")
+            ):
+                candidates.append(card)
+        if candidates:
+            break
+
+    if not candidates:
+        return None
+
+    card = candidates[0]
+    args: dict[str, Any] = {"card_id": str(card["id"])}
+    if str(card.get("target_type", "")) == "AnyEnemy":
+        enemies = combat.get("enemies", [])
+        if isinstance(enemies, list):
+            for enemy in enemies:
+                if (
+                    isinstance(enemy, dict)
+                    and enemy.get("is_alive")
+                    and isinstance(enemy.get("combat_id"), int)
+                ):
+                    args["target"] = enemy["combat_id"]
+                    break
+    return args
 
 
 _POSITIONAL_ARG_KEYS: dict[str, tuple[str, ...]] = {

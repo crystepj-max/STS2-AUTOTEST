@@ -24,6 +24,7 @@ from sts2_autotest.dsl.assertions import (
     set_hp,
     set_seed,
     start_game,
+    start_new_run,
 )
 
 
@@ -111,6 +112,44 @@ class TestFluentBuilder:
         assert result.status == "pass"
         assert orch.adapter.act.call_count == 1
 
+    def test_neow_event_start_state_accepts_already_resolved_map(
+        self, orch: TestOrchestrator
+    ) -> None:
+        loop = asyncio.new_event_loop()
+        builder = define("TC-NEOW-ALREADY-RESOLVED", orch, loop).require_start_state(
+            "- 已进入新 run\n- 当前位于开局事件界面，且事件可交互"
+        )
+        failures = builder._check_start_state(loop)
+        loop.close()
+        assert failures == []
+
+    def test_neow_event_start_state_accepts_already_resolved_combat(
+        self, orch: TestOrchestrator
+    ) -> None:
+        orch.adapter.get_state.side_effect = None
+        orch.adapter.get_state.return_value = GameState(screen=GameScreen.COMBAT)
+        loop = asyncio.new_event_loop()
+        builder = define("TC-NEOW-ALREADY-IN-COMBAT", orch, loop).require_start_state(
+            "- 已进入新 run\n- 当前位于开局事件界面，且事件可交互"
+        )
+        failures = builder._check_start_state(loop)
+        loop.close()
+        assert failures == []
+
+    def test_map_node_start_state_accepts_already_entered_combat(
+        self, orch: TestOrchestrator
+    ) -> None:
+        orch.adapter.get_state.side_effect = None
+        orch.adapter.get_state.return_value = GameState(screen=GameScreen.COMBAT)
+        orch.adapter.get_available_actions.return_value = ["play_card", "end_turn"]
+        loop = asyncio.new_event_loop()
+        builder = define("TC-FIRST-BATTLE-ALREADY-IN-COMBAT", orch, loop).require_start_state(
+            "- 当前位于地图界面\n- 存在至少一个可到达的普通战斗节点"
+        )
+        failures = builder._check_start_state(loop)
+        loop.close()
+        assert failures == []
+
     def test_assert_that_without_loop_creates_temporary_loop(
         self, orch: TestOrchestrator
     ) -> None:
@@ -176,6 +215,10 @@ class TestSetupFunctions:
     def test_start_game(self) -> None:
         d = start_game()
         assert d.action_type == "start_game"
+
+    def test_start_new_run_uses_semantic_action_name(self) -> None:
+        d = start_new_run()
+        assert d.action_type == "start_new_run"
 
     def test_enter_combat(self) -> None:
         d = enter_combat("JawWorm")

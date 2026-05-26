@@ -125,6 +125,22 @@ class TestGetState:
         assert result.screen == GameScreen.UNKNOWN
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_grid_card_select_maps_to_event(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "GRID_CARD_SELECT"})
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.EVENT
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_reward_maps_to_card_reward(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        mock_popen.return_value = _mock_popen_ok({"screen": "REWARD"})
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.CARD_REWARD
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_cached_on_second_call(self, mock_popen: MagicMock, adapter: CliModAdapter) -> None:
         mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
         _run(adapter.get_state())
@@ -166,6 +182,22 @@ class TestGetAvailableActions:
         result = _run(adapter.get_available_actions())
         assert result == []
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_actions_from_grid_card_select(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        mock_popen.return_value = _mock_popen_ok({
+            "screen": "GRID_CARD_SELECT",
+            "grid_card_select": {"cards": [{"card_id": "STRIKE_IRONCLAD"}]},
+        })
+        result = _run(adapter.get_available_actions())
+        assert "return_to_menu" in result
+        assert "start_new_run" in result
+        assert "select_character" in result
+        assert "embark" in result
+        assert "grid_select_card" in result
+        assert "advance_dialogue" in result
+
 
 class TestAct:
     """act() tests."""
@@ -200,6 +232,201 @@ class TestAct:
         result = _run(adapter.act("slow_action"))
         assert result.status == "timeout"
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_start_new_run_selects_standard_from_submenu(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        mock_popen.side_effect = [
+            _mock_popen_ok({"screen": "MENU"}),
+            _mock_popen_ok({}),
+            _mock_popen_ok({
+                "screen": "SINGLEPLAYER_SUBMENU",
+                "singleplayer_submenu": {"standard_available": True},
+            }),
+            _mock_popen_ok({}),
+        ]
+
+        result = _run(adapter.act("start_new_run"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "state"],
+            ["sts2", "new_run"],
+            ["sts2", "state"],
+            ["sts2", "choose_game_mode", "standard"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_start_new_run_continues_from_existing_submenu(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(
+            screen=GameScreen.MAIN_MENU,
+            singleplayer_submenu={"standard_available": True},
+        )
+        adapter._cache_stale = False
+        mock_popen.return_value = _mock_popen_ok({})
+
+        result = _run(adapter.act("start_new_run"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [["sts2", "choose_game_mode", "standard"]]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_setup_actions_are_noops_after_new_run_started(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.EVENT)
+        adapter._cache_stale = False
+
+        for action in ("return_to_menu", "start_new_run", "select_character", "embark"):
+            result = _run(adapter.act(action))
+            assert result.status == "success"
+
+        mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_is_noop_when_event_choice_is_pending(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            event={"is_in_dialogue": False, "options": [{"index": 0}]},
+        )
+        adapter._cache_stale = False
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_selects_first_grid_card(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            grid_card_select={"cards": [{"card_id": "STRIKE_IRONCLAD"}]},
+        )
+        adapter._cache_stale = False
+        mock_popen.return_value = _mock_popen_ok({})
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [["sts2", "grid_select_card", "STRIKE_IRONCLAD"]]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_is_noop_on_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.MAP)
+        adapter._cache_stale = False
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_is_noop_in_combat(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.COMBAT)
+        adapter._cache_stale = False
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_event_is_noop_on_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.MAP)
+        adapter._cache_stale = False
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_event_is_noop_in_combat(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.COMBAT)
+        adapter._cache_stale = False
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_falls_back_to_travelable_monster(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(
+            screen=GameScreen.MAP,
+            map={
+                "travelable_coords": [{"col": 3, "row": 0}],
+                "nodes": [
+                    {"col": 3, "row": 0, "type": "MONSTER", "state": "TRAVELABLE"}
+                ],
+            },
+        )
+        adapter._cache_stale = False
+        mock_popen.return_value = _mock_popen_ok({})
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [["sts2", "choose_map_node", "3", "0"]]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_skip_card_reward_maps_to_reward_skip_card(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.CARD_REWARD)
+        adapter._cache_stale = False
+        mock_popen.return_value = _mock_popen_ok({})
+
+        result = _run(adapter.act("skip_card_reward"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [["sts2", "reward_skip_card", "--type", "card"]]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_is_noop_in_combat(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.COMBAT)
+        adapter._cache_stale = False
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_enter_combat_is_noop_in_combat(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.COMBAT)
+        adapter._cache_stale = False
+
+        result = _run(adapter.act("enter_combat"))
+
+        assert result.status == "success"
+        mock_popen.assert_not_called()
+
 
 class TestWaitUntilActionable:
     """wait_until_actionable() tests."""
@@ -209,6 +436,24 @@ class TestWaitUntilActionable:
         mock_popen.return_value = _mock_popen_ok({"screen": "MENU"})
         result = _run(adapter.wait_until_actionable(timeout=5.0))
         assert result is True
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_wait_until_actionable_refreshes_cached_actions(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(screen=GameScreen.MAIN_MENU)
+        adapter._cache_stale = False
+        adapter._available_actions_cache = ["new_run"]
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),
+            _mock_popen_ok({"screen": "CHARACTER_SELECT"}),
+        ]
+
+        assert _run(adapter.wait_until_actionable(timeout=5.0)) is True
+
+        actions = _run(adapter.get_available_actions())
+        assert "select_character" in actions
+        assert "new_run" not in actions
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_returns_false_on_timeout(self, mock_popen: MagicMock) -> None:

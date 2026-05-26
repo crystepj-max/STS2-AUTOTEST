@@ -155,6 +155,15 @@ class FluentBuilder:
         if (
             requirements.allowed_screens
             and state.screen not in requirements.allowed_screens
+            and not _is_recoverable_reward_start(
+                self._start_state_text,
+                state.screen,
+            )
+            and not _is_already_finished_first_battle_allowed_start(
+                self._start_state_text,
+                requirements.allowed_screens,
+                state.screen,
+            )
         ):
             allowed = ", ".join(screen.value for screen in requirements.allowed_screens)
             failures.append(
@@ -163,7 +172,20 @@ class FluentBuilder:
                 f"allowed screens=[{allowed}], "
                 f"raw Start State: {self._start_state_text!r}"
             )
-        elif requirements.screen is not None and state.screen != requirements.screen:
+        elif (
+            requirements.screen is not None
+            and state.screen != requirements.screen
+            and not _is_already_resolved_neow_start(
+                self._start_state_text,
+                requirements.screen,
+                state.screen,
+            )
+            and not _is_already_finished_first_battle_start(
+                self._start_state_text,
+                requirements.screen,
+                state.screen,
+            )
+        ):
             failures.append(
                 "start state is not satisfied: "
                 f"current screen={state.screen.value}, "
@@ -171,7 +193,11 @@ class FluentBuilder:
                 f"raw Start State: {self._start_state_text!r}"
             )
 
-        if requirements.needs_travelable_node and "choose_map_node" not in available:
+        if (
+            requirements.needs_travelable_node
+            and state.screen not in {GameScreen.COMBAT, GameScreen.CARD_REWARD}
+            and "choose_map_node" not in available
+        ):
             failures.append(
                 "start state is not satisfied: "
                 "spec requires a reachable map node, "
@@ -265,6 +291,52 @@ def _parse_start_state_requirements(text: str) -> StartStateRequirements:
         screen=screen,
         allowed_screens=allowed_screens,
         needs_travelable_node=needs_travelable_node,
+    )
+
+
+def _is_already_resolved_neow_start(
+    text: str,
+    required_screen: GameScreen,
+    current_screen: GameScreen,
+) -> bool:
+    return (
+        required_screen == GameScreen.EVENT
+        and current_screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}
+        and "\u5f00\u5c40\u4e8b\u4ef6" in text
+        and "\u5df2\u8fdb\u5165\u65b0 run" in text
+    )
+
+
+def _is_already_finished_first_battle_start(
+    text: str,
+    required_screen: GameScreen,
+    current_screen: GameScreen,
+) -> bool:
+    return (
+        required_screen == GameScreen.MAP
+        and current_screen == GameScreen.CARD_REWARD
+        and "\u5730\u56fe\u754c\u9762" in text
+        and "\u666e\u901a\u6218\u6597\u8282\u70b9" in text
+    )
+
+
+def _is_recoverable_reward_start(text: str, current_screen: GameScreen) -> bool:
+    return (
+        current_screen == GameScreen.CARD_REWARD
+        and "\u4efb\u610f\u53ef\u6062\u590d\u72b6\u6001" in text
+    )
+
+
+def _is_already_finished_first_battle_allowed_start(
+    text: str,
+    allowed_screens: tuple[GameScreen, ...],
+    current_screen: GameScreen,
+) -> bool:
+    return (
+        current_screen == GameScreen.CARD_REWARD
+        and GameScreen.MAP in allowed_screens
+        and GameScreen.COMBAT in allowed_screens
+        and "\u666e\u901a\u6218\u6597\u8282\u70b9" in text
     )
 
 

@@ -90,6 +90,52 @@ class TestCLICommands:
         result = run_cmd(args)
         assert result == 1
 
+    def test_run_all_pipeline_targets_suite_files_when_suites_exist(
+        self, tmp_path: Path
+    ) -> None:
+        spec_dir = tmp_path / "specs"
+        spec_dir.mkdir()
+        (spec_dir / "SUITE-FIRST-BATTLE-SMOKE.md").write_text(
+            """\
+# SUITE-FIRST-BATTLE-SMOKE 首次战斗冒烟
+
+## Metadata
+- id: SUITE-FIRST-BATTLE-SMOKE
+- level: suite
+
+## Includes
+1. TC-PREPARE-NEW-RUN
+""",
+            encoding="utf-8",
+        )
+        output_dir = tmp_path / "generated"
+
+        args = _create_parser().parse_args(
+            [
+                "run",
+                "--all",
+                "--spec-dir",
+                str(spec_dir),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+
+        with (
+            patch("sts2_autotest.cli.main._get_progress_path") as mock_progress,
+            patch("sts2_autotest.cli.main._create_adapter"),
+            patch("sts2_autotest.cli.main.review_cmd", return_value=0),
+            patch("sts2_autotest.cli.main.compile_cmd", return_value=0),
+            patch("subprocess.call", return_value=0) as mock_pytest,
+        ):
+            mock_progress.return_value = tmp_path / "progress.json"
+
+            assert run_cmd(args) == 0
+
+        command = mock_pytest.call_args.args[0]
+        assert str(output_dir / "test_suite_first_battle_smoke.py") in command
+        assert str(output_dir) not in command
+
     def test_doctor_returns_zero_or_one(self) -> None:
         args = _create_parser().parse_args(["doctor"])
         result = doctor_cmd(args)

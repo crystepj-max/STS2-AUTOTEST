@@ -536,6 +536,26 @@ def compile_cmd(args: Any) -> int:
     return 0
 
 
+def _suite_test_path(output_dir: str, suite_id: str) -> str:
+    file_name = f"test_{suite_id.lower().replace('-', '_')}.py"
+    return str(Path(output_dir) / file_name)
+
+
+def _pytest_targets_for_compiled_specs(spec_dir: str, output_dir: str) -> list[str]:
+    """Return pytest targets for compiled pipeline runs.
+
+    Suites with sequential shared sessions own their included cases, so pipeline
+    mode runs suite files when any suite specs exist. This avoids also running
+    state-dependent included cases as independent pytest tests.
+    """
+    from sts2_autotest.core.markdown_parser import MarkdownParser
+
+    _, suites = MarkdownParser().discover_specs(spec_dir)
+    if suites:
+        return [_suite_test_path(output_dir, suite.id) for suite in suites]
+    return [output_dir]
+
+
 def _dispatch_orchestrator(
     adapter: GameAdapterProtocol | None,
     case_ids: list[str],
@@ -674,7 +694,13 @@ def run_cmd(args: Any) -> int:
                 return 1
             print("[autotest] Running compiled tests with pytest...")
             import subprocess as _sp
-            rc = _sp.call([sys.executable, "-m", "pytest", output_dir, "-v", "--tb=short"])
+            pytest_targets = _pytest_targets_for_compiled_specs(
+                pipeline_spec_dir,
+                output_dir,
+            )
+            rc = _sp.call(
+                [sys.executable, "-m", "pytest", *pytest_targets, "-v", "--tb=short"]
+            )
             return rc
         print("[autotest] Running all cases (no spec pipeline)...")
         return _dispatch_orchestrator(

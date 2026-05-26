@@ -19,6 +19,11 @@ class TestTransitionValidation:
             GameScreen.MAIN_MENU, GameScreen.CHARACTER_SELECT
         ) is True
 
+    def test_character_select_can_enter_neow_event(self, engine: StateEngine) -> None:
+        assert engine.validate_transition(
+            GameScreen.CHARACTER_SELECT, GameScreen.EVENT
+        ) is True
+
     def test_illegal_transition(self, engine: StateEngine) -> None:
         assert engine.validate_transition(
             GameScreen.MAIN_MENU, GameScreen.COMBAT
