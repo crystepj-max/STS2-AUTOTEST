@@ -85,7 +85,9 @@ async def _handle_ready(
             "message": f"Readiness check failed: {exc}",
         })
 
-    ready = checks.get("sts2_cli_mod", {}).get("status") == "OK"
+    cli_found = checks.get("sts2_cli_mod", {}).get("status") == "OK"
+    cli_ok = checks.get("sts2_cli_version", {}).get("status") == "OK"
+    ready = cli_found and cli_ok
     return _json_response(
         _HTML_200 if ready else _HTML_503,
         {
@@ -93,7 +95,7 @@ async def _handle_ready(
             "ready": ready,
             "checks": {
                 "sts2_cli_mod": checks.get("sts2_cli_mod", {}),
-                "game_installed": checks.get("game_installed", {}),
+                "sts2_cli_version": checks.get("sts2_cli_version", {}),
             },
         },
     )

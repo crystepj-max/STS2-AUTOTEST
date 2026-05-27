@@ -21,6 +21,7 @@ def _mock_check_env_ok() -> dict[str, dict[str, str]]:
     return {
         "python": {"status": "OK", "message": "3.14.3"},
         "sts2_cli_mod": {"status": "OK", "message": "sts2.exe"},
+        "sts2_cli_version": {"status": "OK", "message": "0.1.0"},
         "game_installed": {"status": "OK", "message": "SlayTheSpire2.exe"},
     }
 
@@ -29,6 +30,7 @@ def _mock_check_env_degraded() -> dict[str, dict[str, str]]:
     return {
         "python": {"status": "OK", "message": "3.14.3"},
         "sts2_cli_mod": {"status": "NOT_FOUND", "message": "sts2 CLI not found"},
+        "sts2_cli_version": {"status": "NOT_FOUND", "message": "unknown version"},
         "game_installed": {"status": "NOT_FOUND", "message": "Game not found"},
     }
 

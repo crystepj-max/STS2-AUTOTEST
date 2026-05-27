@@ -136,6 +136,16 @@ class SteamController:
             self._terminate_process(
                 self._steam_pid, self.steam_process_name, "Steam", deadline
             )
+        # Close the Job Object handle to trigger KILL_ON_JOB_CLOSE as
+        # a safety net for any orphaned child processes (B15).
+        if self._job_handle is not None:
+            import ctypes
+            try:
+                kernel32 = ctypes.windll.kernel32
+                kernel32.CloseHandle(self._job_handle)
+            except (AttributeError, OSError):
+                pass
+            self._job_handle = None
 
     # ── Job Object (B15 / Story 4.8) ───────────────────────
 
@@ -158,26 +168,31 @@ class SteamController:
                 logger.warning("CreateJobObjectW failed (error %d)", kernel32.GetLastError())
                 return None
 
-            # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-            # https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/ns-jobapi2-jobobject_extended_limit_information
-            class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            # JOBOBJECT_BASIC_LIMIT_INFORMATION (Win32)
+            # https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/ns-jobapi2-jobobject_basic_limit_information
+            class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
                 _fields_ = [
-                    ("BasicLimitInformation", ctypes.c_ulong * 4),
-                    ("IoInfo", ctypes.c_ulong * 4),
-                    ("ProcessLimitInformation", ctypes.c_ulong * 2),
-                    ("JobMemoryLimit", ctypes.c_size_t),
-                    ("PeakJobMemoryUsed", ctypes.c_size_t),
+                    ("PerProcessUserTimeLimit", ctypes.c_int64),    # LARGE_INTEGER
+                    ("PerJobUserTimeLimit", ctypes.c_int64),       # LARGE_INTEGER
+                    ("LimitFlags", ctypes.c_uint32),               # DWORD
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),    # SIZE_T
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),    # SIZE_T
+                    ("ActiveProcessLimit", ctypes.c_uint32),       # DWORD
+                    ("Affinity", ctypes.c_size_t),                 # ULONG_PTR
+                    ("ChildProcessRestrictions", ctypes.c_uint32), # DWORD
+                    ("Reserved", ctypes.c_uint32 * 2),            # DWORD[2]
                 ]
 
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 
-            info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-            info.BasicLimitInformation[0] = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            info = JOBOBJECT_BASIC_LIMIT_INFORMATION()
+            info.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 
-            # SetInformationJobObject(job, JobObjectExtendedLimitInformation, info, size)
+            # SetInformationJobObject(job, JobObjectBasicLimitInformation, info, size)
+            # Info class 2 = JobObjectBasicLimitInformation
             rc = kernel32.SetInformationJobObject(
                 job,
-                9,  # JobObjectExtendedLimitInformation
+                2,
                 ctypes.byref(info),
                 ctypes.sizeof(info),
             )

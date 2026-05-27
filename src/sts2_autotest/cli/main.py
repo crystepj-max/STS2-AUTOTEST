@@ -96,6 +96,12 @@ def _create_parser() -> Any:
 
     sub.add_parser("progress", help="Show saved runtime progress")
 
+    # autotest serve (B17)
+    serve_parser = sub.add_parser("serve", help="Start health check HTTP server (B17)")
+    serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
+    serve_parser.add_argument("--port", type=int, default=8766, help="Bind port")
+    serve_parser.set_defaults(func=serve_cmd)
+
     return p
 
 
