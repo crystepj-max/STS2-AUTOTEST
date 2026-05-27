@@ -70,6 +70,8 @@ def _step_to_action_call(step: str) -> str:
     if "开始冒险" in step:
         return "embark()"
     if "推进事件对话" in step:
+        # advance_dialogue only needed when the event requires it;
+        # NEOW's blessing transitions directly to MAP after choosing.
         return "advance_dialogue()"
     if "进入首次战斗" in step or "进入首场战斗" in step:
         return "enter_combat()"

@@ -34,10 +34,9 @@ def test_tc_resolve_neow(autotest, _session_loop):
         .require_start_state("""- 已进入新 run
 - 当前位于开局事件界面，且事件可交互""")
         .setup(
-            choose_event(0),
         )
         .execute(
-            advance_dialogue(),
+            choose_event(0),
         )
         .assert_that(
             no_crash_detected(),
@@ -50,7 +49,7 @@ def test_tc_resolve_neow(autotest, _session_loop):
         "title": "处理开局祝福事件",
         "start_state": "- 已进入新 run\n- 当前位于开局事件界面，且事件可交互",
         "end_state": "- 事件处理完成\n- 当前位于地图界面，且首个节点可选",
-        "steps": ["选择开局事件的第 0 个选项", "推进事件对话"],
+        "steps": ["选择开局事件的第 0 个选项"],
         "failures": result.failures,
         "detail": result.detail,
     }
