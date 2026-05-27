@@ -24,6 +24,11 @@ class TestTransitionValidation:
             GameScreen.CHARACTER_SELECT, GameScreen.EVENT
         ) is True
 
+    def test_event_can_enter_combat_after_recovery_action(
+        self, engine: StateEngine
+    ) -> None:
+        assert engine.validate_transition(GameScreen.EVENT, GameScreen.COMBAT) is True
+
     def test_illegal_transition(self, engine: StateEngine) -> None:
         assert engine.validate_transition(
             GameScreen.MAIN_MENU, GameScreen.COMBAT

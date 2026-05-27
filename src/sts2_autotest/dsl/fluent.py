@@ -164,6 +164,12 @@ class FluentBuilder:
                 requirements.allowed_screens,
                 state.screen,
             )
+            and not _is_pending_event_before_first_battle_start(
+                self._start_state_text,
+                requirements.allowed_screens,
+                None,
+                state.screen,
+            )
         ):
             allowed = ", ".join(screen.value for screen in requirements.allowed_screens)
             failures.append(
@@ -185,6 +191,12 @@ class FluentBuilder:
                 requirements.screen,
                 state.screen,
             )
+            and not _is_pending_event_before_first_battle_start(
+                self._start_state_text,
+                (),
+                requirements.screen,
+                state.screen,
+            )
         ):
             failures.append(
                 "start state is not satisfied: "
@@ -196,6 +208,12 @@ class FluentBuilder:
         if (
             requirements.needs_travelable_node
             and state.screen not in {GameScreen.COMBAT, GameScreen.CARD_REWARD}
+            and not _is_pending_event_before_first_battle_start(
+                self._start_state_text,
+                requirements.allowed_screens,
+                requirements.screen,
+                state.screen,
+            )
             and "choose_map_node" not in available
         ):
             failures.append(
@@ -338,6 +356,26 @@ def _is_already_finished_first_battle_allowed_start(
         and GameScreen.COMBAT in allowed_screens
         and "\u666e\u901a\u6218\u6597\u8282\u70b9" in text
     )
+
+
+def _is_pending_event_before_first_battle_start(
+    text: str,
+    allowed_screens: tuple[GameScreen, ...],
+    required_screen: GameScreen | None,
+    current_screen: GameScreen,
+) -> bool:
+    expects_first_battle_map = (
+        "\u5730\u56fe\u754c\u9762" in text
+        and "\u666e\u901a\u6218\u6597\u8282\u70b9" in text
+        and (
+            required_screen == GameScreen.MAP
+            or (
+                GameScreen.MAP in allowed_screens
+                and GameScreen.COMBAT in allowed_screens
+            )
+        )
+    )
+    return current_screen == GameScreen.EVENT and expects_first_battle_map
 
 
 def define(

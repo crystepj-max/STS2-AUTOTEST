@@ -58,7 +58,7 @@ _ALLOWED_TRANSITIONS: dict[GameScreen, frozenset[GameScreen]] = {
     }),
     GameScreen.SHOP: frozenset({GameScreen.MAP}),
     GameScreen.REST: frozenset({GameScreen.MAP}),
-    GameScreen.EVENT: frozenset({GameScreen.MAP}),
+    GameScreen.EVENT: frozenset({GameScreen.MAP, GameScreen.COMBAT}),
     GameScreen.CHEST: frozenset({GameScreen.MAP}),
     GameScreen.CARD_REWARD: frozenset({GameScreen.MAP}),
     GameScreen.RELIC_REWARD: frozenset({GameScreen.MAP}),

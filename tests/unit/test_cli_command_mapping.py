@@ -136,6 +136,7 @@ class TestScreenToActions:
         assert "embark" in actions
         assert "choose_event" in actions
         assert "advance_dialogue" in actions
+        assert "choose_map_node" in actions
 
     def test_chest_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.CHEST)

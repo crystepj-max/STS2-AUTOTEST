@@ -390,6 +390,46 @@ class TestAct:
         assert commands == [["sts2", "choose_map_node", "3", "0"]]
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_advances_pending_event_before_map_choice(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            event={"is_in_dialogue": False, "options": [{"index": 0}]},
+        )
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),
+            _mock_popen_ok(
+                {
+                    "screen": "MAP",
+                    "map": {
+                        "travelable_coords": [{"col": 3, "row": 0}],
+                        "nodes": [
+                            {
+                                "col": 3,
+                                "row": 0,
+                                "type": "MONSTER",
+                                "state": "TRAVELABLE",
+                            }
+                        ],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),
+        ]
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+            ["sts2", "choose_map_node", "3", "0"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_skip_card_reward_maps_to_reward_skip_card(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:

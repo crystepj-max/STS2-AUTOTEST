@@ -198,8 +198,8 @@ class SteamController:
                     ("MaximumWorkingSetSize", ctypes.c_size_t),
                     ("ActiveProcessLimit", ctypes.c_uint32),
                     ("Affinity", ctypes.c_size_t),
-                    ("ChildProcessRestrictions", ctypes.c_uint32),
-                    ("Reserved", ctypes.c_uint32 * 2),
+                    ("PriorityClass", ctypes.c_uint32),
+                    ("SchedulingClass", ctypes.c_uint32),
                 ]
 
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000

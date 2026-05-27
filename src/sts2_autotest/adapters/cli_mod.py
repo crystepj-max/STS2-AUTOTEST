@@ -354,6 +354,23 @@ class CliModAdapter:
         if action == "choose_map_node" and self._cached_state is not None:
             if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return ActionResult(status="success", state_changed=False)
+            if self._cached_state.screen == GameScreen.EVENT:
+                try:
+                    event_result = self._advance_event_until_map_sync()
+                except STS2Error as exc:
+                    self._cache_stale = True
+                    self._available_actions_cache = None
+                    if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                        return ActionResult(status="timeout", state_changed=True, detail=exc.message)
+                    return ActionResult(status="failure", state_changed=True, detail=exc.message)
+                if event_result.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+                    return ActionResult(status="success", state_changed=True)
+                if event_result.screen != GameScreen.MAP:
+                    return ActionResult(
+                        status="failure",
+                        state_changed=True,
+                        detail=f"Expected MAP after event progression, got {event_result.screen.value}",
+                    )
             args = _resolve_map_node_args(self._cached_state, args)
         if action == "enter_combat" and self._cached_state is not None:
             if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
@@ -462,6 +479,23 @@ class CliModAdapter:
             state = self._get_state_sync()
         return state
 
+    def _advance_event_until_map_sync(self) -> GameState:
+        deadline = time.monotonic() + min(self.timeout, 20.0)
+        state = self._cached_state or self._get_state_sync()
+        while time.monotonic() < deadline:
+            if state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+                return state
+            if state.screen != GameScreen.EVENT:
+                return state
+
+            raw = self._run_cli(*_event_progress_cli_args(state))
+            self._parse_response(raw)
+            self._cache_stale = True
+            self._available_actions_cache = None
+            state = self._get_state_sync()
+
+        return state
+
     def _wait_until_actionable_sync(self, timeout: float) -> bool:
         """Poll until health_check passes and actions are available."""
         deadline = time.monotonic() + timeout
@@ -557,7 +591,7 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
         GameScreen.COMBAT: ["return_to_menu", "start_new_run", "select_character", "embark", "enter_combat", "choose_map_node", "choose_event", "advance_dialogue", "combat_basic_policy", "play_card", "end_turn", "use_potion", "probe"],
         GameScreen.SHOP: ["shop_buy_card", "shop_buy_relic", "shop_buy_potion", "shop_remove_card", "probe"],
         GameScreen.REST: ["choose_rest_option", "probe"],
-        GameScreen.EVENT: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "probe"],
+        GameScreen.EVENT: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
         GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
         GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
         GameScreen.CARD_REWARD: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],
@@ -575,6 +609,7 @@ def _state_to_actions(state: GameState) -> list[str]:
             "start_new_run",
             "select_character",
             "embark",
+            "choose_map_node",
             "grid_select_card",
             "grid_select_skip",
             "advance_dialogue",
@@ -629,6 +664,30 @@ def _resolve_map_node_args(
         first = travelable_coords[0]
         return {"col": first[0], "row": first[1]}
     return args
+
+
+def _event_progress_cli_args(state: GameState) -> list[str]:
+    grid = getattr(state, "grid_card_select", {})
+    if isinstance(grid, dict):
+        cards = grid.get("cards", [])
+        if cards:
+            first = cards[0]
+            if isinstance(first, dict) and first.get("card_id"):
+                return ["grid_select_card", str(first["card_id"])]
+
+    event = getattr(state, "event", {})
+    if (
+        isinstance(event, dict)
+        and event.get("options")
+        and not event.get("is_in_dialogue", False)
+    ):
+        first_option = event["options"][0]
+        index = 0
+        if isinstance(first_option, dict) and isinstance(first_option.get("index"), int):
+            index = first_option["index"]
+        return ["choose_event", str(index)]
+
+    return ["advance_dialogue"]
 
 
 def _choose_basic_combat_card(combat: dict[str, Any]) -> dict[str, Any] | None:

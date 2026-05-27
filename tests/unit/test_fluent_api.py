@@ -150,6 +150,23 @@ class TestFluentBuilder:
         loop.close()
         assert failures == []
 
+    def test_first_battle_start_state_accepts_pending_event(
+        self, orch: TestOrchestrator
+    ) -> None:
+        orch.adapter.get_state.side_effect = None
+        orch.adapter.get_state.return_value = GameState(screen=GameScreen.EVENT)
+        orch.adapter.get_available_actions.return_value = [
+            "choose_event",
+            "advance_dialogue",
+        ]
+        loop = asyncio.new_event_loop()
+        builder = define("TC-FIRST-BATTLE-PENDING-EVENT", orch, loop).require_start_state(
+            "- 当前位于地图界面\n- 存在至少一个可到达的普通战斗节点"
+        )
+        failures = builder._check_start_state(loop)
+        loop.close()
+        assert failures == []
+
     def test_assert_that_without_loop_creates_temporary_loop(
         self, orch: TestOrchestrator
     ) -> None:
