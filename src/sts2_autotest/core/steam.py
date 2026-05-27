@@ -160,64 +160,98 @@ class SteamController:
         if not self._IS_WINDOWS:
             return None
         import ctypes
+        from ctypes import wintypes
         try:
             kernel32 = ctypes.windll.kernel32
-            # CreateJobObjectW(NULL, name) — name=None creates unnamed
+
+            # Declare Win32 API signatures. HANDLE is void* (8 bytes on
+            # x64); default c_int (4 bytes) truncates the handle.
+            kernel32.CreateJobObjectW.argtypes = [
+                wintypes.LPCVOID,
+                wintypes.LPCWSTR,
+            ]
+            kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+
+            kernel32.SetInformationJobObject.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_int,
+                wintypes.LPCVOID,
+                ctypes.c_ulong,
+            ]
+            kernel32.SetInformationJobObject.restype = wintypes.BOOL
+
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
+            # CreateJobObjectW(NULL, NULL) - unnamed job, default security
             job = kernel32.CreateJobObjectW(None, None)
             if not job:
                 logger.warning("CreateJobObjectW failed (error %d)", kernel32.GetLastError())
                 return None
 
-            # JOBOBJECT_BASIC_LIMIT_INFORMATION (Win32)
-            # https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/ns-jobapi2-jobobject_basic_limit_information
-            class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            class _BASIC_LIMIT(ctypes.Structure):
                 _fields_ = [
-                    ("PerProcessUserTimeLimit", ctypes.c_int64),    # LARGE_INTEGER
-                    ("PerJobUserTimeLimit", ctypes.c_int64),       # LARGE_INTEGER
-                    ("LimitFlags", ctypes.c_uint32),               # DWORD
-                    ("MinimumWorkingSetSize", ctypes.c_size_t),    # SIZE_T
-                    ("MaximumWorkingSetSize", ctypes.c_size_t),    # SIZE_T
-                    ("ActiveProcessLimit", ctypes.c_uint32),       # DWORD
-                    ("Affinity", ctypes.c_size_t),                 # ULONG_PTR
-                    ("ChildProcessRestrictions", ctypes.c_uint32), # DWORD
-                    ("Reserved", ctypes.c_uint32 * 2),            # DWORD[2]
+                    ("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", ctypes.c_uint32),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", ctypes.c_uint32),
+                    ("Affinity", ctypes.c_size_t),
+                    ("ChildProcessRestrictions", ctypes.c_uint32),
+                    ("Reserved", ctypes.c_uint32 * 2),
                 ]
 
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 
-            info = JOBOBJECT_BASIC_LIMIT_INFORMATION()
+            info = _BASIC_LIMIT()
             info.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 
-            # SetInformationJobObject(job, JobObjectBasicLimitInformation, info, size)
-            # Info class 2 = JobObjectBasicLimitInformation
             rc = kernel32.SetInformationJobObject(
-                job,
-                2,
-                ctypes.byref(info),
-                ctypes.sizeof(info),
+                job, 2, ctypes.byref(info), ctypes.sizeof(info),
             )
             if not rc:
+                err = kernel32.GetLastError()
                 kernel32.CloseHandle(job)
-                logger.warning("SetInformationJobObject failed (error %d)", kernel32.GetLastError())
+                logger.warning(
+                    "SetInformationJobObject failed (error %d) -- job sandbox disabled", err,
+                )
                 return None
 
             logger.info("Job object created (KILL_ON_JOB_CLOSE)")
             return job
-        except (AttributeError, OSError) as exc:
+        except (AttributeError, OSError, ImportError) as exc:
             logger.warning("Failed to create job object: %s", exc)
             return None
-
     def _assign_to_job(self, pid: int) -> None:
         """Assign a process to the job object for sandboxing."""
         if self._job_handle is None:
             return
         import ctypes
+        from ctypes import wintypes
         try:
             kernel32 = ctypes.windll.kernel32
-            # OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, pid)
+
+            kernel32.OpenProcess.argtypes = [
+                ctypes.c_ulong,
+                wintypes.BOOL,
+                ctypes.c_ulong,
+            ]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+
+            kernel32.AssignProcessToJobObject.argtypes = [
+                wintypes.HANDLE,
+                wintypes.HANDLE,
+            ]
+            kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+
             PROCESS_SET_QUOTA = 0x0100
             PROCESS_TERMINATE = 0x0001
             ACCESS = PROCESS_SET_QUOTA | PROCESS_TERMINATE
+
             proc_handle = kernel32.OpenProcess(ACCESS, False, pid)
             if not proc_handle:
                 logger.warning("OpenProcess(%d) failed (error %d)", pid, kernel32.GetLastError())
@@ -227,10 +261,13 @@ class SteamController:
                 if rc:
                     logger.info("Assigned PID %d to job object", pid)
                 else:
-                    logger.warning("AssignProcessToJobObject(%d) failed (error %d)", pid, kernel32.GetLastError())
+                    logger.warning(
+                        "AssignProcessToJobObject(%d) failed (error %d)",
+                        pid, kernel32.GetLastError(),
+                    )
             finally:
                 kernel32.CloseHandle(proc_handle)
-        except (AttributeError, OSError) as exc:
+        except (AttributeError, OSError, ImportError) as exc:
             logger.warning("Failed to assign PID %d to job: %s", pid, exc)
 
     # ── internals ───────────────────────────────────────────

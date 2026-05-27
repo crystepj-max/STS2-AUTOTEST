@@ -1055,6 +1055,8 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(queue_cmd(args))
     elif args.command == "progress":
         sys.exit(progress_cmd(args))
+    elif args.command == "serve":
+        sys.exit(serve_cmd(args))
     else:
         parser.print_help()
         sys.exit(1)
