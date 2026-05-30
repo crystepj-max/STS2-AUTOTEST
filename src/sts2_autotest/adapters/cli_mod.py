@@ -378,8 +378,26 @@ class CliModAdapter:
         if action == "combat_basic_policy":
             return self._combat_basic_policy_sync()
         if action == "skip_card_reward":
-            action = "reward_skip_card"
-            args = {"type": "card", **(args or {})}
+            if self._cached_state is not None and self._cached_state.screen != GameScreen.CARD_REWARD:
+                return ActionResult(status="success", state_changed=False)
+            # Try skipping card reward; if no cards, fall back to proceed
+            try:
+                raw = self._run_cli("reward_skip_card")
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                return ActionResult(status="success", state_changed=True)
+            except STS2Error:
+                try:
+                    raw = self._run_cli("proceed")
+                    self._parse_response(raw)
+                    self._cache_stale = True
+                    self._available_actions_cache = None
+                    return ActionResult(status="success", state_changed=True)
+                except STS2Error as exc:
+                    self._cache_stale = True
+                    self._available_actions_cache = None
+                    return ActionResult(status="failure", state_changed=False, detail=exc.message)
         if action == "return_to_menu" and self._cached_state is not None:
             try:
                 cur = self._get_state_sync()
@@ -406,6 +424,7 @@ class CliModAdapter:
     def _combat_basic_policy_sync(self) -> ActionResult:
         deadline = time.monotonic() + min(self.timeout, 60.0)
         steps = 0
+        consecutive_play_failures = 0
         try:
             while time.monotonic() < deadline and steps < 80:
                 self._cache_stale = True
@@ -424,10 +443,20 @@ class CliModAdapter:
 
                 play_args = _choose_basic_combat_card(combat)
                 if play_args is not None:
-                    raw = self._run_cli(*_build_cli_args("play_card", play_args))
+                    try:
+                        raw = self._run_cli(*_build_cli_args("play_card", play_args))
+                        self._parse_response(raw)
+                        consecutive_play_failures = 0
+                    except STS2Error:
+                        consecutive_play_failures += 1
+                        if consecutive_play_failures >= 3:
+                            raw = self._run_cli("end_turn")
+                            self._parse_response(raw)
+                            consecutive_play_failures = 0
                 else:
                     raw = self._run_cli("end_turn")
-                self._parse_response(raw)
+                    self._parse_response(raw)
+                    consecutive_play_failures = 0
                 self._cache_stale = True
                 self._available_actions_cache = None
                 steps += 1
@@ -445,8 +474,19 @@ class CliModAdapter:
         try:
             state = self._get_state_sync()
             if getattr(state, "singleplayer_submenu", None) is None:
-                raw = self._run_cli("new_run")
-                self._parse_response(raw)
+                try:
+                    raw = self._run_cli("new_run")
+                    self._parse_response(raw)
+                except STS2Error as exc:
+                    if "saved run" in (exc.message or "").lower() or "abandon" in (exc.message or "").lower():
+                        raw = self._run_cli("abandon_run")
+                        self._parse_response(raw)
+                        self._cache_stale = True
+                        self._available_actions_cache = None
+                        raw = self._run_cli("new_run")
+                        self._parse_response(raw)
+                    else:
+                        raise
                 self._cache_stale = True
                 self._available_actions_cache = None
                 state = self._poll_state_after_new_run()

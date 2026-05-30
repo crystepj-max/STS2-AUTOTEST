@@ -8,9 +8,10 @@ FR44 (security sandbox) reserved via _create_job_object /
 _assign_to_job stubs — full implementation in Epic 4 Beta.
 """
 
+import platform
 import subprocess
 import time
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, cast
 
 import psutil
@@ -19,8 +20,16 @@ from sts2_autotest.common.logging import get_logger
 
 logger = get_logger("core.steam")
 
-_STEAM_EXE = "steam.exe"
-_GAME_EXE = "SlayTheSpire2.exe"
+_IS_MACOS = platform.system() == "Darwin"
+_IS_WINDOWS = platform.system() == "Windows"
+
+if _IS_MACOS:
+    _STEAM_EXE = "steam_osx"
+    _GAME_EXE = "Slay the Spire 2"
+else:
+    _STEAM_EXE = "steam.exe"
+    _GAME_EXE = "SlayTheSpire2.exe"
+
 _DEFAULT_APP_ID = "2868840"
 
 
@@ -42,7 +51,7 @@ class SteamController:
         game_dir: str | None = None,
     ) -> None:
         self.steam_exe = steam_exe
-        self.steam_process_name = PureWindowsPath(steam_exe).name
+        self.steam_process_name = _exe_basename(steam_exe)
         self.game_exe = game_exe
         self.app_id = app_id
         self.startup_timeout = startup_timeout
@@ -54,13 +63,28 @@ class SteamController:
     # ── public API ──────────────────────────────────────────
 
     def start_steam(self) -> int:
-        """Launch Steam and return its PID."""
+        """Launch Steam and return its PID.
+
+        On macOS, ``open -a Steam`` spawns a transient helper whose PID
+        is not the real ``steam_osx`` process.  We poll for the actual
+        Steam process after launch so that ``_steam_pid`` is usable for
+        subsequent alive-checks and termination.
+        """
         if self.is_process_alive(self._steam_pid, self.steam_process_name):
             logger.info("Steam is already running (PID %s)", self._steam_pid)
             return self._steam_pid  # type: ignore[return-value]
         logger.info("Starting Steam...")
-        proc = subprocess.Popen([self.steam_exe])
-        self._steam_pid = proc.pid
+        if _IS_MACOS:
+            subprocess.Popen(["open", "-a", "Steam"])
+            pid = self._poll_for_process(self.steam_process_name, timeout=15.0)
+            if pid is None:
+                raise RuntimeError(
+                    f"Steam was launched but {self.steam_process_name} did not appear within 15s"
+                )
+            self._steam_pid = pid
+        else:
+            proc = subprocess.Popen([self.steam_exe])
+            self._steam_pid = proc.pid
         logger.info("Steam started (PID %s)", self._steam_pid)
         return self._steam_pid
 
@@ -68,7 +92,10 @@ class SteamController:
         """Launch the game via Steam and return its PID."""
         logger.info("Starting game (app %s)...", self.app_id)
         existing_pids = self._find_game_pids()
-        subprocess.Popen([self.steam_exe, "-applaunch", self.app_id])
+        if _IS_MACOS:
+            subprocess.Popen(["open", f"steam://run/{self.app_id}"])
+        else:
+            subprocess.Popen([self.steam_exe, "-applaunch", self.app_id])
         # Wait for game process to appear.
         start = time.monotonic()
         while time.monotonic() - start < self.startup_timeout:
@@ -272,9 +299,28 @@ class SteamController:
 
     # ── internals ───────────────────────────────────────────
 
+    # psutil errors that are safe to skip during process scanning
+    _SCAN_ERRORS = (psutil.NoSuchProcess, psutil.AccessDenied, PermissionError)
+
+    @staticmethod
+    def _poll_for_process(name: str, timeout: float = 10.0) -> int | None:
+        """Scan process list until a process matching *name* appears."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    if SteamController._same_process_name(
+                        cast(str | None, proc.info["name"]), name
+                    ):
+                        return cast(int, proc.info["pid"])
+                except SteamController._SCAN_ERRORS:
+                    continue
+            time.sleep(0.5)
+        return None
+
     @staticmethod
     def _same_process_name(actual: str | None, expected: str) -> bool:
-        return (actual or "").casefold() == PureWindowsPath(expected).name.casefold()
+        return (actual or "").casefold() == _exe_basename(expected).casefold()
 
     def _find_game_pids(self) -> set[int]:
         """Return all currently running game process PIDs."""
@@ -283,7 +329,7 @@ class SteamController:
             try:
                 if self._same_process_name(cast(str | None, proc.info["name"]), self.game_exe):
                     pids.add(cast(int, proc.info["pid"]))
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except self._SCAN_ERRORS:
                 continue
         return pids
 
@@ -297,7 +343,7 @@ class SteamController:
                     cast(str | None, proc.info["name"]), self.game_exe
                 ):
                     return pid
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+            except self._SCAN_ERRORS:
                 continue
         return None
 
@@ -307,7 +353,15 @@ class SteamController:
         game_path = self._resolve_game_path(game_dir)
         self._ensure_steam_appid(game_dir)
         logger.info("Starting game directly from %s", game_path)
-        subprocess.Popen([str(game_path)], cwd=str(game_dir), shell=False)
+        if _IS_MACOS:
+            # macOS: launch .app bundle via open
+            app_bundle = game_dir / "SlayTheSpire2.app"
+            if app_bundle.is_dir():
+                subprocess.Popen(["open", str(app_bundle)])
+            else:
+                subprocess.Popen([str(game_path)])
+        else:
+            subprocess.Popen([str(game_path)], cwd=str(game_dir), shell=False)
         start = time.monotonic()
         while time.monotonic() - start < self.startup_timeout:
             pid = self._find_game_pid(exclude_pids=existing_pids)
@@ -392,3 +446,9 @@ class SteamController:
         if deadline is None:
             return fallback
         return max(0.0, min(fallback, deadline - time.monotonic()))
+
+
+def _exe_basename(exe: str) -> str:
+    """Extract the basename of an executable path, handling both platforms."""
+    # Handle both / and \ separators for cross-platform test compatibility
+    return exe.replace("\\", "/").rsplit("/", 1)[-1]

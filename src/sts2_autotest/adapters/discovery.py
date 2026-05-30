@@ -45,13 +45,14 @@ def discover_sts2_cli() -> str | None:
 
 
 def _common_paths() -> list[Path]:
-    """Generate common STS2-Cli-Mod installation paths on Windows."""
+    """Generate common STS2-Cli-Mod installation paths."""
     paths: list[Path] = []
 
     # User profile level
     try:
         home = Path.home()
         paths.extend([
+            home / ".local" / "bin" / "sts2",
             home / ".sts2-cli-mod" / "sts2.exe",
             home / "AppData" / "Local" / "STS2-Cli-Mod" / "sts2.exe",
             home / "AppData" / "Local" / "Programs" / "STS2-Cli-Mod" / "sts2.exe",
@@ -64,6 +65,7 @@ def _common_paths() -> list[Path]:
         game_dir = steam_root / "steamapps" / "common" / "Slay the Spire 2"
         paths.extend([
             game_dir / "sts2.exe",
+            game_dir / "sts2",
             game_dir / "Mods" / "STS2-Cli-Mod" / "sts2.exe",
         ])
         # Workshop mod location
@@ -77,7 +79,7 @@ def _common_paths() -> list[Path]:
             except OSError:
                 logger.warning("Cannot read workshop directory: %s", workshop)
 
-    # Program Files level
+    # Program Files level (Windows)
     for pf in [Path("C:/Program Files"), Path("C:/Program Files (x86)")]:
         paths.append(pf / "STS2-Cli-Mod" / "sts2.exe")
 
@@ -94,7 +96,7 @@ def _steam_roots() -> list[Path]:
         if p.is_dir():
             roots.append(p)
 
-    # Linux/macOS Steam
+    # Linux Steam
     try:
         linux_steam = Path.home() / ".steam" / "steam"
         if linux_steam.is_dir():
@@ -102,22 +104,35 @@ def _steam_roots() -> list[Path]:
     except RuntimeError:
         pass
 
+    # macOS Steam
+    try:
+        macos_steam = Path.home() / "Library" / "Application Support" / "Steam"
+        if macos_steam.is_dir():
+            roots.append(macos_steam)
+    except RuntimeError:
+        pass
+
     # Check Steam library folders via libraryfolders.vdf
-    vdf_path = Path("C:/Program Files (x86)/Steam/steamapps/libraryfolders.vdf")
-    if vdf_path.exists():
-        try:
-            content = vdf_path.read_text(encoding="utf-8", errors="ignore")
-            for line in content.splitlines():
-                line = line.strip()
-                if '"path"' in line:
-                    start = line.find('"', line.find('"path"') + 6)
-                    end = line.rfind('"')
-                    if start > 0 and end > start:
-                        lib_path = Path(line[start + 1:end].replace("\\\\", "/"))
-                        if lib_path.is_dir():
-                            roots.append(lib_path)
-        except OSError:
-            pass
+    for vdf_candidate in [
+        Path("C:/Program Files (x86)/Steam/steamapps/libraryfolders.vdf"),
+        Path.home() / "Library" / "Application Support" / "Steam" / "steamapps" / "libraryfolders.vdf",
+        Path.home() / ".steam" / "steam" / "steamapps" / "libraryfolders.vdf",
+    ]:
+        if vdf_candidate.exists():
+            try:
+                content = vdf_candidate.read_text(encoding="utf-8", errors="ignore")
+                for line in content.splitlines():
+                    line = line.strip()
+                    if '"path"' in line:
+                        start = line.find('"', line.find('"path"') + 6)
+                        end = line.rfind('"')
+                        if start > 0 and end > start:
+                            lib_path = Path(line[start + 1:end].replace("\\\\", "/"))
+                            if lib_path.is_dir():
+                                roots.append(lib_path)
+            except OSError:
+                pass
+            break
 
     return roots
 

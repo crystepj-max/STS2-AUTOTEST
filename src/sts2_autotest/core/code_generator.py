@@ -217,7 +217,8 @@ class CodeGenerator:
         lines: list[str] = [f"def test_{func_name}(autotest, _session_loop):"]
         lines.append(f'    """{suite.title}"""')
         if suite.goal:
-            lines.append(f"    # Goal: {suite.goal}")
+            for goal_line in suite.goal.split("\n"):
+                lines.append(f"    # Goal: {goal_line}")
         lines.append(f"    # Execution mode: {suite.execution_mode}")
         for assertion in suite.suite_assertions:
             lines.append(f"    # Suite assertion: {assertion}")

@@ -441,7 +441,7 @@ class TestAct:
 
         assert result.status == "success"
         commands = [call.args[0] for call in mock_popen.call_args_list]
-        assert commands == [["sts2", "reward_skip_card", "--type", "card"]]
+        assert commands == [["sts2", "reward_skip_card"]]
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_choose_map_node_is_noop_in_combat(

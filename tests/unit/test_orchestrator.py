@@ -27,8 +27,8 @@ def _run(coro: Any) -> Any:
 
 def _make_mock_adapter(
     healthy: bool = True,
-    screen: GameScreen = GameScreen.MAP,
-    post_action_screen: GameScreen = GameScreen.COMBAT,
+    screen: GameScreen = GameScreen.MAIN_MENU,
+    post_action_screen: GameScreen = GameScreen.MAP,
     actions: list[str] | None = None,
     act_result: ActionResult | None = None,
 ) -> Any:
@@ -706,3 +706,66 @@ class TestLockIntegration:
         orch = TestOrchestrator(adapter=mock)  # No lock_path
         result = _run(orch.start_session())
         assert result is True
+
+
+class TestAutoReset:
+    """Auto-reset behavior when session starts from a non-MAIN_MENU state."""
+
+    def test_auto_reset_from_map_with_steam_returns_false(self) -> None:
+        """MAP state triggers hard reset; without a running game it fails → False."""
+        import itertools
+        states = itertools.cycle([GameState(screen=GameScreen.MAP)])
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.side_effect = lambda: next(states)
+        mock.get_available_actions.return_value = ["probe"]
+
+        orch = TestOrchestrator(adapter=mock)
+
+        with patch.object(orch, "_auto_reset_to_main_menu"):
+            # Simulate auto-reset failing (still MAP after reset)
+            result = _run(orch.start_session())
+
+        assert result is False
+
+    def test_auto_reset_success_returns_true(self) -> None:
+        """Auto-reset reaches MAIN_MENU → session starts successfully."""
+        call_count = 0
+
+        def state_factory() -> GameState:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                return GameState(screen=GameScreen.MAP)
+            return GameState(screen=GameScreen.MAIN_MENU)
+
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.side_effect = state_factory
+        mock.get_available_actions.return_value = ["probe"]
+        mock.wait_until_actionable.return_value = True
+
+        orch = TestOrchestrator(adapter=mock)
+        result = _run(orch.start_session())
+        assert result is True
+        assert orch._session_active is True
+
+    def test_auto_reset_combat_skips_soft_nav(self) -> None:
+        """COMBAT state skips soft navigation and goes directly to hard reset."""
+        states = [GameState(screen=GameScreen.COMBAT)] * 10
+        idx = 0
+
+        def state_factory() -> GameState:
+            nonlocal idx
+            s = states[min(idx, len(states) - 1)]
+            idx += 1
+            return s
+
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.side_effect = state_factory
+        mock.get_available_actions.return_value = ["probe"]
+
+        orch = TestOrchestrator(adapter=mock)
+        result = _run(orch.start_session())
+        assert result is False

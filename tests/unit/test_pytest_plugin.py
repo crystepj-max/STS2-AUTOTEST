@@ -66,8 +66,8 @@ class TestPytestPlugin:
 
         message = _session_init_error_message()
 
-        assert "steam.exe -applaunch 2868840" in message
-        assert "sts2.exe ping" in message
+        assert "2868840" in message
+        assert "sts2" in message and "ping" in message
 
     def test_bootstrap_runtime_starts_steam_and_game(self, monkeypatch) -> None:
         from sts2_autotest.pytest_plugin import fixtures as fixtures_module

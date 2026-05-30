@@ -25,6 +25,7 @@ from sts2_autotest.core.recovery import (
     crash_signature,
     is_p0_exception,
 )
+from sts2_autotest.core.steam import SteamController
 from sts2_autotest.core.state_engine import StateEngine, StateTransitionError
 from sts2_autotest.core.watchdog import Watchdog
 
@@ -90,6 +91,7 @@ class TestOrchestrator:
         self.recovery = recovery or DefaultRecoveryStrategy(
             adapter_factory=adapter_factory,
             game_startup_timeout=game_startup_timeout,
+            steam_controller=SteamController(),
         )
         self.evidence = evidence or StubEvidenceHooks()
         self._max_consecutive_failures = max_consecutive_failures
@@ -154,6 +156,133 @@ class TestOrchestrator:
             return self._last_valid_state
         # No cached state available — return the invalid state anyway
         return state
+
+    async def _auto_reset_to_main_menu(self) -> None:
+        """Attempt to reset the game to MAIN_MENU regardless of current state.
+
+        Phase 1: Soft navigation — try return_to_menu first, then screen-specific actions.
+        Phase 2: If stuck (e.g. MAP during active run), kill and restart the game.
+        """
+        # Phase 1: soft navigation
+        for attempt in range(5):
+            try:
+                state = await self.adapter.get_state()
+            except STS2Error:
+                return
+
+            screen = state.screen
+            if screen == GameScreen.MAIN_MENU:
+                try:
+                    await self.adapter.act("abandon_run")
+                except Exception:
+                    pass
+                return
+
+            # MAP during an active run cannot soft-navigate to MAIN_MENU;
+            # skip directly to hard reset to avoid wasting time in loops.
+            if screen in {GameScreen.MAP, GameScreen.COMBAT}:
+                break
+
+            try:
+                actions = await self.adapter.get_available_actions()
+
+                # Always try return_to_menu first if available
+                if "return_to_menu" in actions:
+                    await self.adapter.act("return_to_menu")
+                    await asyncio.sleep(1)
+                    continue
+
+                if screen == GameScreen.CHARACTER_SELECT:
+                    await self.adapter.act("select_character", {"character_id": "IRONCLAD"})
+                    await asyncio.sleep(0.5)
+                    await self.adapter.act("embark")
+                    await asyncio.sleep(2)
+                elif screen == GameScreen.EVENT:
+                    event = getattr(state, "event", None)
+                    if isinstance(event, dict):
+                        proceed_idx = None
+                        for opt in event.get("options", []):
+                            if isinstance(opt, dict) and opt.get("is_proceed"):
+                                proceed_idx = opt.get("index", 0)
+                                break
+                        if proceed_idx is not None:
+                            await self.adapter.act("choose_event", {"index": proceed_idx})
+                        else:
+                            await self.adapter.act("choose_event", {"index": 0})
+                    else:
+                        await self.adapter.act("advance_dialogue")
+                    await asyncio.sleep(1)
+                elif screen == GameScreen.CARD_REWARD:
+                    try:
+                        await self.adapter.act("reward_claim", {"type": "gold"})
+                    except Exception:
+                        pass
+                    for _ in range(5):
+                        try:
+                            await self.adapter.act("skip_card_reward")
+                        except Exception:
+                            break
+                        await asyncio.sleep(0.5)
+                    try:
+                        await self.adapter.act("proceed")
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+                elif screen in {
+                    GameScreen.RELIC_REWARD, GameScreen.SHOP, GameScreen.REST,
+                    GameScreen.CHEST, GameScreen.BOSS_REWARD,
+                }:
+                    if "proceed" in actions:
+                        await self.adapter.act("proceed")
+                    elif "combat_basic_policy" in actions:
+                        await self.adapter.act("combat_basic_policy")
+                    await asyncio.sleep(1)
+                else:
+                    break
+            except Exception:
+                await asyncio.sleep(1)
+
+        # Phase 2: hard reset — kill and restart the game
+        try:
+            state = await self.adapter.get_state()
+        except STS2Error:
+            return
+        if state.screen == GameScreen.MAIN_MENU:
+            try:
+                await self.adapter.act("abandon_run")
+            except Exception:
+                pass
+            return
+
+        logger.info("Soft navigation failed — restarting game process")
+        steam = getattr(self.recovery, "_steam_controller", None)
+        if steam is not None:
+            try:
+                import psutil
+                for proc in psutil.process_iter(["pid", "name"]):
+                    try:
+                        name = proc.info.get("name") or ""
+                        if steam.game_exe.lower().replace(" ", "") in name.lower().replace(" ", ""):
+                            proc.kill()
+                            logger.info("Killed game process PID %s", proc.pid)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                await asyncio.sleep(3)
+                steam.start_game()
+                for _ in range(30):
+                    await asyncio.sleep(2)
+                    try:
+                        state = await self.adapter.get_state()
+                        if state.screen == GameScreen.MAIN_MENU:
+                            try:
+                                await self.adapter.act("abandon_run")
+                            except Exception:
+                                pass
+                            return
+                    except STS2Error:
+                        continue
+            except Exception as exc:
+                logger.warning("Game restart failed: %s", exc)
 
     async def _record_adapter_result(self, success: bool) -> None:
         """Track adapter call success/failure for degradation detection."""
@@ -247,12 +376,23 @@ class TestOrchestrator:
             self._release_lock_if_held()
             return False
 
-        # Checkpoint 3: main menu reachable
+        # Checkpoint 3: ensure clean starting state
         if state.screen != GameScreen.MAIN_MENU:
             logger.warning(
-                "Not at MAIN_MENU (currently %s) — proceeding anyway (MVP)",
+                "Not at MAIN_MENU (currently %s) — attempting auto-reset",
                 state.screen.value,
             )
+            await self._auto_reset_to_main_menu()
+            state = await self._get_state_validated()
+            if state.screen == GameScreen.MAIN_MENU:
+                logger.info("Auto-reset succeeded — now at MAIN_MENU")
+            else:
+                logger.error(
+                    "Auto-reset did not reach MAIN_MENU (currently %s) — aborting session",
+                    state.screen.value,
+                )
+                self._release_lock_if_held()
+                return False
 
         # Checkpoint 4: game is actionable
         await self.wait_until_actionable(timeout=self._game_startup_timeout)
