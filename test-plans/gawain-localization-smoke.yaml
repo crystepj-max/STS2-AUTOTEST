@@ -1,0 +1,121 @@
+task_id: gawain-localization-key-fix
+name: Gawain Localization Smoke Test
+repo: ../STS2-GAWAIN
+branch: feature/gawain-localization-key-fix
+
+protocols:
+  - ../sts2-dev-infra/agent-protocol/AGENT_CONTRACT.md
+  - ../sts2-dev-infra/agent-protocol/ROLE_TESTER.md
+  - ../sts2-dev-infra/agent-protocol/QUALITY_GATES.md
+  - ../sts2-dev-infra/agent-protocol/ARTIFACT_TEST_REPORT.md
+
+environment:
+  game: Slay the Spire 2
+  launch_method: steam
+  steam_app_id: 2868840
+  automation_backend: STS2-Cli-Mod
+  require_game_running: true
+
+inputs:
+  mod_project: ../STS2-GAWAIN
+  task_file: ../STS2-GAWAIN/tasks/gawain-localization-key-fix.task.yaml
+  report_output: ../STS2-GAWAIN/.agent-runs/gawain-localization-key-fix/test-report.md
+
+checks:
+  - id: build
+    name: Build Gawain mod
+    required: true
+    evidence:
+      - build_log
+
+  - id: localization_check
+    name: Check localization completeness
+    required: true
+    command: python ../sts2-dev-infra/scripts/check-localization.py --project ../STS2-GAWAIN
+    evidence:
+      - localization_check_log
+
+  - id: deploy_mod
+    name: Deploy mod to STS2 mods directory
+    required: true
+    evidence:
+      - deploy_log
+
+  - id: launch_game
+    name: Launch Slay the Spire 2
+    required: true
+    evidence:
+      - launch_log
+
+  - id: wait_automation_backend
+    name: Wait for STS2-Cli-Mod ping
+    required: true
+    command: sts2 ping
+    evidence:
+      - cli_log
+
+  - id: mod_load
+    name: Confirm Gawain mod loaded
+    required: true
+    evidence:
+      - game_log
+      - screenshot
+
+  - id: character_visible
+    name: Confirm Gawain character visible
+    required: true
+    evidence:
+      - screenshot
+      - state_json
+
+  - id: starter_cards_text_visible
+    name: Confirm starter card text visible
+    required: true
+    evidence:
+      - screenshot
+      - state_json
+      - game_log
+
+  - id: starter_relic_text_visible
+    name: Confirm starter relic text visible
+    required: true
+    evidence:
+      - screenshot
+      - state_json
+      - game_log
+
+  - id: no_raw_keys
+    name: Confirm no raw localization keys are visible or logged
+    required: true
+    fail_patterns:
+      - "GAWAIN_"
+      - "MISSING"
+      - "missing localization"
+      - "KeyNotFound"
+    evidence:
+      - game_log
+      - screenshot
+
+  - id: first_combat_smoke
+    name: Enter first combat and play one Gawain card
+    required: true
+    evidence:
+      - state_json
+      - cli_log
+      - game_log
+
+result_rules:
+  passed: all required checks passed with evidence
+  failed: any required check fails, raw key appears, missing localization appears, crash occurs, or first combat interaction fails
+  blocked: game not installed, automation backend unavailable, Steam launch blocked, or environment path missing
+
+artifacts:
+  - build_log
+  - localization_check_log
+  - deploy_log
+  - launch_log
+  - cli_log
+  - game_log
+  - screenshots
+  - state_snapshots
+  - test_report
