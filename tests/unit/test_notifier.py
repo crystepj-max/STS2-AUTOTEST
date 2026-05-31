@@ -51,10 +51,11 @@ class TestCreateDesktopNotifier:
 
     def test_returns_stub_on_unknown_platform(self) -> None:
         """create_desktop_notifier should return StubNotifier on unsupported platforms."""
-        from sts2_autotest.core.notifier import create_desktop_notifier
+        from sts2_autotest.core.notifier import StubNotifier, create_desktop_notifier
 
         with mock.patch("platform.system", return_value="FreeBSD"):
             notifier = create_desktop_notifier()
+            assert isinstance(notifier, StubNotifier)
             # StubNotifier should not raise on notify
             notifier.notify("t", "m", "info")
 
@@ -141,27 +142,35 @@ class TestWindowsNotifier:
         return windll
 
     def test_notify_info_sets_info_flag(self) -> None:
-        """notify(info) should use NIIF_INFO flag (0x1)."""
+        """notify(info) should use NIM_ADD (create notification icon) with NIIF_INFO flag."""
         from sts2_autotest.core.notifier import WindowsNotifier
 
         notifier = WindowsNotifier()
         windll = self._build_windll_mock()
         with mock.patch("ctypes.windll", windll, create=True):
             notifier.notify("Title", "Message", "info")
-            windll.shell32.Shell_NotifyIconW.assert_called_once()
+            calls = windll.shell32.Shell_NotifyIconW.call_args_list
+            # First call: NIM_ADD (0x00000000)
+            assert calls[0][0][0] == 0
+            # Second call: NIM_DELETE (0x00000002)
+            assert calls[1][0][0] == 2
 
     def test_notify_warning_sets_warning_flag(self) -> None:
-        """notify(warning) should use NIIF_WARNING flag (0x2)."""
+        """notify(warning) should use NIM_ADD (create notification icon) with NIIF_WARNING flag."""
         from sts2_autotest.core.notifier import WindowsNotifier
 
         notifier = WindowsNotifier()
         windll = self._build_windll_mock()
         with mock.patch("ctypes.windll", windll, create=True):
             notifier.notify("T", "M", "warning")
-            windll.shell32.Shell_NotifyIconW.assert_called_once()
+            calls = windll.shell32.Shell_NotifyIconW.call_args_list
+            # First call: NIM_ADD (0x00000000)
+            assert calls[0][0][0] == 0
+            # Second call: NIM_DELETE (0x00000002)
+            assert calls[1][0][0] == 2
 
     def test_notify_no_console_window_does_not_raise(self) -> None:
-        """notify should handle GetConsoleWindow returning NULL gracefully."""
+        """notify should log debug, not raise, when GetConsoleWindow returns NULL."""
         from sts2_autotest.core.notifier import WindowsNotifier
 
         notifier = WindowsNotifier()

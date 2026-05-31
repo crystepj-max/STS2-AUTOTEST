@@ -34,6 +34,9 @@ class MacOSNotifier:
     """Send notifications via macOS Notification Center using osascript."""
 
     def notify(self, title: str, message: str, level: str) -> None:
+        if level not in ("info", "warning"):
+            _logger.warning("Unknown notification level %r; defaulting to 'info'", level)
+            level = "info"
         script = _build_osascript(title, message, level)
         try:
             subprocess.run(
@@ -48,9 +51,9 @@ class MacOSNotifier:
 
 def _build_osascript(title: str, message: str, level: str) -> str:
     """Build an AppleScript display notification command."""
-    # Escape double quotes in title/message
-    safe_title = title.replace('"', '\\"')
-    safe_message = message.replace('"', '\\"')
+    # Escape backslashes, double quotes, and newlines in title/message
+    safe_title = title.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+    safe_message = message.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
     parts = [f'display notification "{safe_message}" with title "{safe_title}"']
     if level == "warning":
         parts.append("with icon caution")
@@ -69,11 +72,17 @@ class WindowsNotifier:
         import ctypes
         from ctypes import wintypes
 
+        # Validate level
+        if level not in ("info", "warning"):
+            _logger.warning("Unknown notification level %r; defaulting to 'info'", level)
+            level = "info"
+
         # Flags
         NIIF_INFO = 0x00000001
         NIIF_WARNING = 0x00000002
         NIF_INFO = 0x00000010
-        NIM_MODIFY = 0x00000001
+        NIM_ADD = 0x00000000
+        NIM_DELETE = 0x00000002
 
         class NOTIFYICONDATAW(ctypes.Structure):
             _fields_ = [
@@ -92,7 +101,7 @@ class WindowsNotifier:
                 ("dwInfoFlags", wintypes.DWORD),
             ]
 
-        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()  # type: ignore[attr-defined]
         if not hwnd:
             _logger.debug("No console window handle; skipping notification")
             return
@@ -108,7 +117,8 @@ class WindowsNotifier:
         nid.dwInfoFlags = flags
 
         try:
-            ctypes.windll.shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
+            ctypes.windll.shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))  # type: ignore[attr-defined]
+            ctypes.windll.shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))  # type: ignore[attr-defined]
         except OSError as exc:
             _logger.warning("Windows notification failed: %s", exc)
 
@@ -126,8 +136,8 @@ def create_desktop_notifier() -> DesktopNotifier:
     """
     system = platform.system()
     if system == "Windows":
-        return WindowsNotifier()  # type: ignore[return-value]
+        return WindowsNotifier()
     if system == "Darwin":
-        return MacOSNotifier()  # type: ignore[return-value]
+        return MacOSNotifier()
     _logger.debug("No native notifier for platform %s; using stub", system)
-    return StubNotifier()  # type: ignore[return-value]
+    return StubNotifier()
