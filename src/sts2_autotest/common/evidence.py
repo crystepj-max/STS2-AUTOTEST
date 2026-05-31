@@ -1,5 +1,7 @@
 """Evidence pack data models for STS2-AUTOTEST (PRD FR23, FR64)."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -58,8 +60,8 @@ class RepairSuggestion(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    confidence: float
-    category: str  # code_fix | config_change | env_fix | investigation_needed
+    confidence: float = Field(ge=0.0, le=1.0)
+    category: Literal["code_fix", "config_change", "env_fix", "investigation_needed"]
     title: str
     description: str
     source_location: str | None = None
