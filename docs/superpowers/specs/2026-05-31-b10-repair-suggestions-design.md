@@ -231,16 +231,18 @@ B10 之后 `EvidencePackager` 生成的包：
 
 ```
 pack_dir/
-  summary.json                    ← 已有，新增 repair_report 字段
-  summary.md                      ← 已有，新增修复建议章节
+  summary.json                    ← 已有，新增 repair_report 字段（RepairReport 内嵌序列化）
+  summary.md                      ← 已有（修复建议章节留待未来迭代，见第 9 节）
   screenshot.png                  ← 已有
   session.log                     ← 已有
   reports/
     junit.xml                     ← 已有
     scene-coverage.json           ← 已有
     scene-coverage.md             ← 已有
-    repair_suggestions.json       ← 新增：RepairReport 的 JSON 序列化
+    repair_suggestions.json       ← 新增：RepairReport 的独立 JSON 文件，与 summary.json 内嵌字段内容相同
 ```
+
+**`repair_suggestions.json` 与 `summary.json` 的关系：** `repair_suggestions.json` 是独立的可读文件（放在 `reports/`，方便 CI 和 AI Agent 直接读取），同时 `summary.json` 也内嵌一份 `RepairReport`（通过 `repair_report` 字段），便于以 pack 为单位整体加载。两份内容相同，一主一副——`summary.json` 是权威源。
 
 ## 7. 测试策略
 
