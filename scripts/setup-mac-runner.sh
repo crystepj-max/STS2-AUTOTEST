@@ -58,10 +58,10 @@ echo "Got registration token"
     --replace
 
 # --- Step 4: 写入环境变量 ---
-cat > "$RUNNER_DIR/.env" << 'EOF'
+cat > "$RUNNER_DIR/.env" << EOF
 STS2_WORKSPACE=$HOME/STS2-WORKSPACE
-STS2_GAME_DIR=$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2
-STS2_MODS_DIR=$STS2_GAME_DIR/Mods
+STS2_GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2"
+STS2_MODS_DIR="\$STS2_GAME_DIR/Mods"
 GODOT_PATH=/Applications/Godot.app
 EOF
 
@@ -100,8 +100,6 @@ cat > "$PLIST" << EOF
 </plist>
 EOF
 
-launchctl load "$PLIST"
-echo "=== Runner installed. Starting... ==="
-launchctl start com.sts2.autotest-runner
+launchctl load -w "$PLIST" 2>/dev/null || true
 
 echo "=== Done! Runner should appear in: https://github.com/$REPO/settings/actions/runners ==="
