@@ -629,3 +629,42 @@ class TestArtifactExport:
             pkgr.write_scene_coverage_report("missing", {})
 
         assert not (tmp_path / "missing").exists()
+
+
+# ── B10 repair suggestions integration ────────────────────────
+
+
+class TestPackagerB10:
+    """Smoke tests: EvidencePackager.create_pack() generates repair_suggestions.json (B10)."""
+
+    def test_create_pack_generates_repair_suggestions(self, tmp_path: Path) -> None:
+        import json
+
+        evidence_dir = tmp_path / "evidence"
+        pkgr = EvidencePackager(evidence_dir)
+        failure = FailureInfo(
+            type="crash_error",
+            message="游戏崩溃",
+            stack_trace='File "/app/mod.py", line 42, in foo\n    bar()',
+        )
+        pack_dir = pkgr.create_pack(
+            "b10_test", run_result="crashed", duration_ms=0, failure=failure,
+        )
+        repair_path = pack_dir / "reports" / "repair_suggestions.json"
+        assert repair_path.is_file()
+        data = json.loads(repair_path.read_text(encoding="utf-8"))
+        assert len(data["suggestions"]) >= 1
+        assert data["source"] == "rule_engine+stack_trace"
+
+    def test_create_pack_no_failure_skips_repair(self, tmp_path: Path) -> None:
+        import json
+
+        evidence_dir = tmp_path / "evidence"
+        pkgr = EvidencePackager(evidence_dir)
+        pack_dir = pkgr.create_pack("b10_pass", run_result="passed", duration_ms=100)
+        repair_path = pack_dir / "reports" / "repair_suggestions.json"
+        assert not repair_path.is_file()
+        summary_data = json.loads(
+            (pack_dir / "summary.json").read_text(encoding="utf-8"),
+        )
+        assert summary_data.get("repair_report") is None

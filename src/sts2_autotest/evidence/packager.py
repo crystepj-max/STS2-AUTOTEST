@@ -142,6 +142,25 @@ class EvidencePackager:
         # AC6: automatically generate summary.md on pack creation
         self._generate_report_for(pack_id, summary)
 
+        # B10: generate repair suggestions from failure evidence
+        try:
+            from sts2_autotest.core.repair_advisor import RepairAdvisor
+
+            advisor = RepairAdvisor()
+            report = advisor.analyze(summary)
+            if report is not None:
+                # Update summary.json with embedded repair report
+                updated = summary.model_copy(update={"repair_report": report})
+                self._write_json(summary_path, updated.model_dump(mode="json"))
+
+                # Write standalone repair_suggestions.json for CI / AI Agent consumption
+                repair_path = pack_dir / "reports" / "repair_suggestions.json"
+                self._write_json(repair_path, report.model_dump(mode="json"))
+        except Exception:
+            logger.warning(
+                "Failed to generate repair suggestions for %s", pack_id, exc_info=True,
+            )
+
         self._enforce_retention()
 
         logger.info("Evidence pack created: %s", pack_dir)
