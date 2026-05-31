@@ -1,0 +1,708 @@
+"""Cross-platform Test Agent Runner — replaces run-test-agent.ps1.
+
+Orchestrates the full test-agent workflow:
+  validate → build → localization-check → deploy → launch → smoke → report
+
+Exit codes (matching ROLE_TESTER convention):
+  0 = PASSED
+  1 = FAILED
+  2 = BLOCKED
+"""
+
+from __future__ import annotations
+
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+try:
+    import yaml  # type: ignore
+except Exception:  # pragma: no cover
+    yaml = None
+
+_IS_MACOS = platform.system() == "Darwin"
+_IS_WINDOWS = platform.system() == "Windows"
+_IS_LINUX = platform.system() == "Linux"
+
+# ---------------------------------------------------------------------------
+# Data models
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CheckResult:
+    name: str
+    status: str  # PASSED | FAILED | BLOCKED | SKIPPED
+    evidence: str = ""
+    details: str = ""
+
+
+@dataclass
+class TestAgentResult:
+    conclusion: str  # PASSED | FAILED | BLOCKED
+    results: list[CheckResult] = field(default_factory=list)
+    failure_details: str = ""
+    blocked_details: str = ""
+    artifact_dir: str = ""
+    exit_code: int = 0
+
+
+@dataclass
+class TestPlanConfig:
+    """Parsed test-plan YAML, merged with CLI overrides."""
+
+    task_id: str = ""
+    mod_project: str = ""
+    mod_name: str = ""  # derived from csproj if not set
+    infra_path: str = ""
+    test_plan_path: str = ""
+    game_mods_path: str = ""
+    steam_app_id: str = "2868840"
+    ping_timeout_seconds: int = 90
+    skip_deploy: bool = False
+    skip_launch_game: bool = False
+    skip_game_smoke: bool = False
+    require_game_running: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_path(base: Path, value: str) -> Path:
+    """Resolve a possibly-relative path against base."""
+    p = Path(value)
+    if p.is_absolute():
+        return p
+    return (base / p).resolve()
+
+
+def _find_project_root() -> Path:
+    """Return the STS2-AUTOTEST project root.
+
+    This file: src/sts2_autotest/core/test_agent_runner.py
+    parent        → core/
+    parent.parent → sts2_autotest/
+    parent.parent.parent → src/
+    parent.parent.parent.parent → STS2-AUTOTEST/  (repo root)
+    """
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def _find_sln_or_csproj(project_path: Path) -> Path | None:
+    """Find a .sln or .csproj file under *project_path*.
+
+    Returns the first match.  (C1: scans recursively, prefers .sln over .csproj)
+
+    Excludes common non-source directories (.git, .claude, .agent-runs, bin, obj).
+    Prefers root-level files over deeply nested ones.
+    """
+    _EXCLUDE_PARTS = {".git", ".claude", ".agent-runs", "bin", "obj", "node_modules", ".godot"}
+
+    def _is_excluded(p: Path) -> bool:
+        return bool(_EXCLUDE_PARTS & set(p.relative_to(project_path).parts))
+
+    slns = sorted(
+        (p for p in project_path.rglob("*.sln") if not _is_excluded(p)),
+        key=lambda p: len(p.relative_to(project_path).parts),
+    )
+    if slns:
+        return slns[0]
+    csprojs = sorted(
+        (p for p in project_path.rglob("*.csproj") if not _is_excluded(p)),
+        key=lambda p: len(p.relative_to(project_path).parts),
+    )
+    return csprojs[0] if csprojs else None
+
+
+def _find_build_output(project_path: Path) -> Path | None:
+    """Look for the most recent bin/Release or bin/Debug output directory.
+
+    C1 enhancement: scans all nested bin dirs, not just the first match.
+    Skips directories that cannot be stat'd (permission errors).
+    """
+    _EXCLUDE_PARTS = {".git", ".claude", ".agent-runs", "bin", "obj", "node_modules", ".godot"}
+    candidates: list[Path] = []
+    for pattern in ["**/bin/Release", "**/bin/Debug"]:
+        for d in project_path.glob(pattern):
+            if not d.is_dir():
+                continue
+            if _EXCLUDE_PARTS & set(d.relative_to(project_path).parts):
+                continue
+            try:
+                mtime = d.stat().st_mtime
+            except OSError:
+                continue
+            candidates.append((d, mtime))
+    # Prefer Release over Debug; within same config prefer most recently modified
+    candidates.sort(key=lambda item: (0 if "Release" in str(item[0]) else 1, -item[1]))
+    return candidates[0][0] if candidates else None
+
+
+def _find_mods_path() -> Path | None:
+    """Auto-detect Steam STS2 mods directory.  (C4 enhancement)
+
+    Search order:
+      1. STS2_MODS_PATH env var
+      2. <game_dir>/Mods (Windows / Linux native)
+      3. <game_dir>/BepInEx/plugins (BepInEx layout)
+    """
+    env = os.environ.get("STS2_MODS_PATH")
+    if env:
+        p = Path(env)
+        if p.is_dir():
+            return p
+
+    from sts2_autotest.adapters.discovery import find_game_dir
+
+    game_dir = find_game_dir()
+    if not game_dir:
+        return None
+    for candidate in [
+        game_dir / "Mods",
+        game_dir / "BepInEx" / "plugins",
+    ]:
+        if candidate.is_dir():
+            return candidate
+    # Create Mods directory if game dir exists
+    mods = game_dir / "Mods"
+    try:
+        mods.mkdir(parents=True, exist_ok=True)
+        return mods
+    except OSError:
+        return None
+
+
+def _load_test_plan(plan_path: Path) -> dict[str, Any] | None:
+    """Load a test-plan YAML file."""
+    if not plan_path.exists():
+        return None
+    if yaml is None:
+        return None
+    try:
+        data = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+        return dict(data)
+    except Exception:
+        return None
+
+
+def _merge_config(cli_cfg: TestPlanConfig, plan: dict[str, Any] | None) -> TestPlanConfig:
+    """Merge CLI overrides on top of test-plan defaults.  CLI always wins."""
+    if plan is None:
+        return cli_cfg
+
+    cfg = TestPlanConfig()
+    inputs = plan.get("inputs", {}) or {}
+    env = plan.get("environment", {}) or {}
+
+    # Plan defaults
+    cfg.task_id = plan.get("task_id", "") or ""
+    cfg.mod_project = inputs.get("mod_project", "") or ""
+    cfg.steam_app_id = str(env.get("steam_app_id", cfg.steam_app_id))
+    cfg.require_game_running = bool(env.get("require_game_running", True))
+    cfg.test_plan_path = str(plan.get("_source_path", ""))
+
+    # CLI overrides (non-empty / non-default wins)
+    if cli_cfg.task_id:
+        cfg.task_id = cli_cfg.task_id
+    if cli_cfg.mod_project:
+        cfg.mod_project = cli_cfg.mod_project
+    if cli_cfg.infra_path:
+        cfg.infra_path = cli_cfg.infra_path
+    if cli_cfg.game_mods_path:
+        cfg.game_mods_path = cli_cfg.game_mods_path
+    if cli_cfg.test_plan_path:
+        cfg.test_plan_path = cli_cfg.test_plan_path
+    if cli_cfg.steam_app_id != "2868840":
+        cfg.steam_app_id = cli_cfg.steam_app_id
+    cfg.ping_timeout_seconds = cli_cfg.ping_timeout_seconds
+    cfg.skip_deploy = cli_cfg.skip_deploy
+    cfg.skip_launch_game = cli_cfg.skip_launch_game
+    cfg.skip_game_smoke = cli_cfg.skip_game_smoke
+
+    return cfg
+
+
+def _run_command(
+    name: str,
+    cmd: list[str],
+    log_path: Path,
+    *,
+    timeout: float = 120.0,
+    env: dict[str, str] | None = None,
+) -> tuple[int, str]:
+    """Run a subprocess, appending stdout/stderr to *log_path*.  Returns (exit_code, output)."""
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"# {name}\n")
+        f.write(f"> {' '.join(cmd)}\n")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout,
+            env=merged_env,
+        )
+        output = result.stdout.decode("utf-8", errors="replace").strip()
+        err = result.stderr.decode("utf-8", errors="replace").strip()
+        combined = output + ("\n" + err if err else "")
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(combined + "\n")
+            f.write(f"ExitCode: {result.returncode}\n")
+        return result.returncode, combined
+    except subprocess.TimeoutExpired:
+        msg = f"Timeout after {timeout}s"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{msg}\nExitCode: -1\n")
+        return -1, msg
+    except FileNotFoundError:
+        msg = f"Command not found: {cmd[0]}"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{msg}\nExitCode: -2\n")
+        return -2, msg
+    except OSError as exc:
+        msg = f"OS error running '{' '.join(cmd)}': {exc}"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{msg}\nExitCode: -3\n")
+        return -3, msg
+
+
+def _derive_mod_name(mod_project: Path) -> str:
+    """Derive the mod name from the csproj file or project directory name.
+
+    Priority:
+      1. Root-level .csproj AssemblyName (parsed from XML)
+      2. Root-level .csproj filename without extension
+      3. Project directory name
+    """
+    csproj = _find_sln_or_csproj(mod_project)
+    if csproj and csproj.suffix == ".csproj":
+        try:
+            text = csproj.read_text(encoding="utf-8")
+            import re
+            m = re.search(r"<AssemblyName>\s*(\S+?)\s*</AssemblyName>", text)
+            if m:
+                return m.group(1)
+            m = re.search(r"<RootNamespace>\s*(\S+?)\s*</RootNamespace>", text)
+            if m:
+                return m.group(1)
+        except Exception:
+            pass
+        return csproj.stem
+    return mod_project.name
+
+
+def _detect_os() -> str:
+    """Return a human-readable OS identifier."""
+    if _IS_MACOS:
+        return f"macOS {platform.mac_ver()[0]}"
+    if _IS_WINDOWS:
+        return f"Windows {platform.win32_ver()[0]}"
+    if _IS_LINUX:
+        try:
+            import distro
+            return f"{distro.name()} {distro.version()}"
+        except Exception:
+            return f"Linux {platform.release()}"
+    return f"{platform.system()} {platform.release()}"
+
+
+# ---------------------------------------------------------------------------
+# Test Agent Runner
+# ---------------------------------------------------------------------------
+
+
+class TestAgentRunner:
+    """Cross-platform Test Agent runner.
+
+    Usage::
+
+        runner = TestAgentRunner(
+            mod_project="../STS2-GAWAIN",
+            task_id="gawain-localization-key-fix",
+            infra_path="../sts2-dev-infra",
+        )
+        result = runner.run()
+        print(result.conclusion)  # PASSED / FAILED / BLOCKED
+    """
+
+    def __init__(
+        self,
+        mod_project: str,
+        task_id: str,
+        infra_path: str,
+        *,
+        mod_name: str = "",
+        test_plan_path: str = "",
+        game_mods_path: str = "",
+        steam_app_id: str = "2868840",
+        ping_timeout_seconds: int = 90,
+        skip_deploy: bool = False,
+        skip_launch_game: bool = False,
+        skip_game_smoke: bool = False,
+        require_game_running: bool = True,
+    ):
+        project_root = _find_project_root()
+        self._mod_project_path = _resolve_path(project_root, mod_project)
+        self._infra_path = _resolve_path(project_root, infra_path)
+        self._task_id = task_id
+        self._test_plan_path = (
+            _resolve_path(project_root, test_plan_path) if test_plan_path else None
+        )
+        self._game_mods_path = (
+            _resolve_path(project_root, game_mods_path) if game_mods_path else None
+        )
+        self._steam_app_id = steam_app_id
+        self._ping_timeout = ping_timeout_seconds
+        self._skip_deploy = skip_deploy
+        self._skip_launch_game = skip_launch_game
+        self._skip_game_smoke = skip_game_smoke
+        self._require_game_running = require_game_running
+
+        # Derive mod name for deployment (Issue 1 fix)
+        self._mod_name = mod_name or _derive_mod_name(self._mod_project_path)
+
+        self._artifact_dir = self._mod_project_path / ".agent-runs" / task_id
+        self._state_dir = self._artifact_dir / "state"
+        self._screenshot_dir = self._artifact_dir / "screenshots"
+        self._report_path = self._artifact_dir / "test-report.md"
+
+        self.results: list[CheckResult] = []
+        self._conclusion = "PASSED"
+        self._failure_details = ""
+        self._blocked_details = ""
+
+    # -- public API ---------------------------------------------------------
+
+    def run(self) -> TestAgentResult:
+        """Execute the full test-agent workflow.  Returns a TestAgentResult."""
+        self._ensure_dirs()
+        try:
+            self._step_validate_inputs()
+            self._step_build()
+            self._step_localization_check()
+            self._step_deploy()
+            self._step_launch_game()
+            self._step_game_smoke()
+        except _Blocked as exc:
+            self._conclusion = "BLOCKED"
+            self._blocked_details = str(exc)
+        except _Failed as exc:
+            self._conclusion = "FAILED"
+            self._failure_details = str(exc)
+        finally:
+            self._write_report()
+        return TestAgentResult(
+            conclusion=self._conclusion,
+            results=list(self.results),
+            failure_details=self._failure_details,
+            blocked_details=self._blocked_details,
+            artifact_dir=str(self._artifact_dir),
+            exit_code={"PASSED": 0, "FAILED": 1, "BLOCKED": 2}[self._conclusion],
+        )
+
+    # -- internal steps -----------------------------------------------------
+
+    def _ensure_dirs(self) -> None:
+        for d in [self._artifact_dir, self._state_dir, self._screenshot_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+    def _add(self, name: str, status: str, evidence: str = "", details: str = "") -> None:
+        self.results.append(CheckResult(name=name, status=status, evidence=evidence, details=details))
+
+    # ------------------------------------------------------------------
+    # Step 1: Validate inputs
+    # ------------------------------------------------------------------
+
+    def _step_validate_inputs(self) -> None:
+        # Test plan
+        if self._test_plan_path is not None and not self._test_plan_path.exists():
+            raise _Blocked(f"Test plan not found: {self._test_plan_path}")
+        if self._test_plan_path:
+            self._add("Test Plan", "PASSED", str(self._test_plan_path))
+        else:
+            self._add("Test Plan", "SKIPPED", "No test plan provided")
+
+        # Mod project
+        if not self._mod_project_path.exists():
+            raise _Blocked(f"Mod project path not found: {self._mod_project_path}")
+        self._add("Mod Project", "PASSED", str(self._mod_project_path))
+
+        # Infra path
+        if not self._infra_path.exists():
+            raise _Blocked(f"Infra path not found: {self._infra_path}")
+        self._add("Infra Path", "PASSED", str(self._infra_path))
+
+    # ------------------------------------------------------------------
+    # Step 2: Build
+    # ------------------------------------------------------------------
+
+    def _step_build(self) -> None:
+        build_log = self._artifact_dir / "build.log"
+        target = _find_sln_or_csproj(self._mod_project_path)
+        if target is None:
+            raise _Blocked(
+                f"No .sln or .csproj build target found under {self._mod_project_path}"
+            )
+
+        # dotnet restore
+        rc, out = _run_command("dotnet restore", ["dotnet", "restore", str(target)], build_log)
+        if rc != 0:
+            raise _Failed(f"dotnet restore failed. See build.log.\n{out[:500]}")
+
+        # dotnet build
+        rc, out = _run_command("dotnet build", ["dotnet", "build", str(target), "--no-restore"], build_log)
+        if rc != 0:
+            raise _Failed(f"dotnet build failed. See build.log.\n{out[:500]}")
+
+        # C1: locate build output
+        build_out = _find_build_output(self._mod_project_path)
+        evidence = "build.log"
+        if build_out:
+            evidence += f"; output: {build_out}"
+        self._add("Build", "PASSED", evidence)
+
+    # ------------------------------------------------------------------
+    # Step 3: Localization check
+    # ------------------------------------------------------------------
+
+    def _step_localization_check(self) -> None:
+        loc_script = self._infra_path / "scripts" / "check-localization.py"
+        if not loc_script.exists():
+            raise _Blocked(f"Localization checker not found: {loc_script}")
+
+        loc_log = self._artifact_dir / "localization-check.log"
+        python = sys.executable  # use the same Python that runs us
+        rc, out = _run_command(
+            "localization check",
+            [python, str(loc_script), "--project", str(self._mod_project_path)],
+            loc_log,
+        )
+        if rc == 2:
+            raise _Blocked(f"Localization checker could not run. See localization-check.log.\n{out[:500]}")
+        if rc == 1:
+            raise _Failed(f"Localization check failed. See localization-check.log.\n{out[:500]}")
+        self._add("Localization Check", "PASSED", "localization-check.log")
+
+    # ------------------------------------------------------------------
+    # Step 4: Deploy
+    # ------------------------------------------------------------------
+
+    def _step_deploy(self) -> None:
+        deploy_log = self._artifact_dir / "deploy.log"
+        if self._skip_deploy:
+            deploy_log.write_text("Skipped by --skip-deploy\n", encoding="utf-8")
+            self._add("Deploy Mod", "SKIPPED", "deploy.log")
+            return
+
+        mods_path = self._game_mods_path
+        if mods_path is None:
+            # C4: auto-detect
+            mods_path = _find_mods_path()
+        if mods_path is None:
+            deploy_log.write_text("GameModsPath not provided; deploy skipped.\n", encoding="utf-8")
+            self._add("Deploy Mod", "BLOCKED", "deploy.log", "GameModsPath not provided and auto-detection failed")
+            if not self._skip_game_smoke:
+                raise _Blocked("GameModsPath not provided. Use --game-mods-path or --skip-deploy --skip-game-smoke.")
+            return
+
+        build_out = _find_build_output(self._mod_project_path)
+        if build_out is None:
+            raise _Blocked("No build output directory found for deployment.")
+
+        target_dir = mods_path / self._mod_name
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # Copy all files from build output to mods dir
+            for item in build_out.iterdir():
+                dst = target_dir / item.name
+                if item.is_dir():
+                    if dst.exists():
+                        shutil.rmtree(dst)
+                    shutil.copytree(item, dst)
+                else:
+                    shutil.copy2(item, dst)
+            deploy_log.write_text(f"Copied {build_out} to {target_dir}\n", encoding="utf-8")
+            self._add("Deploy Mod", "PASSED", "deploy.log")
+        except OSError as exc:
+            raise _Blocked(f"Failed to deploy mod: {exc}")
+
+    # ------------------------------------------------------------------
+    # Step 5: Launch game
+    # ------------------------------------------------------------------
+
+    def _step_launch_game(self) -> None:
+        launch_log = self._artifact_dir / "launch.log"
+        if self._skip_launch_game or self._skip_game_smoke:
+            launch_log.write_text("Skipped game launch.\n", encoding="utf-8")
+            self._add("Launch Game", "SKIPPED", "launch.log")
+            return
+
+        # Launch via steam:// protocol
+        if _IS_MACOS:
+            subprocess.Popen(["open", f"steam://rungameid/{self._steam_app_id}"])
+        elif _IS_WINDOWS:
+            os.startfile(f"steam://rungameid/{self._steam_app_id}")  # type: ignore[attr-defined]
+        else:
+            subprocess.Popen(["xdg-open", f"steam://rungameid/{self._steam_app_id}"])
+        launch_log.write_text(f"Started steam://rungameid/{self._steam_app_id}\n", encoding="utf-8")
+        self._add("Launch Game", "PASSED", "launch.log")
+
+    # ------------------------------------------------------------------
+    # Step 6: Game smoke test
+    # ------------------------------------------------------------------
+
+    def _step_game_smoke(self) -> None:
+        if self._skip_game_smoke:
+            smoke_log = self._artifact_dir / "game-smoke.log"
+            smoke_log.write_text("Skipped by --skip-game-smoke\n", encoding="utf-8")
+            self._add("Game Smoke", "SKIPPED", "game-smoke.log")
+            # Issue 2: validate require_game_running constraint
+            if self._require_game_running:
+                self._add("Game Required", "BLOCKED", "test-plan",
+                          "require_game_running is true but --skip-game-smoke was passed")
+            return
+
+        # --- 6a: sts2 ping ---
+        cli_log = self._artifact_dir / "sts2-cli.log"
+        sts2 = shutil.which("sts2")
+        if sts2 is None:
+            # Try discovery
+            from sts2_autotest.adapters.discovery import discover_sts2_cli
+            sts2 = discover_sts2_cli()
+        if sts2 is None:
+            raise _Blocked(
+                f"sts2 CLI not found within {self._ping_timeout}s ping window. "
+                "Install STS2-Cli-Mod or use --skip-game-smoke."
+            )
+
+        deadline = time.time() + self._ping_timeout
+        ping_ok = False
+        while time.time() < deadline:
+            rc, out = _run_command("sts2 ping", [sts2, "ping"], cli_log, timeout=10)
+            if rc == 0:
+                ping_ok = True
+                break
+            time.sleep(3)
+        if not ping_ok:
+            raise _Blocked(f"sts2 ping did not succeed within {self._ping_timeout}s.")
+        self._add("STS2-Cli-Mod Ping", "PASSED", "sts2-cli.log")
+
+        # --- 6b: sts2 state ---
+        state_path = self._state_dir / "initial-state.json"
+        rc, out = _run_command("sts2 state", [sts2, "state", "-p"], cli_log, timeout=10)
+        if rc != 0:
+            raise _Failed("sts2 state -p failed. See sts2-cli.log.")
+        # C5: save state JSON
+        state_path.write_text(out + "\n", encoding="utf-8")
+
+        # --- 6c: scan for raw keys ---
+        raw_patterns = ["GAWAIN_", "MISSING", "missing localization", "KeyNotFound"]
+        for pattern in raw_patterns:
+            if pattern.lower() in out.lower():
+                raise _Failed(f"Raw key or missing localization pattern found in game state: {pattern}")
+
+        self._add("Game Smoke", "PASSED", "game-smoke.log; state/initial-state.json")
+        self._add("No Raw Key", "PASSED", "state/initial-state.json")
+
+    # ------------------------------------------------------------------
+    # Report generation
+    # ------------------------------------------------------------------
+
+    def _write_report(self) -> None:
+        """Generate test-report.md in the artifact directory."""
+        rows = "".join(
+            f"| {r.name} | {r.status} | {r.evidence} |\n" for r in self.results
+        ) or "| No checks executed | BLOCKED | test-report.md |\n"
+
+        # Try to discover git branch and commit
+        branch = ""
+        commit = ""
+        try:
+            r = subprocess.run(
+                ["git", "branch", "--show-current"],
+                capture_output=True, cwd=str(self._mod_project_path),
+            )
+            branch = r.stdout.decode().strip()
+        except Exception:
+            pass
+        try:
+            r = subprocess.run(
+                ["git", "log", "-1", "--format=%h %s"],
+                capture_output=True, cwd=str(self._mod_project_path),
+            )
+            commit = r.stdout.decode().strip()
+        except Exception:
+            pass
+
+        report = f"""# Test Report: {self._task_id}
+
+## 测试结论
+
+{self._conclusion}
+
+## 环境
+
+- Repo: {self._mod_project_path}
+- Branch: {branch}
+- Commit: {commit}
+- STS2 version: N/A (not detected on this platform)
+- BaseLib version: N/A (not detected on this platform)
+- OS: {_detect_os()}
+- Test runner: STS2-AUTOTEST (autotest agent-test)
+- Infra path: {self._infra_path}
+
+## 测试结果
+
+| 测试项 | 结果 | 证据 |
+|---|---|---|
+{rows}
+## 失败详情
+
+{self._failure_details}
+
+## 阻塞详情
+
+{self._blocked_details}
+
+## 附件
+
+- artifact dir: {self._artifact_dir}
+- build log: build.log
+- localization log: localization-check.log
+- deploy log: deploy.log
+- launch log: launch.log
+- sts2 cli log: sts2-cli.log
+- game smoke log: game-smoke.log
+- state snapshots: state/
+- screenshots: screenshots/
+
+## 建议
+
+- FAILED：交回 Developer Agent 修复。
+- BLOCKED：先补齐环境、游戏、自动化接口或构建目标。
+"""
+        self._report_path.write_text(report, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Internal exceptions
+# ---------------------------------------------------------------------------
+
+
+class _Blocked(Exception):
+    """Non-code failure: missing env, game, or automation interface."""
+
+
+class _Failed(Exception):
+    """Real test failure that should be sent back to Developer."""

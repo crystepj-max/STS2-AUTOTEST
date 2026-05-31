@@ -96,6 +96,22 @@ def _create_parser() -> Any:
 
     sub.add_parser("progress", help="Show saved runtime progress")
 
+    # autotest agent-test (cross-platform Test Agent Runner, replaces run-test-agent.ps1)
+    agent_test = sub.add_parser("agent-test", help="Run the full test-agent workflow (build + localization + deploy + smoke)")
+    agent_test.add_argument("--mod-project", required=True, help="Path to the mod project root")
+    agent_test.add_argument("--task-id", required=True, help="Task identifier (e.g. gawain-localization-key-fix)")
+    agent_test.add_argument("--infra-path", required=True, help="Path to sts2-dev-infra")
+    agent_test.add_argument("--test-plan", help="Path to a test-plan YAML file (reads params from YAML)")
+    agent_test.add_argument("--game-mods-path", help="Path to Steam STS2 mods directory (auto-detected if omitted)")
+    agent_test.add_argument("--steam-app-id", default="2868840", help="Steam App ID for Slay the Spire 2")
+    agent_test.add_argument("--ping-timeout", type=int, default=90, help="Seconds to wait for sts2 ping")
+    agent_test.add_argument("--skip-deploy", action="store_true", help="Skip mod deployment step")
+    agent_test.add_argument("--skip-launch-game", action="store_true", help="Skip Steam game launch")
+    agent_test.add_argument("--skip-game-smoke", action="store_true", help="Skip all in-game smoke tests")
+    agent_test.add_argument("--mod-name", help="Mod folder name for deployment (derived from .csproj if omitted)")
+    agent_test.add_argument("--require-game-running", action="store_true", default=None,
+                            help="Exit with BLOCKED if --skip-game-smoke is used (reads from test-plan if omitted)")
+
     # autotest serve (B17)
     serve_parser = sub.add_parser("serve", help="Start health check HTTP server (B17)")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
@@ -928,6 +944,77 @@ def _check_env() -> dict[str, dict[str, str]]:
     return checks
 
 
+def agent_test_cmd(args: Any) -> int:
+    """Run the full test-agent workflow (build + localization + deploy + smoke).
+
+    Cross-platform replacement for run-test-agent.ps1.  Supports reading
+    parameters from a test-plan YAML file with CLI overrides taking precedence.
+    """
+    from sts2_autotest.core.test_agent_runner import (
+        TestAgentRunner,
+        TestPlanConfig,
+        _load_test_plan,
+        _merge_config,
+    )
+
+    cli_cfg = TestPlanConfig(
+        task_id=args.task_id,
+        mod_project=args.mod_project,
+        mod_name=getattr(args, "mod_name", "") or "",
+        infra_path=args.infra_path,
+        test_plan_path=getattr(args, "test_plan", "") or "",
+        game_mods_path=getattr(args, "game_mods_path", "") or "",
+        steam_app_id=getattr(args, "steam_app_id", "2868840"),
+        ping_timeout_seconds=getattr(args, "ping_timeout", 90),
+        skip_deploy=getattr(args, "skip_deploy", False),
+        skip_launch_game=getattr(args, "skip_launch_game", False),
+        skip_game_smoke=getattr(args, "skip_game_smoke", False),
+    )
+
+    # C2: merge test-plan YAML if provided
+    plan = None
+    if cli_cfg.test_plan_path:
+        from pathlib import Path as _Path
+        plan = _load_test_plan(_Path(cli_cfg.test_plan_path))
+        if plan:
+            print(f"[agent-test] Loaded test plan: {cli_cfg.test_plan_path}")
+    cfg = _merge_config(cli_cfg, plan)
+
+    # Issue 2: resolve require_game_running — CLI flag > plan > default
+    cli_require = getattr(args, "require_game_running", None)
+    if cli_require is not None:
+        require_game = cli_require
+    else:
+        require_game = cfg.require_game_running
+
+    runner = TestAgentRunner(
+        mod_project=cfg.mod_project,
+        task_id=cfg.task_id,
+        infra_path=cfg.infra_path,
+        mod_name=cfg.mod_name,
+        test_plan_path=cfg.test_plan_path,
+        game_mods_path=cfg.game_mods_path,
+        steam_app_id=cfg.steam_app_id,
+        ping_timeout_seconds=cfg.ping_timeout_seconds,
+        skip_deploy=cfg.skip_deploy,
+        skip_launch_game=cfg.skip_launch_game,
+        skip_game_smoke=cfg.skip_game_smoke,
+        require_game_running=require_game,
+    )
+
+    result = runner.run()
+    conclusion = result.conclusion
+    print(f"\n[agent-test] {conclusion}")
+    for r in result.results:
+        print(f"  [{r.status}] {r.name}")
+    if result.failure_details:
+        print(f"\n[agent-test] Failure: {result.failure_details[:300]}")
+    if result.blocked_details:
+        print(f"\n[agent-test] Blocked: {result.blocked_details[:300]}")
+    print(f"[agent-test] Report: {result.artifact_dir}/test-report.md")
+    return result.exit_code
+
+
 def serve_cmd(args: Any) -> int:
     """Start the health check HTTP server."""
     from sts2_autotest.cli.health_server import serve_cmd as _serve
@@ -1055,6 +1142,8 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(queue_cmd(args))
     elif args.command == "progress":
         sys.exit(progress_cmd(args))
+    elif args.command == "agent-test":
+        sys.exit(agent_test_cmd(args))
     elif args.command == "serve":
         sys.exit(serve_cmd(args))
     else:

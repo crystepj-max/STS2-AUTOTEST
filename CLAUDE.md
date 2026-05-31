@@ -8,9 +8,9 @@ STS2-AUTOTEST 是一个面向杀戮尖塔 2（Slay the Spire 2）Mod 的端到�
 
 Python >=3.11，主要运行平台 Windows 11，开发可在 macOS 上进行。src-layout 结构，hatchling 构建后端。当前处于 Beta 阶段。
 
-## 语言规范
+## 交流语言
 
-所有文档（CLAUDE.md、代码注释、架构文档、PRD 等）默认用中文陈述。以下情况可保持英文原文，但需附加中文注释或 `()` 内说明：
+**默认使用中文交流。** 所有回复、文档、代码注释、架构文档、PRD 等默认用中文陈述。以下情况可保持英文原文，但需附加中文注释或 `()` 内说明：
 
 - 编程语言关键字（如 `async`、`await`）
 - 领域专有名词（如 Circuit Breaker、pytest）
