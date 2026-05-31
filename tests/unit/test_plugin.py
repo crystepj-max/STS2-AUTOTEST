@@ -1,6 +1,8 @@
 """Tests for pytest_plugin/plugin.py — hook integration and notification callback."""
 
 import os
+import json
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -166,6 +168,53 @@ class TestOnSessionEndNotify:
             _default_registry.fire("session_end", exitstatus=0)
         finally:
             _default_registry.clear()
+
+
+class TestNotificationMessageHelpers:
+    """Direct coverage for notification summary and duration helpers."""
+
+    def test_build_message_uses_latest_summary(self, tmp_path: Path) -> None:
+        """Summary data should be reflected in the desktop notification body."""
+        from sts2_autotest.pytest_plugin.plugin import _build_notification_message
+
+        output_dir = tmp_path / "output"
+        latest_dir = output_dir / "latest"
+        latest_dir.mkdir(parents=True)
+        summary = {
+            "test_run": {
+                "passed": 3,
+                "failed": 1,
+                "crashed": 1,
+                "duration_ms": 2_520_000,
+            }
+        }
+        (latest_dir / "summary.json").write_text(
+            json.dumps(summary),
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, {
+            "STS2_FRAMEWORK__EVIDENCE_DIR": str(output_dir),
+        }, clear=True):
+            title, message = _build_notification_message(1)
+
+        assert "测试完成" in title
+        assert "通过: 3" in message
+        assert "失败: 1" in message
+        assert "崩溃: 1" in message
+        assert "42 分钟" in message
+
+    def test_build_message_falls_back_without_summary(self, tmp_path: Path) -> None:
+        """Missing summary.json should still produce a useful notification."""
+        from sts2_autotest.pytest_plugin.plugin import _build_notification_message
+
+        with mock.patch.dict(os.environ, {
+            "STS2_FRAMEWORK__EVIDENCE_DIR": str(tmp_path / "missing"),
+        }, clear=True):
+            title, message = _build_notification_message(4)
+
+        assert "测试完成" in title
+        assert message == "⚠️ 测试会话完成 (exit code: 4)"
 
     def test_callback_handles_notifier_creation_failure(self) -> None:
         """Callback should not crash when notifier creation fails.

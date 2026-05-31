@@ -14,7 +14,7 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator, cast
 
 import pytest
 
@@ -47,7 +47,7 @@ def _load_notifications_config() -> dict[str, bool]:
     }
 
 
-def _read_latest_summary() -> dict | None:
+def _read_latest_summary() -> dict[str, Any] | None:
     """Attempt to read the latest summary.json from the evidence directory.
 
     Returns the parsed JSON dict, or None if unavailable.
@@ -73,9 +73,12 @@ def _read_latest_summary() -> dict | None:
                     summary_path = candidate
                     break
     try:
-        return json.loads(summary_path.read_text(encoding="utf-8"))
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(data, dict):
+        return None
+    return cast(dict[str, Any], data)
 
 
 def _format_duration(duration_ms: int) -> str:

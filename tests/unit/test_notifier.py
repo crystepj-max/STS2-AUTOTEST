@@ -125,6 +125,24 @@ class TestMacOSNotifier:
         with mock.patch("subprocess.run", side_effect=sp.TimeoutExpired("cmd", 5)):
             notifier.notify("T", "M", "info")  # should not raise
 
+    def test_build_osascript_escapes_script_delimiters(self) -> None:
+        """Quotes, backslashes, and newlines should stay inside string literals."""
+        from sts2_autotest.core.notifier import _build_osascript
+
+        script = _build_osascript(
+            'Title "quoted" \\ path\nnext',
+            'Message "quoted" \\ path\rnext',
+            "warning",
+        )
+
+        assert '\\"quoted\\"' in script
+        assert "\\\\ path" in script
+        assert "\\nnext" in script
+        assert "\\rnext" in script
+        assert "\n" not in script
+        assert "\r" not in script
+        assert "with icon caution" in script
+
 
 class TestWindowsNotifier:
     """WindowsNotifier tests — ctypes Shell_NotifyIconW.
@@ -139,35 +157,42 @@ class TestWindowsNotifier:
         """Build a fake ctypes.windll for cross-platform testing."""
         windll = mock.MagicMock()
         windll.kernel32.GetConsoleWindow.return_value = 12345  # non-NULL handle
+        windll.user32.LoadIconW.return_value = 67890
         return windll
 
     def test_notify_info_sets_info_flag(self) -> None:
-        """notify(info) should use NIM_ADD (create notification icon) with NIIF_INFO flag."""
+        """notify(info) should add then update the tray icon and defer cleanup."""
         from sts2_autotest.core.notifier import WindowsNotifier
 
         notifier = WindowsNotifier()
         windll = self._build_windll_mock()
-        with mock.patch("ctypes.windll", windll, create=True):
+        with (
+            mock.patch("ctypes.windll", windll, create=True),
+            mock.patch("threading.Timer") as timer_cls,
+        ):
             notifier.notify("Title", "Message", "info")
             calls = windll.shell32.Shell_NotifyIconW.call_args_list
-            # First call: NIM_ADD (0x00000000)
             assert calls[0][0][0] == 0
-            # Second call: NIM_DELETE (0x00000002)
-            assert calls[1][0][0] == 2
+            assert calls[1][0][0] == 1
+            timer_cls.assert_called_once()
+            timer_cls.return_value.start.assert_called_once()
 
     def test_notify_warning_sets_warning_flag(self) -> None:
-        """notify(warning) should use NIM_ADD (create notification icon) with NIIF_WARNING flag."""
+        """notify(warning) should add then update the tray icon and defer cleanup."""
         from sts2_autotest.core.notifier import WindowsNotifier
 
         notifier = WindowsNotifier()
         windll = self._build_windll_mock()
-        with mock.patch("ctypes.windll", windll, create=True):
+        with (
+            mock.patch("ctypes.windll", windll, create=True),
+            mock.patch("threading.Timer") as timer_cls,
+        ):
             notifier.notify("T", "M", "warning")
             calls = windll.shell32.Shell_NotifyIconW.call_args_list
-            # First call: NIM_ADD (0x00000000)
             assert calls[0][0][0] == 0
-            # Second call: NIM_DELETE (0x00000002)
-            assert calls[1][0][0] == 2
+            assert calls[1][0][0] == 1
+            timer_cls.assert_called_once()
+            timer_cls.return_value.start.assert_called_once()
 
     def test_notify_no_console_window_does_not_raise(self) -> None:
         """notify should log debug, not raise, when GetConsoleWindow returns NULL."""

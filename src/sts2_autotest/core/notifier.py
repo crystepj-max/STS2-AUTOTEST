@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import platform
 import subprocess
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -80,9 +81,15 @@ class WindowsNotifier:
         # Flags
         NIIF_INFO = 0x00000001
         NIIF_WARNING = 0x00000002
+        NIF_MESSAGE = 0x00000001
+        NIF_ICON = 0x00000002
+        NIF_TIP = 0x00000004
         NIF_INFO = 0x00000010
         NIM_ADD = 0x00000000
+        NIM_MODIFY = 0x00000001
         NIM_DELETE = 0x00000002
+        IDI_APPLICATION = 32512
+        CLEANUP_DELAY_SECONDS = 10.0
 
         class NOTIFYICONDATAW(ctypes.Structure):
             _fields_ = [
@@ -111,14 +118,32 @@ class WindowsNotifier:
         nid = NOTIFYICONDATAW()
         nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
         nid.hWnd = hwnd
-        nid.uFlags = NIF_INFO
-        nid.szInfoTitle = title
-        nid.szInfo = message
+        nid.uID = 1
+        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
+        nid.hIcon = ctypes.windll.user32.LoadIconW(None, IDI_APPLICATION)  # type: ignore[attr-defined]
+        nid.szTip = title[:127]
+
+        nid.szInfoTitle = title[:63]
+        nid.szInfo = message[:255]
         nid.dwInfoFlags = flags
 
         try:
-            ctypes.windll.shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid))  # type: ignore[attr-defined]
-            ctypes.windll.shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))  # type: ignore[attr-defined]
+            if not ctypes.windll.shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):  # type: ignore[attr-defined]
+                _logger.warning("Windows notification icon add failed")
+                return
+            nid.uFlags = NIF_INFO
+            if not ctypes.windll.shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid)):  # type: ignore[attr-defined]
+                _logger.warning("Windows notification update failed")
+
+            def _cleanup_icon() -> None:
+                try:
+                    ctypes.windll.shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))  # type: ignore[attr-defined]
+                except OSError as cleanup_exc:
+                    _logger.warning("Windows notification cleanup failed: %s", cleanup_exc)
+
+            cleanup_timer = threading.Timer(CLEANUP_DELAY_SECONDS, _cleanup_icon)
+            cleanup_timer.daemon = True
+            cleanup_timer.start()
         except OSError as exc:
             _logger.warning("Windows notification failed: %s", exc)
 
