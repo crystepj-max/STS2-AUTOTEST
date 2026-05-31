@@ -102,6 +102,17 @@ class StateMachineConfig(BaseModel):
     poll_interval: float = Field(default=0.5, gt=0)
 
 
+class NotificationsConfig(BaseModel):
+    """Desktop notification configuration (B13)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = True
+    on_success: bool = True
+    on_failure: bool = True
+    on_crash: bool = True
+
+
 class ServerConfig(BaseModel):
     """Health check HTTP server configuration (B17)."""
 
@@ -142,6 +153,7 @@ class STS2Config(BaseModel):
     adapter: AdapterConfig = AdapterConfig()
     execution: ExecutionConfig = ExecutionConfig()
     state_machine: StateMachineConfig = StateMachineConfig()
+    notifications: NotificationsConfig = NotificationsConfig()
     server: ServerConfig = ServerConfig()
     workspace: WorkspaceConfigModel = WorkspaceConfigModel()
 
