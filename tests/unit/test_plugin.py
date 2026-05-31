@@ -166,3 +166,36 @@ class TestOnSessionEndNotify:
             _default_registry.fire("session_end", exitstatus=0)
         finally:
             _default_registry.clear()
+
+    def test_callback_handles_notifier_creation_failure(self) -> None:
+        """Callback should not crash when notifier creation fails.
+
+        The lazy-notifier pattern in _register_notification_callback
+        must not propagate exceptions from create_desktop_notifier().
+        """
+        from sts2_autotest.pytest_plugin.hooks import _default_registry, register
+        from sts2_autotest.pytest_plugin.plugin import (
+            _register_notification_callback,
+        )
+
+        _default_registry.clear()
+        try:
+            with mock.patch.dict(os.environ, {
+                "STS2_NOTIFICATIONS__ENABLED": "true",
+                "STS2_NOTIFICATIONS__ON_SUCCESS": "true",
+            }, clear=True):
+                os.environ.pop("CI", None)
+
+                # Force create_desktop_notifier to raise
+                with mock.patch(
+                    "sts2_autotest.core.notifier.create_desktop_notifier",
+                    side_effect=RuntimeError("failed to create notifier"),
+                ):
+                    _register_notification_callback()
+                    hooks = _default_registry._hooks.get("session_end", [])
+                    assert len(hooks) == 1
+
+                    # Fire the hook — should NOT raise
+                    _default_registry.fire("session_end", exitstatus=0)
+        finally:
+            _default_registry.clear()

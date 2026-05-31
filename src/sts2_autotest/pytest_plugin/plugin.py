@@ -18,6 +18,7 @@ from typing import Generator
 
 import pytest
 
+from sts2_autotest.common.types import DesktopNotifier
 from sts2_autotest.pytest_plugin.fixtures import (
     _orchestrator,
     _session_loop,
@@ -58,11 +59,14 @@ def _read_latest_summary() -> dict | None:
     if not summary_path.exists():
         # Scan for any run directory with summary.json (newest first)
         if base.exists():
-            dirs = sorted(
-                (d for d in base.iterdir() if d.is_dir()),
-                key=lambda d: d.stat().st_mtime,
-                reverse=True,
-            )
+            try:
+                dirs = sorted(
+                    (d for d in base.iterdir() if d.is_dir()),
+                    key=lambda d: d.stat().st_mtime,
+                    reverse=True,
+                )
+            except OSError:
+                return None
             for run_dir in dirs:
                 candidate = run_dir / "summary.json"
                 if candidate.exists():
@@ -125,7 +129,7 @@ def _build_notification_message(exitstatus: int) -> tuple[str, str]:
 
 def _on_session_end_notify(
     exitstatus: int,
-    notifier: object | None = None,
+    notifier: DesktopNotifier | None = None,
 ) -> None:
     """session_end hook callback: send desktop notification.
 
@@ -170,13 +174,20 @@ def _register_notification_callback() -> None:
         return
 
     from sts2_autotest.pytest_plugin.hooks import register
-    from sts2_autotest.core.notifier import create_desktop_notifier
-
-    notifier = create_desktop_notifier()
 
     def _callback(**kwargs: object) -> None:
         exitstatus = kwargs.get("exitstatus", 1)
         if isinstance(exitstatus, int):
+            try:
+                from sts2_autotest.core.notifier import create_desktop_notifier
+
+                notifier = create_desktop_notifier()
+            except Exception:
+                import logging
+
+                _logger = logging.getLogger("sts2_autotest.pytest_plugin")
+                _logger.warning("Failed to create desktop notifier", exc_info=True)
+                return
             _on_session_end_notify(exitstatus, notifier)
 
     register("session_end", _callback)
