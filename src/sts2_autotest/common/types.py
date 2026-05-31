@@ -188,3 +188,13 @@ class PrecheckSettings(Protocol):
     evidence_dir: str
     adapter_cli_path: str
     adapter_timeout: float
+
+
+class DesktopNotifier(Protocol):
+    """Protocol for desktop notification — implemented by platform backends.
+
+    level values: "info" | "warning". Platform implementations map
+    these to native notification severity levels.
+    """
+
+    def notify(self, title: str, message: str, level: str) -> None: ...
