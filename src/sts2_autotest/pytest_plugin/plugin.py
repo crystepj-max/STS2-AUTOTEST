@@ -10,7 +10,10 @@ Hooks:
 """
 
 import _thread
+import json
+import os
 import threading
+from pathlib import Path
 from typing import Generator
 
 import pytest
@@ -25,6 +28,160 @@ from sts2_autotest.pytest_plugin.hooks import fire
 from sts2_autotest.pytest_plugin.markers import MARKERS
 
 
+def _load_notifications_config() -> dict[str, bool]:
+    """Read notification settings from environment variables.
+
+    Returns a dict with keys: enabled, on_success, on_failure, on_crash.
+    Uses STS2_NOTIFICATIONS__ prefix convention.
+    """
+    return {
+        "enabled": os.environ.get("STS2_NOTIFICATIONS__ENABLED", "true").lower()
+        in ("true", "1", "yes"),
+        "on_success": os.environ.get("STS2_NOTIFICATIONS__ON_SUCCESS", "true").lower()
+        in ("true", "1", "yes"),
+        "on_failure": os.environ.get("STS2_NOTIFICATIONS__ON_FAILURE", "true").lower()
+        in ("true", "1", "yes"),
+        "on_crash": os.environ.get("STS2_NOTIFICATIONS__ON_CRASH", "true").lower()
+        in ("true", "1", "yes"),
+    }
+
+
+def _read_latest_summary() -> dict | None:
+    """Attempt to read the latest summary.json from the evidence directory.
+
+    Returns the parsed JSON dict, or None if unavailable.
+    """
+    evidence_dir = os.environ.get("STS2_FRAMEWORK__EVIDENCE_DIR", "tests/output")
+    base = Path(evidence_dir)
+    # Try latest/ first
+    summary_path = base / "latest" / "summary.json"
+    if not summary_path.exists():
+        # Scan for any run directory with summary.json (newest first)
+        if base.exists():
+            dirs = sorted(
+                (d for d in base.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime,
+                reverse=True,
+            )
+            for run_dir in dirs:
+                candidate = run_dir / "summary.json"
+                if candidate.exists():
+                    summary_path = candidate
+                    break
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _format_duration(duration_ms: int) -> str:
+    """Format a millisecond duration into a human-readable string."""
+    if duration_ms < 60_000:
+        return "<1 分钟"
+    total_minutes = duration_ms // 60_000
+    if total_minutes < 60:
+        return f"{total_minutes} 分钟"
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
+    if minutes == 0:
+        return f"{hours} 小时"
+    return f"{hours} 小时 {minutes} 分钟"
+
+
+def _build_notification_message(exitstatus: int) -> tuple[str, str]:
+    """Build notification title and message from exitstatus and summary data.
+
+    Returns (title, message). If summary.json is unavailable, uses
+    a simple fallback message based on exit code.
+    """
+    title = "STS2 Autotest — 测试完成"
+
+    summary = _read_latest_summary()
+    if summary is not None:
+        try:
+            test_run = summary.get("test_run", {})
+            passed = test_run.get("passed", "?")
+            failed = test_run.get("failed", "?")
+            crashed = test_run.get("crashed", "?")
+            duration_ms_val = test_run.get("duration_ms", 0)
+        except (AttributeError, KeyError):
+            passed = failed = crashed = "?"
+            duration_ms_val = 0
+
+        emoji = "✅" if exitstatus == 0 else "⚠️"
+        duration_str = _format_duration(int(duration_ms_val))
+        message = (
+            f"{emoji} 测试会话完成"
+            f"（通过: {passed}, 失败: {failed}, 崩溃: {crashed}）"
+            f" — {duration_str}"
+        )
+    else:
+        # Fallback: no summary.json available
+        emoji = "✅" if exitstatus == 0 else "⚠️"
+        message = f"{emoji} 测试会话完成 (exit code: {exitstatus})"
+
+    return title, message
+
+
+def _on_session_end_notify(
+    exitstatus: int,
+    notifier: object | None = None,
+) -> None:
+    """session_end hook callback: send desktop notification.
+
+    Args:
+        exitstatus: pytest exit code (0 = all passed).
+        notifier: DesktopNotifier instance. If None, creates one.
+    """
+    cfg = _load_notifications_config()
+    if not cfg["enabled"]:
+        return
+
+    # Determine if we should notify based on exit status
+    if exitstatus == 0:
+        if not cfg["on_success"]:
+            return
+        level = "info"
+    else:
+        # exitstatus 2 (INTERRUPTED) = crash, 3 (INTERNAL_ERROR) = crash
+        if exitstatus in (2, 3) and not cfg["on_crash"]:
+            return
+        if exitstatus not in (2, 3) and not cfg["on_failure"]:
+            return
+        level = "warning"
+
+    if notifier is None:
+        from sts2_autotest.core.notifier import create_desktop_notifier
+
+        notifier = create_desktop_notifier()
+
+    title, message = _build_notification_message(exitstatus)
+    notifier.notify(title=title, message=message, level=level)
+
+
+def _register_notification_callback() -> None:
+    """Register the session_end notification callback if enabled and not in CI."""
+    # CI always suppresses notifications
+    if os.environ.get("CI"):
+        return
+
+    cfg = _load_notifications_config()
+    if not cfg["enabled"]:
+        return
+
+    from sts2_autotest.pytest_plugin.hooks import register
+    from sts2_autotest.core.notifier import create_desktop_notifier
+
+    notifier = create_desktop_notifier()
+
+    def _callback(**kwargs: object) -> None:
+        exitstatus = kwargs.get("exitstatus", 1)
+        if isinstance(exitstatus, int):
+            _on_session_end_notify(exitstatus, notifier)
+
+    register("session_end", _callback)
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--sts2-adapter-available",
@@ -37,6 +194,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     for name, description in MARKERS:
         config.addinivalue_line("markers", f"{name}: {description}")
+    _register_notification_callback()
 
 
 def pytest_collection_modifyitems(
@@ -98,8 +256,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Fire lifecycle hook at session end."""
-    fire("session_end")
+    """Fire lifecycle hook at session end with exit status."""
+    fire("session_end", exitstatus=exitstatus)
 
 
 __all__ = [
