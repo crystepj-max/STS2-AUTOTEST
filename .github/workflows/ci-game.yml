@@ -1,0 +1,54 @@
+name: CI — Game Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Test suite to run'
+        required: false
+        default: ''
+        type: string
+      timeout:
+        description: 'Timeout per test in seconds'
+        required: false
+        default: '300'
+        type: string
+
+jobs:
+  game-test:
+    name: Requires Game Tests
+    runs-on: ["self-hosted", "macos", "autotest"]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project
+        run: pip install -e ".[dev]"
+      - name: Doctor check
+        run: autotest doctor --ci
+      - name: Run game integration tests
+        run: |
+          if [ -n "${{ inputs.suite }}" ]; then
+            python -m pytest tests/integration/ -v -m requires_game \
+              -k "${{ inputs.suite }}" \
+              --timeout=${{ inputs.timeout }} \
+              --junitxml=junit-game.xml
+          else
+            python -m pytest tests/integration/ -v -m requires_game \
+              --timeout=${{ inputs.timeout }} \
+              --junitxml=junit-game.xml
+          fi
+      - name: Upload JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-game
+          path: junit-game.xml
+      - name: Upload evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-game-failure
+          path: tests/output/
