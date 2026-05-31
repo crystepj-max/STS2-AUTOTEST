@@ -154,3 +154,214 @@ class TestEvidencePack:
         )
         with pytest.raises(ValidationError):
             pack.pack_id = "other"  # type: ignore[misc]
+
+
+class TestRepairSuggestion:
+    """RepairSuggestion model tests (B10)."""
+
+    def test_create_minimal(self) -> None:
+        from sts2_autotest.common.evidence import RepairSuggestion
+
+        s = RepairSuggestion(
+            confidence=0.5,
+            category="code_fix",
+            title="测试建议",
+            description="这是一条测试建议",
+        )
+        assert s.confidence == 0.5
+        assert s.category == "code_fix"
+        assert s.title == "测试建议"
+        assert s.description == "这是一条测试建议"
+        assert s.source_location is None
+        assert s.patch is None
+        assert s.related_docs == []
+
+    def test_with_optional_fields(self) -> None:
+        from sts2_autotest.common.evidence import RepairSuggestion
+
+        s = RepairSuggestion(
+            confidence=0.8,
+            category="config_change",
+            title="配置错误",
+            description="需要修改配置文件",
+            source_location="src/mod.py:42",
+            patch='@@ -1,3 +1,3 @@\n-old\n+new',
+            related_docs=["https://example.com/doc"],
+        )
+        assert s.source_location == "src/mod.py:42"
+        assert s.patch is not None
+        assert len(s.related_docs) == 1
+
+    def test_frozen(self) -> None:
+        from pydantic import ValidationError
+        from sts2_autotest.common.evidence import RepairSuggestion
+
+        s = RepairSuggestion(
+            confidence=0.5, category="code_fix", title="t", description="d",
+        )
+        with pytest.raises(ValidationError):
+            s.confidence = 0.9  # type: ignore[misc]
+
+    def test_confidence_must_be_float(self) -> None:
+        from pydantic import ValidationError
+        from sts2_autotest.common.evidence import RepairSuggestion
+
+        with pytest.raises(ValidationError):
+            RepairSuggestion(
+                confidence="high",  # type: ignore[arg-type]
+                category="code_fix",
+                title="t",
+                description="d",
+            )
+
+    def test_roundtrip(self) -> None:
+        from sts2_autotest.common.evidence import RepairSuggestion
+
+        s = RepairSuggestion(
+            confidence=0.75,
+            category="env_fix",
+            title="环境问题",
+            description="检查环境变量",
+            source_location="config/settings.yaml:10",
+        )
+        data = s.model_dump(mode="json")
+        restored = RepairSuggestion.model_validate(data)
+        assert restored.confidence == 0.75
+        assert restored.category == "env_fix"
+        assert restored.source_location == "config/settings.yaml:10"
+
+
+class TestRepairReport:
+    """RepairReport model tests (B10)."""
+
+    def test_create_empty(self) -> None:
+        from sts2_autotest.common.evidence import RepairReport
+
+        r = RepairReport(
+            crash_signature="ValueError:1",
+            suggestions=[],
+            generated_at="2026-05-31T00:00:00Z",
+            source="rule_engine",
+            analysis_duration_ms=1.5,
+        )
+        assert r.crash_signature == "ValueError:1"
+        assert r.suggestions == []
+        assert r.source == "rule_engine"
+
+    def test_with_suggestions(self) -> None:
+        from sts2_autotest.common.evidence import RepairReport, RepairSuggestion
+
+        s = RepairSuggestion(
+            confidence=0.6, category="code_fix", title="修复", description="修",
+        )
+        r = RepairReport(
+            crash_signature="crash:0xC0000005",
+            suggestions=[s],
+            generated_at="2026-05-31T00:00:00Z",
+            source="rule_engine+stack_trace",
+            analysis_duration_ms=3.2,
+        )
+        assert len(r.suggestions) == 1
+        assert r.suggestions[0].title == "修复"
+
+    def test_frozen(self) -> None:
+        from pydantic import ValidationError
+        from sts2_autotest.common.evidence import RepairReport
+
+        r = RepairReport(
+            crash_signature="x:0",
+            suggestions=[],
+            generated_at="2026-05-31T00:00:00Z",
+            source="rule_engine",
+            analysis_duration_ms=0.0,
+        )
+        with pytest.raises(ValidationError):
+            r.source = "replay_capture"  # type: ignore[misc]
+
+    def test_roundtrip(self) -> None:
+        from sts2_autotest.common.evidence import RepairReport, RepairSuggestion
+
+        s = RepairSuggestion(
+            confidence=0.5, category="investigation_needed", title="调查", description="需进一步分析",
+        )
+        r = RepairReport(
+            crash_signature="Error:none",
+            suggestions=[s],
+            generated_at="2026-05-31T00:00:00Z",
+            source="rule_engine",
+            analysis_duration_ms=5.0,
+        )
+        data = r.model_dump(mode="json")
+        restored = RepairReport.model_validate(data)
+        assert restored.crash_signature == "Error:none"
+        assert len(restored.suggestions) == 1
+        assert restored.suggestions[0].category == "investigation_needed"
+
+
+class TestSummaryJsonWithRepairReport:
+    """SummaryJson.repair_report optional field (B10)."""
+
+    def test_default_is_none(self) -> None:
+        from sts2_autotest.common.evidence import (
+            SummaryJson, RunInfo, EnvironmentInfo,
+        )
+
+        s = SummaryJson(
+            pack_id="p1",
+            test_run=RunInfo(run_id="r1", result="passed", duration_ms=100),
+            environment=EnvironmentInfo(
+                framework="fw", adapter="ad", game="g", os="os", python="3.11",
+            ),
+        )
+        assert s.repair_report is None
+
+    def test_with_repair_report(self) -> None:
+        from sts2_autotest.common.evidence import (
+            SummaryJson, RunInfo, EnvironmentInfo, RepairReport,
+        )
+
+        report = RepairReport(
+            crash_signature="e:0",
+            suggestions=[],
+            generated_at="2026-05-31T00:00:00Z",
+            source="rule_engine",
+            analysis_duration_ms=0.0,
+        )
+        s = SummaryJson(
+            pack_id="p2",
+            test_run=RunInfo(run_id="r2", result="failed", duration_ms=200),
+            environment=EnvironmentInfo(
+                framework="fw", adapter="ad", game="g", os="os", python="3.11",
+            ),
+            repair_report=report,
+        )
+        assert s.repair_report is not None
+        assert s.repair_report.crash_signature == "e:0"
+
+    def test_roundtrip_with_repair_report(self) -> None:
+        from sts2_autotest.common.evidence import (
+            SummaryJson, RunInfo, EnvironmentInfo, RepairReport, RepairSuggestion,
+        )
+
+        suggestion = RepairSuggestion(
+            confidence=0.5, category="code_fix", title="t", description="d",
+        )
+        report = RepairReport(
+            crash_signature="X:1",
+            suggestions=[suggestion],
+            generated_at="2026-05-31T00:00:00Z",
+            source="rule_engine+stack_trace",
+            analysis_duration_ms=2.0,
+        )
+        s = SummaryJson(
+            pack_id="p3",
+            test_run=RunInfo(run_id="r3", result="crashed", duration_ms=0),
+            environment=EnvironmentInfo(
+                framework="fw", adapter="ad", game="g", os="os", python="3.11",
+            ),
+            repair_report=report,
+        )
+        data = s.model_dump(mode="json")
+        restored = SummaryJson.model_validate(data)
+        assert restored.repair_report is not None
+        assert restored.repair_report.suggestions[0].confidence == 0.5

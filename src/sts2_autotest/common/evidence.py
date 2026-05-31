@@ -49,6 +49,40 @@ class FailureInfo(BaseModel):
     actual: str | None = None
 
 
+class RepairSuggestion(BaseModel):
+    """Single repair suggestion generated from crash analysis (B10).
+
+    Fields source_location and patch are None when the analysis cannot
+    pinpoint a specific code location — this is a valid state, not an error.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    confidence: float
+    category: str  # code_fix | config_change | env_fix | investigation_needed
+    title: str
+    description: str
+    source_location: str | None = None
+    patch: str | None = None
+    related_docs: list[str] = []
+
+
+class RepairReport(BaseModel):
+    """Complete repair analysis report for a single crash event (B10).
+
+    Contains the crash signature, a list of RepairSuggestion entries,
+    and metadata about how the analysis was generated.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    crash_signature: str
+    suggestions: list[RepairSuggestion]
+    generated_at: str  # ISO 8601 UTC
+    source: str  # "rule_engine" | "rule_engine+stack_trace" | "replay_capture"
+    analysis_duration_ms: float
+
+
 class SummaryJson(BaseModel):
     """Machine-readable evidence pack summary (PRD FR23).
 
@@ -66,6 +100,7 @@ class SummaryJson(BaseModel):
     artifacts: ArtifactsInfo = ArtifactsInfo()
     failure: FailureInfo | None = None
     artifact_path: str | None = None
+    repair_report: RepairReport | None = None
 
 
 class EvidencePack(BaseModel):
