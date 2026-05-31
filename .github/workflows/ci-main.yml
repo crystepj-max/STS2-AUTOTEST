@@ -1,0 +1,107 @@
+name: CI — Push to Main
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+
+env:
+  STS2_WORKSPACE: ${{ vars.STS2_WORKSPACE || '$HOME/STS2-WORKSPACE' }}
+
+jobs:
+  # ── 代码质量 + 单元测试（Mac + GitHub fallback）──
+
+  quick-checks:
+    name: Quick Checks
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [lint, mypy, lint-imports, unit-test]
+    runs-on: ["self-hosted", "macos", "autotest"]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project
+        run: pip install -e ".[dev]"
+      - name: Run ${{ matrix.check }}
+        run: |
+          case "${{ matrix.check }}" in
+            lint) ruff check src/ tests/ ;;
+            mypy) mypy src/sts2_autotest --strict ;;
+            lint-imports) lint-imports ;;
+            unit-test) python -m pytest tests/unit/ -v --junitxml=junit-unit.xml ;;
+          esac
+      - name: Upload JUnit
+        if: matrix.check == 'unit-test' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-unit-main
+          path: junit-unit.xml
+
+  # ── CLI 集成测试 ──
+
+  cli-integration:
+    name: CLI Integration Tests
+    needs: [quick-checks]
+    runs-on: ["self-hosted", "macos", "autotest"]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project
+        run: pip install -e ".[dev]"
+      - name: Run CLI integration tests
+        run: python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
+
+  # ── Mod 部署 ──
+
+  deploy-gawain:
+    name: Deploy Gawain Mod
+    needs: [cli-integration]
+    runs-on: ["self-hosted", "macos", "autotest"]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Gawain
+        uses: actions/checkout@v4
+        with:
+          repository: crystepj-max/STS2-GAWAIN
+          path: gawain-src
+          ref: main
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0'
+      - name: Build Gawain
+        run: |
+          cd gawain-src
+          dotnet publish Gawain.csproj -c Release
+      - name: Deploy to mods directory
+        run: |
+          STS2_MODS_DIR="${STS2_WORKSPACE}/../STS2Mods"
+          mkdir -p "$STS2_MODS_DIR/Gawain"
+          cp -r gawain-src/Gawain/bin/Release/net9.0/publish/* "$STS2_MODS_DIR/Gawain/"
+
+  # ── Job Summary ──
+
+  summary:
+    name: Push Summary
+    needs: [quick-checks, cli-integration, deploy-gawain]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate summary
+        run: |
+          echo "## B11 CI — Push Main Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| quick-checks | ${{ needs['quick-checks'].result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| cli-integration | ${{ needs['cli-integration'].result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| deploy-gawain | ${{ needs['deploy-gawain'].result }} |" >> $GITHUB_STEP_SUMMARY
