@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Sequence, cast
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
+from sts2_autotest.cli import mcp_server
 
 
 DEFAULT_EVIDENCE_DIR = "tests/output"
@@ -117,6 +118,12 @@ def _create_parser() -> Any:
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
     serve_parser.add_argument("--port", type=int, default=8766, help="Bind port")
     serve_parser.set_defaults(func=serve_cmd)
+
+    # autotest serve-mcp (B11 Phase 2)
+    serve_mcp_parser = sub.add_parser("serve-mcp", help="Start the MCP test service (B11 Phase 2)")
+    serve_mcp_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
+    serve_mcp_parser.add_argument("--port", type=int, default=8090, help="Bind port")
+    serve_mcp_parser.set_defaults(func=serve_mcp_cmd)
 
     return p
 
@@ -1021,6 +1028,11 @@ def serve_cmd(args: Any) -> int:
     return _serve(args)
 
 
+def serve_mcp_cmd(args: Any) -> int:
+    """Start the MCP test service (B11 Phase 2)."""
+    return mcp_server.serve_cmd(args)
+
+
 def doctor_cmd(args: Any) -> int:
     """Check environment readiness with real checks."""
     checks = _check_env()
@@ -1146,6 +1158,8 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(agent_test_cmd(args))
     elif args.command == "serve":
         sys.exit(serve_cmd(args))
+    elif args.command == "serve-mcp":
+        sys.exit(serve_mcp_cmd(args))
     else:
         parser.print_help()
         sys.exit(1)
