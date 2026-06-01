@@ -81,7 +81,7 @@ jobs:
       - name: Deploy to mods directory
         run: |
           GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2}"
-          MODS_DIR="$GAME_DIR/STS2/Contents/MacOS/mods"
+          MODS_DIR="$GAME_DIR/SlayTheSpire2.app/Contents/MacOS/mods"
           mkdir -p "$MODS_DIR/Gawain"
           # Find the actual publish output (respects csproj output settings)
           PUBLISH_DIR=$(find gawain-src -type d -name "publish" -path "*/Release/*" | head -1)
