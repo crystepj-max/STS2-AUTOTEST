@@ -74,16 +74,25 @@ class TestReviewSpec:
 
 class TestCompileSpec:
     @patch("sts2_autotest.cli.mcp_tools.compile_spec_file")
-    def test_compile_spec_calls_generator(self, mock_compile, tmp_path):
-        fake_path = Path("/tmp/test_tc.py")
-        fake_path.touch()  # create it so .exists() passes
-        mock_compile.return_value = fake_path
-        spec_file = tmp_path / "TC-TEST.md"
-        spec_file.write_text("# Test")
-        result = handle_compile_spec({"spec_path": str(spec_file)})
-        assert "generated_file" in result
-        assert result["warnings"] == []
-        fake_path.unlink()  # cleanup
+    def test_compile_spec_calls_generator(self, mock_compile):
+        import shutil
+        # Create output dir within workspace so path whitelist validation passes
+        ws_dir = Path("/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests")
+        output_dir = ws_dir / "tmp_mcp_output"
+        output_dir.mkdir(exist_ok=True)
+        try:
+            mock_compile.return_value = output_dir / "test_tc.py"
+            result = handle_compile_spec({
+                "spec_path": (
+                    "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST"
+                    "/docs/superpowers/specs/2026-05-31-b11-cicd-design.md"
+                ),
+                "output_dir": str(output_dir),
+            })
+            assert "generated_file" in result
+            assert result["warnings"] == []
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
 
 
 class TestRunTest:
@@ -93,12 +102,15 @@ class TestRunTest:
             "run_id": "run-001",
             "passed": 3,
             "failed": 0,
+            "status": "OK",
             "duration_ms": 1234,
             "junit_xml_url": "file:///tmp/junit.xml",
+            "stderr": None,
         }
         result = handle_run_test({"spec_dir": "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests/"})
         assert result["passed"] == 3
         assert result["failed"] == 0
+        assert result["status"] == "OK"
 
 
 class TestGetReport:
@@ -130,7 +142,7 @@ class TestRunPipeline:
         fake_path = Path("/tmp/test_tc.py")
         fake_path.touch()
         mock_compile.return_value = fake_path
-        mock_run.return_value = {"run_id": "run-001", "passed": 1, "failed": 0, "duration_ms": 0, "junit_xml_url": ""}
+        mock_run.return_value = {"run_id": "run-001", "passed": 1, "failed": 0, "status": "OK", "duration_ms": 0, "junit_xml_url": ""}
 
         spec_file = tmp_path / "TC-TEST.md"
         spec_file.write_text("""# TC-TEST

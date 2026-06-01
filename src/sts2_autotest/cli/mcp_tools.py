@@ -148,18 +148,35 @@ def run_tests_in_dir(
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout + 30
         )
-        passed = result.stdout.count("PASSED")
-        failed = result.stdout.count("FAILED")
     except subprocess.TimeoutExpired:
-        passed = 0
-        failed = 0
+        return {
+            "run_id": run_id,
+            "passed": 0,
+            "failed": 0,
+            "status": "TIMEOUT",
+            "duration_ms": (timeout + 30) * 1000,
+            "junit_xml_url": str(junit_xml),
+            "stderr": f"Test execution timed out after {timeout + 30}s",
+        }
+
+    passed = result.stdout.count("PASSED")
+    failed = result.stdout.count("FAILED")
+
+    if result.returncode != 0:
+        status = "FAILED"
+        stderr_snippet = result.stderr[:500] if result.stderr else f"Exit code: {result.returncode}"
+    else:
+        status = "OK"
+        stderr_snippet = None
 
     return {
         "run_id": run_id,
         "passed": passed,
         "failed": failed,
+        "status": status,
         "duration_ms": 0,
         "junit_xml_url": str(junit_xml),
+        "stderr": stderr_snippet,
     }
 
 
@@ -215,7 +232,10 @@ def handle_compile_spec(args: dict[str, Any]) -> dict[str, Any]:
     if not resolved.exists():
         raise McpError(INVALID_PARAMS, f"Spec file not found: {spec_path}")
     output = args.get("output_dir")
-    output_dir = Path(output) if output else resolved.parent.parent / "generated"
+    if output:
+        output_dir = _validate_path(output)
+    else:
+        output_dir = resolved.parent.parent / "generated"
     generated_file = compile_spec_file(resolved, output_dir)
     return {"generated_file": str(generated_file), "warnings": []}
 
