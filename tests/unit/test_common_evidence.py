@@ -94,6 +94,18 @@ class TestFailureInfo:
         )
         assert info.stack_trace == "Traceback..."
 
+    def test_with_exit_code(self) -> None:
+        info = FailureInfo(
+            type="crash_error",
+            message="Game crashed",
+            exit_code=0xC0000005,
+        )
+        assert info.exit_code == 0xC0000005
+
+    def test_exit_code_defaults_to_none(self) -> None:
+        info = FailureInfo(type="crash_error", message="Game crashed")
+        assert info.exit_code is None
+
 
 class TestSummaryJson:
     """SummaryJson model tests (PRD FR23)."""

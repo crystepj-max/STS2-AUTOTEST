@@ -1,0 +1,65 @@
+name: CI — Nightly Regression
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Daily at UTC 03:00
+  workflow_dispatch:      # Also allow manual trigger
+
+env:
+  EVIDENCE_RETENTION_DAYS: 7
+
+jobs:
+  nightly:
+    name: Nightly Full Regression
+    runs-on: ["self-hosted", "macos", "autotest"]
+    timeout-minutes: 360  # 6 hour max
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install project
+        run: pip install -e ".[dev]"
+
+      # Code quality
+      - name: Lint
+        run: ruff check src/ tests/
+      - name: Type check
+        run: mypy src/sts2_autotest --strict
+      - name: Import layer check
+        run: lint-imports
+
+      # Tests
+      - name: Unit tests
+        run: python -m pytest tests/unit/ -v --junitxml=junit-unit.xml
+      - name: CLI integration tests
+        run: python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
+      - name: Game integration tests
+        continue-on-error: true
+        run: python -m pytest tests/integration/ -v -m requires_game --timeout=300 --junitxml=junit-game.xml
+
+      # Evidence packaging
+      - name: Package evidence
+        if: always()
+        run: autotest report --evidence-dir tests/output/ --coverage
+
+      # Cleanup old evidence
+      - name: Clean old evidence (>7 days)
+        if: always()
+        run: |
+          find tests/output/ -type d -name "run-*" -mtime +$EVIDENCE_RETENTION_DAYS -exec rm -rf {} + 2>/dev/null || true
+          echo "Evidence cleanup complete"
+
+      # Upload artifacts
+      - name: Upload JUnit results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-nightly
+          path: junit-*.xml
+      - name: Upload evidence pack
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-nightly
+          path: tests/output/

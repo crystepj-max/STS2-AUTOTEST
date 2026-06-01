@@ -88,6 +88,7 @@ class RealEvidenceHooks:
         self._log_collector = log_collector
         self._packager = packager
         self._window_title = window_title
+        self._last_failure: FailureInfo | None = None
 
     def on_case_start(self, case_id: str) -> None:
         logger.debug("Case %s started", case_id)
@@ -120,8 +121,40 @@ class RealEvidenceHooks:
         if result.status == "fail" and self._log_collector is not None:
             self._log_collector.collect_on_failure(result.case_id)
 
+        # B10: capture failure info from non-crash failures when on_crash didn't fire first
+        if self._last_failure is None and result.status in ("fail", "crash", "deterministic_fail"):
+            self._last_failure = FailureInfo(
+                type=(
+                    "crash_error" if result.status == "crash"
+                    else "assertion_error" if result.status == "fail"
+                    else "session_error"
+                ),
+                message=result.detail or "",
+            )
+
     def on_crash(self, case_id: str, error: Exception) -> None:
         """Capture screenshot + logs immediately on crash."""
+        # B10: store crash details for repair suggestion generation at session end
+        import traceback as tb_module
+
+        from sts2_autotest.common.errors import STS2Error
+
+        if isinstance(error, STS2Error):
+            error_type = error.category.value
+            exit_code = error.detail.get("exit_code") if error.detail else None
+        else:
+            error_type = type(error).__name__
+            exit_code = None
+
+        self._last_failure = FailureInfo(
+            type=error_type,
+            message=str(error),
+            stack_trace="".join(
+                tb_module.format_exception(type(error), error, error.__traceback__),
+            ),
+            exit_code=exit_code,
+        )
+
         crash_capture = self._capture.capture(
             self._window_title, case_id=f"{case_id}_crash"
         )
@@ -155,7 +188,11 @@ class RealEvidenceHooks:
             failed = summary.get("failed", 0)
             crashed = summary.get("crashed", 0)
             run_result = "failed" if (failed + crashed) > 0 else "passed"
-            pack_result = self._packager.create_pack(run_result=run_result)
+            pack_result = self._packager.create_pack(
+                run_result=run_result,
+                failure=self._last_failure,
+            )
+            self._last_failure = None  # Reset for next session
             # Export artifact (Story 4.7, FR54) — non-blocking
             try:
                 if pack_result is not None:

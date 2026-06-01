@@ -194,6 +194,17 @@ class RepairAdvisor:
         suggestions = _match_rules(failure)
         source = "rule_engine"
 
+        # Fallback: when no L1 rules match (e.g. raw Python exception types),
+        # produce a generic investigation suggestion so L2 enrichment has
+        # something to work with. Matches analyze_from_exception() behavior.
+        if not suggestions:
+            suggestions.append(RepairSuggestion(
+                confidence=0.25,
+                category="investigation_needed",
+                title=f"未捕获的 {failure.type} 异常",
+                description=f"从 FailureInfo 记录的 {failure.type}: {failure.message}",
+            ))
+
         # L2: stack trace parsing + enrichment
         if failure.stack_trace:
             locations = _parse_stack_trace(failure.stack_trace)
@@ -203,8 +214,9 @@ class RepairAdvisor:
 
         duration_ms = (time.monotonic() - start) * 1000.0
 
-        # Generate deterministic crash signature
-        signature = f"{failure.type}:none"
+        # Generate deterministic crash signature matching recovery.crash_signature() semantics
+        code = str(failure.exit_code) if failure.exit_code is not None else "none"
+        signature = f"{failure.type}:{code}"
 
         return RepairReport(
             crash_signature=signature,

@@ -1,8 +1,10 @@
-"""Health check HTTP server (B17).
+"""Health check HTTP server (B17) + reusable async HTTP server base class.
 
-Minimal async HTTP server exposing liveness/readness endpoints for
+Minimal async HTTP server exposing liveness/readiness endpoints for
 CI/CD orchestration and external monitoring. Uses stdlib asyncio only
 -- no additional web framework dependencies.
+
+The _HttpServer base class is shared with mcp_server.py (B11 Phase 2).
 """
 
 from __future__ import annotations
@@ -11,7 +13,6 @@ import asyncio
 import json
 from collections.abc import Callable
 from typing import Any
-
 
 _CheckEnvFn = Callable[[], dict[str, dict[str, str]]]
 
@@ -24,8 +25,11 @@ _RESPONSE_HEADERS: tuple[bytes, ...] = (
 _HTML_200 = b"HTTP/1.0 200 OK\r\n"
 _HTML_503 = b"HTTP/1.0 503 Service Unavailable\r\n"
 _HTML_404 = b"HTTP/1.0 404 Not Found\r\n"
+_HTML_405 = b"HTTP/1.0 405 Method Not Allowed\r\n"
 _HTML_500 = b"HTTP/1.0 500 Internal Server Error\r\n"
 
+
+# ── Shared transport utilities ──
 
 def _json_response(http_status: bytes, payload: dict[str, Any]) -> bytes:
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
@@ -39,6 +43,129 @@ def _json_response(http_status: bytes, payload: dict[str, Any]) -> bytes:
         body,
     ])
 
+
+async def _parse_http_request(
+    reader: asyncio.StreamReader,
+) -> tuple[str, str, dict[str, str], bytes | None]:
+    """Read HTTP request, return (method, path, headers_dict, body_bytes_or_None).
+
+    Raises ValueError if request is malformed.
+    """
+    raw = b""
+    try:
+        raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
+    except asyncio.TimeoutError:
+        raise ValueError("Request timeout")
+
+    if not raw:
+        raise ValueError("Empty request")
+
+    request_line = raw.decode("utf-8", errors="replace").strip()
+    parts = request_line.split(" ")
+    if len(parts) < 2:
+        raise ValueError(f"Malformed request line: {request_line}")
+
+    method = parts[0].upper()
+    path = parts[1]
+
+    # Read headers
+    headers: dict[str, str] = {}
+    content_length = 0
+    while True:
+        line = (await reader.readline()).decode("utf-8", errors="replace").strip()
+        if not line:
+            break
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+            if key.strip().lower() == "content-length":
+                content_length = int(value.strip())
+
+    # Read body if present
+    body: bytes | None = None
+    if content_length > 0:
+        body = await reader.readexactly(content_length)
+
+    return method, path, headers, body
+
+
+class _HttpServer:
+    """Minimal async HTTP server base class.
+
+    Subclasses override handle_request() to implement routing.
+    Uses stdlib asyncio only -- no web framework.
+    """
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 8766):
+        self.host = host
+        self.port = port
+        self._server: asyncio.Server | None = None
+
+    async def handle_request(
+        self,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes | None,
+    ) -> bytes:
+        """Override in subclasses to implement routing logic."""
+        return _json_response(_HTML_404, {
+            "status": "error",
+            "message": f"Not found: {path}",
+        })
+
+    async def _handle_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Handle a single TCP connection."""
+        try:
+            method, path, headers, body = await _parse_http_request(reader)
+            response = await self.handle_request(method, path, headers, body)
+        except ValueError:
+            response = _json_response(_HTML_500, {
+                "status": "error",
+                "message": "Bad request",
+            })
+        except Exception:
+            response = _json_response(_HTML_500, {
+                "status": "error",
+                "message": "Internal server error",
+            })
+        try:
+            writer.write(response)
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    async def start(self) -> None:
+        """Start the server and block until stopped."""
+        self._server = await asyncio.start_server(
+            self._handle_client,
+            host=self.host,
+            port=self.port,
+        )
+        addr = self._server.sockets[0].getsockname()
+        print(f"[autotest] Server listening on http://{addr[0]}:{addr[1]}")
+        async with self._server:
+            await self._server.serve_forever()
+
+    async def stop(self) -> None:
+        """Stop the server gracefully."""
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+
+
+# ── Health server (existing B17 functionality) ──
 
 async def _handle_health(
     check_env: _CheckEnvFn,
@@ -101,51 +228,36 @@ async def _handle_ready(
     )
 
 
-async def _parse_request(reader: asyncio.StreamReader) -> str:
-    """Read HTTP request and return the path."""
-    raw = b""
-    try:
-        raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
-    except asyncio.TimeoutError:
-        return ""
-    if not raw:
-        return ""
-    parts = raw.decode("utf-8", errors="replace").strip().split(" ")
-    if len(parts) < 2:
-        return ""
-    return parts[1]  # path
+class HealthServer(_HttpServer):
+    """Health check HTTP server (B17), built on _HttpServer base."""
 
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8766,
+        check_env: _CheckEnvFn | None = None,
+    ):
+        super().__init__(host=host, port=port)
+        if check_env is None:
+            from sts2_autotest.cli.main import _check_env as check_env
+        self._check_env = check_env
 
-async def _handle_client(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
-    check_env: _CheckEnvFn,
-) -> None:
-    """Handle a single HTTP request."""
-    try:
-        path = await _parse_request(reader)
+    async def handle_request(
+        self,
+        method: str,
+        path: str,
+        headers: dict[str, str],
+        body: bytes | None,
+    ) -> bytes:
+        # _check_env is guaranteed non-None after __init__
+        check_env: _CheckEnvFn = self._check_env  # type: ignore[assignment]
         if path in ("/health", "/health/all"):
-            response = await _handle_health(check_env)
+            return await _handle_health(check_env)
         elif path == "/health/live":
-            response = await _handle_live()
+            return await _handle_live()
         elif path == "/health/ready":
-            response = await _handle_ready(check_env)
-        else:
-            response = _json_response(_HTML_404, {
-                "status": "error",
-                "message": f"Not found: {path}",
-                "available": ["/health", "/health/live", "/health/ready"],
-            })
-        writer.write(response)
-        await writer.drain()
-    except Exception:
-        pass
-    finally:
-        try:
-            writer.close()
-            await writer.wait_closed()
-        except Exception:
-            pass
+            return await _handle_ready(check_env)
+        return await super().handle_request(method, path, headers, body)
 
 
 async def run_server(
@@ -153,28 +265,11 @@ async def run_server(
     port: int = 8766,
     check_env: _CheckEnvFn | None = None,
 ) -> None:
-    """Start the health check HTTP server.
-
-    Args:
-        host: Bind address.
-        port: Bind port.
-        check_env: Function returning check results. Falls back to
-            importing _check_env from cli.main when not provided.
-    """
+    """Start the health check HTTP server. (Backward-compatible wrapper.)"""
     if check_env is None:
         from sts2_autotest.cli.main import _check_env as check_env
-
-    server = await asyncio.start_server(
-        lambda r, w: _handle_client(r, w, check_env),  # type: ignore[arg-type]
-        host=host,
-        port=port,
-    )
-
-    addr = server.sockets[0].getsockname()
-    print(f"[autotest] Health server listening on http://{addr[0]}:{addr[1]}")
-
-    async with server:
-        await server.serve_forever()
+    server = HealthServer(host=host, port=port, check_env=check_env)
+    await server.start()
 
 
 def serve_cmd(args: Any) -> int:

@@ -118,3 +118,52 @@ class TestRepairAdvisorIntegration:
 
             data = json.loads(repair_path.read_text(encoding="utf-8"))
             assert len(data["suggestions"]) >= 1, f"No suggestions for {error_type}"
+
+    def test_repair_report_consistency_between_outputs(self, tmp_path: Path) -> None:
+        """summary.json.repair_report and repair_suggestions.json must be identical,
+        including crash_signature and exit_code."""
+        evidence_dir = tmp_path / "evidence"
+        pkgr = EvidencePackager(evidence_dir)
+
+        failure = FailureInfo(
+            type="crash_error",
+            message="游戏进程异常退出",
+            stack_trace=(
+                'Traceback (most recent call last):\n'
+                '  File "/app/src/game.py", line 200, in update\n'
+                '    self.mods.tick()\n'
+                'RuntimeError: access violation\n'
+            ),
+            exit_code=0xC0000005,
+        )
+
+        pack_dir = pkgr.create_pack(
+            "consistency_test",
+            run_result="crashed",
+            duration_ms=1500,
+            failure=failure,
+        )
+
+        # Read both outputs
+        repair_path = pack_dir / "reports" / "repair_suggestions.json"
+        summary_path = pack_dir / "summary.json"
+
+        repair_data = json.loads(repair_path.read_text(encoding="utf-8"))
+        summary_data = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        embedded = summary_data["repair_report"]
+        assert embedded is not None
+
+        # crash_signature must match and include exit_code
+        assert repair_data["crash_signature"] == embedded["crash_signature"]
+        assert "3221225477" in repair_data["crash_signature"]  # 0xC0000005 as int
+
+        # suggestions must be identical
+        assert repair_data["suggestions"] == embedded["suggestions"]
+
+        # source and generated_at must match
+        assert repair_data["source"] == embedded["source"]
+        assert repair_data["generated_at"] == embedded["generated_at"]
+
+        # analysis_duration_ms must match
+        assert repair_data["analysis_duration_ms"] == embedded["analysis_duration_ms"]
