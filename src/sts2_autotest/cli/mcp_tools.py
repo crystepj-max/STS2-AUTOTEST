@@ -18,8 +18,8 @@ from sts2_autotest.cli.mcp_protocol import (
 )
 
 # ── Path whitelist ──
-# Only validate when STS2_MCP_PATH_WHITELIST is explicitly set.
-# When empty, all paths are allowed (typical in dev/test).
+# _ALLOWED_ROOTS is populated from STS2_MCP_PATH_WHITELIST at import time.
+# When empty, _validate_path falls back to ~/STS2-WORKSPACE as the default.
 _whitelist = os.environ.get("STS2_MCP_PATH_WHITELIST", "")
 _ALLOWED_ROOTS: list[Path] = (
     [Path(p) for p in _whitelist.split(os.pathsep) if p.strip()] if _whitelist else []
@@ -27,20 +27,24 @@ _ALLOWED_ROOTS: list[Path] = (
 
 
 def _validate_path(spec_path: str) -> Path:
-    """Resolve and validate a path against the configured whitelist."""
+    """Resolve and validate a path against the configured whitelist.
+
+    When ``STS2_MCP_PATH_WHITELIST`` is not set, only paths under
+    ``~/STS2-WORKSPACE`` are allowed (production-safe default).  When the env
+    var is explicitly set, its value is used as the whitelist instead.
+    """
     resolved = Path(spec_path).resolve()
-    if _ALLOWED_ROOTS:
-        for root in _ALLOWED_ROOTS:
-            try:
-                resolved.relative_to(root)
-                return resolved
-            except ValueError:
-                continue
-        raise McpError(
-            INVALID_PARAMS,
-            f"Path '{spec_path}' is not within allowed roots: {_ALLOWED_ROOTS}",
-        )
-    return resolved
+    allowed_roots = _ALLOWED_ROOTS or [Path.home() / "STS2-WORKSPACE"]
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root)
+            return resolved
+        except ValueError:
+            continue
+    raise McpError(
+        INVALID_PARAMS,
+        f"Path '{spec_path}' is not within allowed roots: {allowed_roots}",
+    )
 
 
 ToolHandler = Callable[[dict[str, Any]], dict[str, Any]]
