@@ -51,9 +51,13 @@ class TestHealthCheck:
 
 
 class TestReviewSpec:
+    @patch("sts2_autotest.cli.mcp_tools._validate_path")
     @patch("sts2_autotest.cli.mcp_tools.review_spec_file")
-    def test_review_spec_calls_reviewer(self, mock_review, tmp_path):
+    def test_review_spec_calls_reviewer(self, mock_review, mock_validate, tmp_path):
         from sts2_autotest.common.spec_models import ReviewReport, ReviewIssue, IssueCategory
+        spec_file = tmp_path / "TC-TEST.md"
+        spec_file.write_text("# Test")
+        mock_validate.return_value = spec_file
         mock_review.return_value = ReviewReport(
             spec_id="test",
             issues=[ReviewIssue(
@@ -63,9 +67,6 @@ class TestReviewSpec:
                 suggestion="Clarify",
             )],
         )
-        # Create a real temp file so the existence check passes
-        spec_file = tmp_path / "TC-TEST.md"
-        spec_file.write_text("# Test")
         result = handle_review_spec({"spec_path": str(spec_file)})
         assert "issues" in result
         assert len(result["issues"]) == 1
@@ -74,16 +75,37 @@ class TestReviewSpec:
 
 class TestCompileSpec:
     @patch("sts2_autotest.cli.mcp_tools.compile_spec_file")
-    def test_compile_spec_calls_generator(self, mock_compile, tmp_path):
-        fake_path = Path("/tmp/test_tc.py")
-        fake_path.touch()  # create it so .exists() passes
-        mock_compile.return_value = fake_path
-        spec_file = tmp_path / "TC-TEST.md"
-        spec_file.write_text("# Test")
-        result = handle_compile_spec({"spec_path": str(spec_file)})
-        assert "generated_file" in result
-        assert result["warnings"] == []
-        fake_path.unlink()  # cleanup
+    def test_compile_spec_calls_generator(self, mock_compile):
+        import shutil
+        # Create output dir within workspace so path whitelist validation passes
+        ws_dir = Path("/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests")
+        output_dir = ws_dir / "tmp_mcp_output"
+        output_dir.mkdir(exist_ok=True)
+        try:
+            mock_compile.return_value = output_dir / "test_tc.py"
+            result = handle_compile_spec({
+                "spec_path": (
+                    "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST"
+                    "/docs/superpowers/specs/2026-05-31-b11-cicd-design.md"
+                ),
+                "output_dir": str(output_dir),
+            })
+            assert "generated_file" in result
+            assert result["warnings"] == []
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+
+    def test_compile_spec_rejects_external_output_dir(self):
+        """output_dir outside whitelist should raise McpError."""
+        from sts2_autotest.cli.mcp_protocol import McpError
+        with pytest.raises(McpError, match="not within allowed roots"):
+            handle_compile_spec({
+                "spec_path": (
+                    "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST"
+                    "/docs/superpowers/specs/2026-05-31-b11-cicd-design.md"
+                ),
+                "output_dir": "/tmp/evil_output",
+            })
 
 
 class TestRunTest:
@@ -93,12 +115,48 @@ class TestRunTest:
             "run_id": "run-001",
             "passed": 3,
             "failed": 0,
+            "status": "OK",
             "duration_ms": 1234,
             "junit_xml_url": "file:///tmp/junit.xml",
+            "stderr": None,
         }
         result = handle_run_test({"spec_dir": "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests/"})
         assert result["passed"] == 3
         assert result["failed"] == 0
+        assert result["status"] == "OK"
+
+    @patch("sts2_autotest.cli.mcp_tools.run_tests_in_dir")
+    def test_run_test_reports_timeout(self, mock_run):
+        """Timeout should report status=TIMEOUT."""
+        mock_run.return_value = {
+            "run_id": "run-002",
+            "passed": 0,
+            "failed": 0,
+            "status": "TIMEOUT",
+            "duration_ms": 90000,
+            "junit_xml_url": "file:///tmp/junit.xml",
+            "stderr": "Test execution timed out after 90s",
+        }
+        result = handle_run_test({"spec_dir": "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests/"})
+        assert result["status"] == "TIMEOUT"
+        assert result["passed"] == 0
+
+    @patch("sts2_autotest.cli.mcp_tools.run_tests_in_dir")
+    def test_run_test_reports_failure(self, mock_run):
+        """Non-zero exit should report status=FAILED with stderr."""
+        mock_run.return_value = {
+            "run_id": "run-003",
+            "passed": 2,
+            "failed": 3,
+            "status": "FAILED",
+            "duration_ms": 5678,
+            "junit_xml_url": "file:///tmp/junit.xml",
+            "stderr": "Exit code: 1",
+        }
+        result = handle_run_test({"spec_dir": "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests/"})
+        assert result["status"] == "FAILED"
+        assert result["failed"] == 3
+        assert result["stderr"] is not None
 
 
 class TestGetReport:
@@ -115,7 +173,9 @@ class TestGetReport:
 
 
 class TestListSpecs:
-    def test_list_specs_finds_markdown(self, tmp_path):
+    @patch("sts2_autotest.cli.mcp_tools._validate_path")
+    def test_list_specs_finds_markdown(self, mock_validate, tmp_path):
+        mock_validate.return_value = tmp_path
         # Create real markdown files in tmp_path
         (tmp_path / "TC-TEST.md").write_text("# Test spec")
         (tmp_path / "SUITE-SMOKE.md").write_text("# Suite spec")
@@ -124,13 +184,15 @@ class TestListSpecs:
 
 
 class TestRunPipeline:
+    @patch("sts2_autotest.cli.mcp_tools._validate_path")
     @patch("sts2_autotest.cli.mcp_tools.compile_spec_file")
     @patch("sts2_autotest.cli.mcp_tools.run_tests_in_dir")
-    def test_run_pipeline_executes_stages(self, mock_run, mock_compile, tmp_path):
+    def test_run_pipeline_executes_stages(self, mock_run, mock_compile, mock_validate, tmp_path):
+        mock_validate.side_effect = lambda p: Path(p)
         fake_path = Path("/tmp/test_tc.py")
         fake_path.touch()
         mock_compile.return_value = fake_path
-        mock_run.return_value = {"run_id": "run-001", "passed": 1, "failed": 0, "duration_ms": 0, "junit_xml_url": ""}
+        mock_run.return_value = {"run_id": "run-001", "passed": 1, "failed": 0, "status": "OK", "duration_ms": 0, "junit_xml_url": ""}
 
         spec_file = tmp_path / "TC-TEST.md"
         spec_file.write_text("""# TC-TEST
