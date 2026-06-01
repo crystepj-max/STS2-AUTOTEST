@@ -28,6 +28,7 @@ dev = [
 
 [project.scripts]
 autotest = "sts2_autotest.cli.main:cli"
+lint-imports = "importlinter.cli:main"
 
 [project.entry-points.pytest11]
 sts2_autotest = "sts2_autotest.pytest_plugin.plugin"
