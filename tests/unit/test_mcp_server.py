@@ -10,6 +10,15 @@ from sts2_autotest.cli.mcp_protocol import MCP_PROTOCOL_VERSION, McpError, INVAL
 from sts2_autotest.cli.mcp_server import McpServer
 
 
+def _extract_body(http_bytes: bytes) -> dict:
+    """Extract JSON body from HTTP response bytes."""
+    text = http_bytes.decode("utf-8")
+    # Split on \r\n\r\n to separate headers from body
+    parts = text.split("\r\n\r\n", 1)
+    body_text = parts[1] if len(parts) > 1 else text
+    return json.loads(body_text)
+
+
 class TestMcpServerRouting:
     def setup_method(self):
         self.server = McpServer(host="127.0.0.1", port=9999)
@@ -33,7 +42,7 @@ class TestMcpServerRouting:
             "params": {"protocolVersion": "2024-11-05"},
         }).encode("utf-8")
         response = self.server._route_http("POST", "/mcp", {}, body)
-        parsed = json.loads(response)
+        parsed = _extract_body(response)
         assert parsed["result"]["serverInfo"]["name"] == "sts2-autotest"
         assert parsed["result"]["protocolVersion"] == MCP_PROTOCOL_VERSION
 
@@ -44,7 +53,7 @@ class TestMcpServerRouting:
             "method": "tools/list",
         }).encode("utf-8")
         response = self.server._route_http("POST", "/mcp", {}, body)
-        parsed = json.loads(response)
+        parsed = _extract_body(response)
         tools = parsed["result"]["tools"]
         tool_names = {t["name"] for t in tools}
         assert "health_check" in tool_names
@@ -59,12 +68,12 @@ class TestMcpServerRouting:
             "params": {"name": "health_check", "arguments": {}},
         }).encode("utf-8")
         response = self.server._route_http("POST", "/mcp", {}, body)
-        parsed = json.loads(response)
+        parsed = _extract_body(response)
         assert parsed["result"]["structuredContent"]["status"] == "ok"
 
     def test_mcp_endpoint_invalid_json_returns_error(self):
         response = self.server._route_http("POST", "/mcp", {}, b"not json")
-        parsed = json.loads(response)
+        parsed = _extract_body(response)
         assert "error" in parsed
         assert parsed["error"]["code"] == -32700
 
@@ -75,7 +84,7 @@ class TestMcpServerRouting:
             "method": "unknown/method",
         }).encode("utf-8")
         response = self.server._route_http("POST", "/mcp", {}, body)
-        parsed = json.loads(response)
+        parsed = _extract_body(response)
         assert parsed["error"]["code"] == -32601
 
 
@@ -102,3 +111,14 @@ class TestTokenAuth:
         server = McpServer(host="127.0.0.1", port=9999)
         result = server._check_token({})
         assert result is False
+
+    def test_mcp_unauthorized_returns_401(self):
+        import os
+        os.environ["STS2_MCP_TOKEN"] = "secret123"
+        try:
+            server = McpServer(host="127.0.0.1", port=9999)
+            body = json.dumps({"jsonrpc":"2.0","id":1,"method":"tools/list"}).encode()
+            response = server._route_http("POST", "/mcp", {"x-mcp-token": "wrong"}, body)
+            assert b"401" in response
+        finally:
+            del os.environ["STS2_MCP_TOKEN"]

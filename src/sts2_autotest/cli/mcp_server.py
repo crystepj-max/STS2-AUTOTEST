@@ -38,6 +38,9 @@ from sts2_autotest.cli.mcp_protocol import (
 )
 from sts2_autotest.cli.mcp_tools import ToolRegistry
 
+# 401 status line (not exported from health_server)
+_HTML_401 = b"HTTP/1.0 401 Unauthorized\r\n"
+
 
 class McpServer(_HttpServer):
     """MCP (Model Context Protocol) test service.
@@ -82,11 +85,13 @@ class McpServer(_HttpServer):
                     "message": "MCP endpoint requires POST",
                 })
             if not self._check_token(headers):
-                return _json_response(_HTML_500, {
+                return _json_response(_HTML_401, {
                     "status": "error",
                     "message": "Unauthorized: invalid or missing X-MCP-Token",
                 })
-            return self._handle_mcp(body or b"{}")
+            mcp_result = self._handle_mcp(body or b"{}")
+            http_status = _HTML_500 if "error" in mcp_result else _HTML_200
+            return _json_response(http_status, mcp_result)
 
         # Fallback
         return _json_response(_HTML_404, {
@@ -95,13 +100,13 @@ class McpServer(_HttpServer):
             "available": ["/health", "/mcp"],
         })
 
-    def _handle_mcp(self, body: bytes) -> bytes:
-        """Process an MCP JSON-RPC 2.0 request."""
+    def _handle_mcp(self, body: bytes) -> dict[str, Any]:
+        """Process an MCP JSON-RPC 2.0 request and return parsed result."""
         try:
             req = decode_request(body)
         except McpError as exc:
             err_resp = make_error_response(None, exc.code, exc.message, exc.data)
-            return encode_response(err_resp)
+            return json.loads(encode_response(err_resp))
 
         method = req.method
         try:
@@ -129,7 +134,7 @@ class McpServer(_HttpServer):
         except Exception as exc:
             resp = make_error_response(req.id, INTERNAL_ERROR, f"Internal error: {exc}")
 
-        return encode_response(resp)
+        return json.loads(encode_response(resp))
 
     # -- Public HTTP interface used by _HttpServer --
 
