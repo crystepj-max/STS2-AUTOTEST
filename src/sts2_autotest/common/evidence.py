@@ -49,6 +49,7 @@ class FailureInfo(BaseModel):
     stack_trace: str | None = None
     expected: str | None = None
     actual: str | None = None
+    exit_code: int | None = None
 
 
 class RepairSuggestion(BaseModel):

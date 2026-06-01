@@ -262,13 +262,18 @@ class TestRepairAdvisorAnalyze:
         assert report is not None
         assert report.source == "rule_engine"
 
-    def test_empty_suggestions_when_no_rules_match(self) -> None:
+    def test_fallback_suggestion_when_no_rules_match(self) -> None:
+        """When no L1 rules match, a generic investigation suggestion is generated
+        (fallback behavior shared with analyze_from_exception)."""
         advisor = RepairAdvisor()
         failure = FailureInfo(type="weird_unknown", message="???")
         summary = self._make_summary(failure)
         report = advisor.analyze(summary)
         assert report is not None
-        assert report.suggestions == []
+        assert len(report.suggestions) == 1
+        assert report.suggestions[0].category == "investigation_needed"
+        assert report.suggestions[0].confidence == 0.25
+        assert "weird_unknown" in report.suggestions[0].title
 
     def test_crash_signature_in_report(self) -> None:
         advisor = RepairAdvisor()
@@ -277,6 +282,15 @@ class TestRepairAdvisorAnalyze:
         report = advisor.analyze(summary)
         assert report is not None
         assert "crash_error" in report.crash_signature
+        assert ":none" in report.crash_signature  # no exit_code → "none"
+
+    def test_crash_signature_with_exit_code(self) -> None:
+        advisor = RepairAdvisor()
+        failure = FailureInfo(type="crash_error", message="崩溃", exit_code=0xC0000005)
+        summary = self._make_summary(failure)
+        report = advisor.analyze(summary)
+        assert report is not None
+        assert ":3221225477" in report.crash_signature  # 0xC0000005 as int
 
 
 # ── RepairAdvisor.analyze_from_exception() ─────────────────────
