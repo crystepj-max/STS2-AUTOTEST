@@ -7,9 +7,6 @@ on:
       - 'docs/**'
       - '**.md'
 
-env:
-  STS2_WORKSPACE: ${{ vars.STS2_WORKSPACE || '$HOME/STS2-WORKSPACE' }}
-
 jobs:
   # ── 代码质量 + 单元测试（Mac + GitHub fallback）──
 
@@ -68,24 +65,32 @@ jobs:
     runs-on: ["self-hosted", "macos", "autotest"]
     timeout-minutes: 15
     steps:
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0'
       - name: Checkout Gawain
         uses: actions/checkout@v4
         with:
           repository: crystepj-max/STS2-GAWAIN
           path: gawain-src
           ref: main
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '9.0'
       - name: Build Gawain
         run: |
           cd gawain-src
           dotnet publish Gawain.csproj -c Release
       - name: Deploy to mods directory
         run: |
-          STS2_MODS_DIR="${STS2_WORKSPACE}/../STS2Mods"
-          mkdir -p "$STS2_MODS_DIR/Gawain"
-          cp -r gawain-src/Gawain/bin/Release/net9.0/publish/* "$STS2_MODS_DIR/Gawain/"
+          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2}"
+          MODS_DIR="$GAME_DIR/STS2/Contents/MacOS/mods"
+          mkdir -p "$MODS_DIR/Gawain"
+          # Find the actual publish output (respects csproj output settings)
+          PUBLISH_DIR=$(find gawain-src -type d -name "publish" -path "*/Release/*" | head -1)
+          if [ -z "$PUBLISH_DIR" ]; then
+            echo "ERROR: publish output not found"
+            exit 1
+          fi
+          cp -r "$PUBLISH_DIR"/* "$MODS_DIR/Gawain/"
+          echo "Deployed Gawain to $MODS_DIR/Gawain/"
 
   # ── Job Summary ──
 
