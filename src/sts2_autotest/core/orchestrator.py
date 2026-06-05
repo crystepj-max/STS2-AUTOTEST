@@ -541,15 +541,63 @@ class TestOrchestrator:
     # ── case execution ──────────────────────────────────────
 
     async def execute_case(self, case_id: str) -> TestResult:
-        """Execute a single test case: read state → probe → re-read.
+        """Execute a single test case (协议层 B20).
 
-        Per-case cleanup runs in finally to release adapter resources
-        between cases (handles, caches, temp state).
+        Priority:
+        1. CaseRegistry — resolve case_id to CaseDefinition,
+           dispatch to runner or action sequence.
+        2. Fallback — original probe logic for compatibility.
         """
         self.evidence.on_case_start(case_id)
         self._adapter_replaced = False
         logger.info("Executing case: %s", case_id)
 
+        # B20: try CaseRegistry first
+        try:
+            from sts2_autotest.core.case_registry import CaseRegistry
+
+            definition = CaseRegistry.resolve(case_id)
+
+            # Programmatic runner (complex stateful flow)
+            if definition.runner is not None:
+                logger.info(
+                    "Case %s: dispatching to programmatic runner",
+                    case_id,
+                )
+                result = await definition.runner(self)
+                self.evidence.on_case_end(result)
+                return result
+
+            # ActionDescriptor sequence (simple linear flow)
+            if definition.actions:
+                logger.info(
+                    "Case %s: executing %d actions from registry",
+                    case_id, len(definition.actions),
+                )
+                await self.execute_action_sequence(definition.actions)
+                self.evidence.on_case_end(TestResult(case_id, "pass"))
+                return TestResult(case_id, "pass")
+
+        except KeyError:
+            # Not in registry — fall through to probe logic
+            logger.info(
+                "Case %s: not in CaseRegistry, using probe fallback",
+                case_id,
+            )
+        except Exception as exc:
+            # Catches non-KeyError exceptions from CaseRegistry itself
+            # (e.g. invalid CaseDefinition state, runner instantiation error).
+            # These are infrastructure-level crashes, not MOD test failures.
+            logger.error(
+                "Case %s: CaseRegistry dispatch failed — %s: %s",
+                case_id, type(exc).__name__, exc,
+            )
+            self.evidence.on_crash(case_id, exc)
+            result = TestResult(case_id, "crash", str(exc))
+            self.evidence.on_case_end(result)
+            return result
+
+        # Fallback: original probe logic
         try:
             available = await self.adapter.get_available_actions()
             if not available:

@@ -87,6 +87,68 @@ class TestCodeGenerator:
         assert "combat_basic_policy()" in code
         assert "skip_card_reward()" in code
 
+    def test_gawain_character_selection_uses_mod_character_id(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-PREPARE",
+            title="Prepare Gawain",
+            steps=["开始新局", "选择 Gawain", "开始冒险"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert 'select_character("gawain")' in code
+        assert 'select_character("IRONCLAD")' not in code
+
+    def test_chinese_ironclad_selection_allows_no_space(self) -> None:
+        spec = TestSpec(
+            id="TC-IRONCLAD-PREPARE",
+            title="Prepare Ironclad",
+            steps=["开始新局", "选择战士", "开始冒险"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert 'select_character("IRONCLAD")' in code
+
+    def test_generate_case_test_maps_event_and_combat_state_assertions(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-SCREENS",
+            title="Gawain screens",
+            steps=["开始新局"],
+            assertions=["game reached event", "game reached combat"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "game_reached_state(GameScreen.EVENT)" in code
+        assert "game_reached_state(GameScreen.COMBAT)" in code
+
+    def test_generate_case_test_maps_give_card_step(self) -> None:
+        spec = TestSpec(
+            id="TC-IRONCLAD-TWIN-STRIKE",
+            title="Ironclad Twin Strike",
+            steps=["添加 TWIN_STRIKE 到手牌", "使用 TWIN_STRIKE"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "give_card" in code
+        assert 'give_card("TWIN_STRIKE")' in code
+        assert 'play_card("TWIN_STRIKE")' in code
+
+    def test_generate_case_test_maps_exact_hit_assertion(self) -> None:
+        spec = TestSpec(
+            id="TC-IRONCLAD-TWIN-STRIKE",
+            title="Ironclad Twin Strike",
+            steps=["使用 TWIN_STRIKE"],
+            assertions=["造成 5 点伤害 2 次"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "enemy_took_exact_hits" in code
+        assert "enemy_took_exact_hits(5, 2)" in code
+
     def test_generate_case_test_empty_steps(self) -> None:
         spec = TestSpec(id="TC-EMPTY", title="Empty")
         code = self.generator.generate_case_test(spec)
@@ -157,6 +219,21 @@ class TestCodeGenerator:
         assert "suite-summaries" in code
         assert "_write_suite_summary()" in code
         assert '"first_failed_case_id"' in code
+
+    def test_generate_suite_test_writes_summary_next_to_generated_tree(self) -> None:
+        suite = SuiteSpec(
+            id="SUITE-SUMMARY",
+            title="Summary",
+            includes=["TC-ONE"],
+        )
+        specs = {
+            "TC-ONE": TestSpec(id="TC-ONE", title="One", steps=["返回主菜单"]),
+        }
+
+        code = self.generator.generate_suite_test(suite, specs)
+
+        assert "Path(__file__).resolve().parent.parent / \"output\" / \"suite-summaries\"" in code
+        assert "Path('tests/output/suite-summaries')" not in code
 
     def test_generate_to_file(self, tmp_path: Path) -> None:
         spec = TestSpec(id="TC-FILE", title="File output", steps=["test"])

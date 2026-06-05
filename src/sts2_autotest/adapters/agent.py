@@ -8,8 +8,8 @@ Communication protocol:
 
 Response format (shared with STS2-Agent):
   Health:   {"status": "ok"|"degraded"|..., "version": "MAJOR.MINOR.PATCH"}
-  State:    {"screen": "COMBAT", ...extra fields...}
-  Actions:  {"actions": ["play_card", ...]}
+  State:    {"ok": true, "data": {"screen": "COMBAT", ...extra fields...}}
+  Actions:  {"ok": true, "data": {"actions": [{"name": "play_card"}, ...]}}
   Act:      {"ok": true} or {"ok": false, "error": "CODE"}
   Wait:     {"actionable": true|false}
 """
@@ -138,9 +138,9 @@ class AgentAdapter:
         client: httpx.AsyncClient | None = None,
         supported_version: int | None = None,
         health_path: str = "health",
-        state_path: str = "game_state",
-        actions_path: str = "available_actions",
-        act_path: str = "act",
+        state_path: str = "state",
+        actions_path: str = "actions/available",
+        act_path: str = "action",
         wait_path: str = "wait_until_actionable",
         transport: Literal["http", "mcp"] = "http",
         mcp_client: AgentMcpClientProtocol | None = None,
@@ -350,17 +350,18 @@ class AgentAdapter:
         if not self._version_checked and "version" in data:
             self._check_version(data["version"])
 
-        status = data.get("status", "")
-        return HealthStatus(healthy=(status == "ok"))
+        payload = _unwrap_data_envelope(data)
+        status = payload.get("status", "")
+        return HealthStatus(healthy=(status in ("ok", "ready")))
 
     async def get_state(self) -> GameState:
-        """POST {endpoint}/game_state.
+        """GET {endpoint}/state.
 
         Returns a frozen GameState snapshot built from the agent's
         screen name and any extra fields in the response.
         Raises STS2Error on transport or server errors.
         """
-        data = await self._request("POST", self._state_path)
+        data = _unwrap_data_envelope(await self._request("GET", self._state_path))
 
         screen_raw = data.get("screen", "UNKNOWN")
         screen = _map_screen(screen_raw)
@@ -368,12 +369,14 @@ class AgentAdapter:
         return GameState(screen=screen, **_filter_state_extra(data))
 
     async def get_available_actions(self) -> list[str]:
-        """POST {endpoint}/available_actions.
+        """GET {endpoint}/actions/available.
 
         Returns the list of action names the agent reports as available.
         """
-        data = await self._request("POST", self._actions_path)
-        actions_result: list[str] = data.get("actions", [])
+        data = _unwrap_data_envelope(await self._request("GET", self._actions_path))
+        actions_result = _normalize_actions(data.get("actions", []))
+        if self.debug_actions and "give_card" not in actions_result:
+            actions_result.append("give_card")
         return actions_result
 
     async def act(self, action: str, args: dict[str, Any] | None = None) -> ActionResult:
@@ -384,12 +387,42 @@ class AgentAdapter:
           timeout → ActionResult(status="timeout")
           other   → ActionResult(status="failure")
         """
-        payload: dict[str, Any] = {
-            "action": action,
-            "profile": self.tool_profile,
-        }
+        if action == "give_card":
+            if not self.debug_actions:
+                return ActionResult(
+                    status="failure",
+                    state_changed=False,
+                    detail="give_card requires AgentAdapter(debug_actions=True)",
+                )
+            card_id = str((args or {}).get("card_id", "")).strip()
+            if not card_id:
+                return ActionResult(
+                    status="failure",
+                    state_changed=False,
+                    detail="give_card requires card_id",
+                )
+            payload = {
+                "action": "run_console_command",
+                "command": f"card {card_id} hand",
+            }
+            try:
+                data = await self._request("POST", self._act_path, payload)
+            except STS2Error as exc:
+                if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                    return ActionResult(status="timeout", state_changed=False, detail=exc.message)
+                return ActionResult(status="failure", state_changed=False, detail=exc.message)
+
+            if data.get("ok", False):
+                return ActionResult(status="success", state_changed=True)
+            return ActionResult(
+                status="failure",
+                state_changed=False,
+                detail=data.get("error", "Unknown error"),
+            )
+
+        payload: dict[str, Any] = {"action": action}
         if args:
-            payload["args"] = args
+            payload.update(_normalize_action_args(action, await self._resolve_agent_action_args(action, args)))
 
         try:
             data = await self._request("POST", self._act_path, payload)
@@ -406,11 +439,37 @@ class AgentAdapter:
             detail=data.get("error", "Unknown error"),
         )
 
+    async def _resolve_agent_action_args(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Translate AUTOTEST action args to STS2-Agent HTTP action fields."""
+        if action != "play_card":
+            return args
+        if "card_index" in args or "card_id" not in args:
+            return args
+
+        card_id = str(args["card_id"])
+        state = await self.get_state()
+        combat = getattr(state, "combat", {})
+        hand = combat.get("hand", []) if isinstance(combat, dict) else []
+        if not isinstance(hand, list):
+            return args
+
+        for card in hand:
+            if not isinstance(card, dict):
+                continue
+            if str(card.get("card_id") or card.get("id")).upper() != card_id.upper():
+                continue
+            index = card.get("index")
+            if isinstance(index, int):
+                resolved = dict(args)
+                resolved["card_index"] = index
+                return resolved
+        return args
+
     async def wait_until_actionable(self, timeout: float) -> bool:
-        """POST {endpoint}/wait_until_actionable in a polling loop.
+        """Poll real Agent health/actions endpoints until the game is actionable.
 
         Polls the agent at 0.5s intervals until either:
-        - The agent responds with actionable=True → returns True
+        - Health is ready and at least one action is available → returns True
         - The timeout is reached → returns False
         Transient STS2Errors during polling are swallowed.
         Each request is capped to the remaining time so that
@@ -425,11 +484,8 @@ class AgentAdapter:
             if remaining <= 0:
                 return False
             try:
-                data = await asyncio.wait_for(
-                    self._request("POST", self._wait_path),
-                    timeout=remaining,
-                )
-                if data.get("actionable") or data.get("ready"):
+                health = await asyncio.wait_for(self.health_check(), timeout=remaining)
+                if health.healthy and await self.get_available_actions():
                     return True
             except (STS2Error, asyncio.TimeoutError):
                 # Re-check remaining time before sleeping
@@ -518,6 +574,38 @@ class AgentAdapter:
 def _map_screen(screen_raw: str) -> GameScreen:
     """Map STS2-Agent screen name to GameScreen enum, falling back to UNKNOWN."""
     return _SCREEN_MAP.get(screen_raw, GameScreen.UNKNOWN)
+
+
+def _unwrap_data_envelope(data: dict[str, Any]) -> dict[str, Any]:
+    """Return the payload under STS2-Agent's {ok, data} envelope when present."""
+    payload = data.get("data")
+    if data.get("ok") is True and isinstance(payload, dict):
+        return payload
+    return data
+
+
+def _normalize_actions(actions: Any) -> list[str]:
+    """Normalize Agent action payloads from strings or action descriptor objects."""
+    if not isinstance(actions, list):
+        return []
+
+    result: list[str] = []
+    for item in actions:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, dict) and item.get("name"):
+            result.append(str(item["name"]))
+    return result
+
+
+def _normalize_action_args(action: str, resolved: dict[str, Any]) -> dict[str, Any]:
+    """Convert framework arg names to STS2-Agent HTTP action field names."""
+    payload = dict(resolved)
+    if action == "play_card":
+        payload.pop("card_id", None)
+        if "target" in payload and "target_index" not in payload:
+            payload["target_index"] = payload.pop("target")
+    return payload
 
 
 def _filter_state_extra(data: dict[str, Any]) -> dict[str, Any]:

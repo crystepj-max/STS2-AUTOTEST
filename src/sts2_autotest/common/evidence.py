@@ -3,6 +3,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from sts2_autotest.common.errors import FailureClassification
 
 
 SCHEMA_VERSION = "1.0.0"
@@ -40,7 +41,10 @@ class ArtifactsInfo(BaseModel):
 
 
 class FailureInfo(BaseModel):
-    """Failure details for failed test cases."""
+    """Failure details for failed test cases (协议层 B20).
+
+    Extended with classification for autofix routing.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -50,6 +54,7 @@ class FailureInfo(BaseModel):
     expected: str | None = None
     actual: str | None = None
     exit_code: int | None = None
+    classification: FailureClassification = FailureClassification.UNKNOWN
 
 
 class RepairSuggestion(BaseModel):

@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from sts2_autotest.common.errors import FailureClassification
 from sts2_autotest.common.state import GameScreen, GameState
 
 
@@ -28,6 +29,7 @@ class TestResult:
     Unified model used by both Orchestrator and Fluent API.
     - case_id / status / detail: Orchestrator-level fields.
     - failures / state_snapshot: Fluent API assertion fields.
+    - classification: root cause category for autofix routing (协议层 B20).
     """
 
     __test__ = False  # not a pytest test class
@@ -38,6 +40,12 @@ class TestResult:
     failures: list[str] = field(default_factory=list)
     state_snapshot: GameState | None = None
     crash_signature: str | None = None
+    classification: FailureClassification = FailureClassification.UNKNOWN
+
+    @property
+    def classification_str(self) -> str:
+        """Return classification as plain string for serialization."""
+        return self.classification.value if isinstance(self.classification, FailureClassification) else str(self.classification)
 
     @property
     def passed(self) -> bool:

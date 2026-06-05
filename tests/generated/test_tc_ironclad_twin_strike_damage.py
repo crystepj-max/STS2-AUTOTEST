@@ -28,12 +28,14 @@ from sts2_autotest.common.state import GameScreen
 from sts2_autotest.core.action_model import ActionDescriptor
 
 # Given: 已安装并可连接 STS2-Cli-Mod
-# Given: 游戏可被启动
-# Given: 如存在旧 run，框架应负责回收并回到可重新开局状态
-def test_tc_prepare_new_run(autotest, _session_loop):
-    """进入新局地图"""
+# Given: 游戏可被启动并加载到主菜单
+# Given: 使用原游戏角色 Ironclad（战士）
+# Given: 双重打击的原版卡牌 ID 为 TWIN_STRIKE
+# Given: 双重打击的原版基线为 damage=5、hit_count=2
+def test_tc_ironclad_twin_strike_damage(autotest, _session_loop):
+    """战士双重打击伤害验证"""
     result = (
-        define("TC-PREPARE-NEW-RUN", autotest, _session_loop)
+        define("TC-IRONCLAD-TWIN-STRIKE-DAMAGE", autotest, _session_loop)
         .require_start_state("""- 任意可恢复状态
 - 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN""")
         .setup(
@@ -41,22 +43,26 @@ def test_tc_prepare_new_run(autotest, _session_loop):
             start_new_run(),
             select_character("IRONCLAD"),
             embark(),
+            choose_event(0),
+            choose_map_node(2, 1),
+            enter_combat(),
+            give_card("TWIN_STRIKE"),
         )
         .execute(
-            advance_dialogue(),
+            play_card("TWIN_STRIKE"),
         )
         .assert_that(
             no_crash_detected(),
-            game_reached_state(GameScreen.MAP),
-            has_travelable_node(),
+            game_reached_state(GameScreen.COMBAT),
+            enemy_took_exact_hits(5, 2),
         )
     )
     failure_context = {
-        "case_id": "TC-PREPARE-NEW-RUN",
-        "title": "进入新局地图",
+        "case_id": "TC-IRONCLAD-TWIN-STRIKE-DAMAGE",
+        "title": "战士双重打击伤害验证",
         "start_state": "- 任意可恢复状态\n- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN",
-        "end_state": "- 到达 Act 1 地图\n- 当前可选择首个可达节点",
-        "steps": ["返回主菜单", "开始新 run", "选择 Ironclad", "开始冒险", "推进事件对话"],
+        "end_state": "- 当前位于战斗界面\n- 已尝试打出 TWIN_STRIKE\n- 伤害事件应记录为 5 点伤害 2 次",
+        "steps": ["返回主菜单", "开始新 run", "选择战士", "开始冒险", "选择开局事件的第 0 个选项", "选择地图节点 (2, 1)", "进入首次战斗", "添加 TWIN_STRIKE 到手牌", "使用 TWIN_STRIKE"],
         "failures": result.failures,
         "detail": result.detail,
     }

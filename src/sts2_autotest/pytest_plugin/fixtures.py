@@ -103,10 +103,7 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
 def _create_adapter_factory():
     """Return a callable that creates fresh adapter instances (for recovery)."""
     if _is_agent_enabled():
-        from sts2_autotest.adapters.agent import AgentAdapter
-
-        endpoint = os.environ.get("STS2_ADAPTER__AGENT__ENDPOINT", "http://localhost:8080")
-        return lambda: AgentAdapter(endpoint=endpoint)
+        return _create_adapter_from_env
     return lambda: CliModAdapter()
 
 
@@ -143,7 +140,7 @@ def _bootstrap_runtime() -> bool:
             steam_exe=steam_exe,
         )
         steam.start_steam()
-        steam.start_game()
+        steam.start_game(reuse_existing=True)
     except Exception as exc:
         logger.warning("Runtime bootstrap failed: %s", exc)
         return False
@@ -188,7 +185,11 @@ def _start_orchestrator_session(
         logger.warning("Adapter cleanup before bootstrap retry failed: %s", exc)
 
     if _is_agent_enabled():
-        logger.info("Agent adapter mode: waiting for agent service to become ready")
+        logger.info("Agent adapter mode: bootstrapping Steam/game before waiting for agent service")
+        if not _bootstrap_runtime():
+            logger.info(
+                "Runtime bootstrap did not start the game; waiting for an external launch"
+            )
         if not _wait_for_adapter_ready(loop, adapter):
             return False
     else:

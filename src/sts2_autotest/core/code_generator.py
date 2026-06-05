@@ -27,8 +27,10 @@ from sts2_autotest.dsl.assertions import (
     combat_basic_policy,
     embark,
     end_turn,
+    enemy_took_exact_hits,
     enter_combat,
     game_reached_state,
+    give_card,
     no_crash_detected,
     has_travelable_node,
     play_card,
@@ -45,6 +47,13 @@ from sts2_autotest.core.action_model import ActionDescriptor
 _STEP_TO_ACTION: dict[str, str] = {
     "结束回合": "end_turn()",
     "使用": "play_card",
+}
+
+_CHARACTER_IDS: dict[str, str] = {
+    "Ironclad": "IRONCLAD",
+    "Gawain": "gawain",
+    "战士": "IRONCLAD",
+    "铁甲战士": "IRONCLAD",
 }
 
 
@@ -65,8 +74,15 @@ def _step_to_action_call(step: str) -> str:
         return "return_to_menu()"
     if "开始新 run" in step or "开始新局" in step:
         return "start_new_run()"
-    if "选择 Ironclad" in step:
-        return 'select_character("IRONCLAD")'
+    character_match = re.search(r"选择\s*([A-Za-z][A-Za-z0-9_-]*|战士|铁甲战士)", step)
+    if character_match:
+        character_name = character_match.group(1)
+        character_id = _CHARACTER_IDS.get(character_name)
+        if character_id:
+            return f'select_character("{character_id}")'
+    give_card_match = re.search(r"添加\s+([A-Za-z0-9_:-]+)\s+到手牌", step)
+    if give_card_match:
+        return f'give_card("{give_card_match.group(1)}")'
     if "开始冒险" in step:
         return "embark()"
     if "推进事件对话" in step:
@@ -139,10 +155,25 @@ class CodeGenerator:
         assert_calls: list[str] = []
         for assertion in assertions:
             assertion_lower = assertion.lower()
-            if "crash" in assertion_lower:
+            exact_hits_match = re.search(r"造成\s*(\d+)\s*点伤害\s*(\d+)\s*次", assertion)
+            if exact_hits_match:
+                assert_calls.append(
+                    f"enemy_took_exact_hits({exact_hits_match.group(1)}, {exact_hits_match.group(2)})"
+                )
+            elif "deal" in assertion_lower and "damage" in assertion_lower and "twice" in assertion_lower:
+                damage_match = re.search(r"deal\s+(\d+)\s+damage", assertion_lower)
+                if damage_match:
+                    assert_calls.append(f"enemy_took_exact_hits({damage_match.group(1)}, 2)")
+                else:
+                    assert_calls.append(f"# TODO: implement assertion for '{assertion}'")
+            elif "crash" in assertion_lower:
                 assert_calls.append("no_crash_detected()")
             elif "map" in assertion_lower or "地图" in assertion:
                 assert_calls.append("game_reached_state(GameScreen.MAP)")
+            elif "event" in assertion_lower or "事件" in assertion:
+                assert_calls.append("game_reached_state(GameScreen.EVENT)")
+            elif "combat" in assertion_lower or "战斗" in assertion:
+                assert_calls.append("game_reached_state(GameScreen.COMBAT)")
             elif "节点" in assertion or "node" in assertion_lower:
                 assert_calls.append("has_travelable_node()")
             else:
@@ -223,7 +254,7 @@ class CodeGenerator:
         for assertion in suite.suite_assertions:
             lines.append(f"    # Suite assertion: {assertion}")
         lines.append("    suite_results = []")
-        lines.append("    summary_path = Path('tests/output/suite-summaries') / "
+        lines.append("    summary_path = Path(__file__).resolve().parent.parent / \"output\" / \"suite-summaries\" / "
                      f"{json.dumps(suite.id + '.json', ensure_ascii=False)}")
         lines.append("")
         lines.append("    def _write_suite_summary():")
@@ -270,10 +301,19 @@ class CodeGenerator:
             if spec.assertions:
                 for assertion in spec.assertions:
                     assertion_lower = assertion.lower()
-                    if "crash" in assertion_lower:
+                    exact_hits_match = re.search(r"造成\s*(\d+)\s*点伤害\s*(\d+)\s*次", assertion)
+                    if exact_hits_match:
+                        lines.append(
+                            f"            enemy_took_exact_hits({exact_hits_match.group(1)}, {exact_hits_match.group(2)}),"
+                        )
+                    elif "crash" in assertion_lower:
                         lines.append("            no_crash_detected(),")
                     elif "map" in assertion_lower or "鍦板浘" in assertion:
                         lines.append("            game_reached_state(GameScreen.MAP),")
+                    elif "event" in assertion_lower or "事件" in assertion:
+                        lines.append("            game_reached_state(GameScreen.EVENT),")
+                    elif "combat" in assertion_lower or "战斗" in assertion:
+                        lines.append("            game_reached_state(GameScreen.COMBAT),")
                     elif "鑺傜偣" in assertion or "node" in assertion_lower:
                         lines.append("            has_travelable_node(),")
                     else:

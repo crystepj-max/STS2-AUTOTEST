@@ -101,12 +101,26 @@ class SuiteSpec:
 
 @dataclass
 class ProjectConfig:
-    """Configuration for a single MOD project within the workspace."""
+    """Configuration for a single MOD project within the workspace.
+
+    Extended (B20): added mod_id, manifest, source_dirs, design_docs,
+    suite_dirs, default_suite, autotest_config for workspace manifest
+    and autotest discovery.
+    """
     name: str
     spec_dir: str
+    mod_id: str = ""
+    manifest: str = ""
     output_dir: str = ""
+    source_dirs: list[str] = field(default_factory=list)
+    design_docs: list[str] = field(default_factory=list)
+    suite_dirs: list[str] = field(default_factory=list)
+    default_suite: str = ""
+    autotest_config: str = ""
 
     def __post_init__(self) -> None:
+        if not self.mod_id:
+            self.mod_id = self.name
         if not self.output_dir:
             self.output_dir = self.spec_dir
 

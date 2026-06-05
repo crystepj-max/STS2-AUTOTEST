@@ -275,6 +275,26 @@ class TestAct:
         assert commands == [["sts2", "choose_game_mode", "standard"]]
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_embark_waits_until_character_select_is_left(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),
+            _mock_popen_ok({"screen": "CHARACTER_SELECT"}),
+            _mock_popen_ok({"screen": "EVENT"}),
+        ]
+
+        result = _run(adapter.act("embark"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "embark"],
+            ["sts2", "state"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_setup_actions_are_noops_after_new_run_started(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:

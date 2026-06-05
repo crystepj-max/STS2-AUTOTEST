@@ -20,6 +20,7 @@ from sts2_autotest.common.evidence import (
     RepairSuggestion,
     SummaryJson,
 )
+from sts2_autotest.common.errors import FailureClassification
 from sts2_autotest.common.logging import get_logger
 
 if TYPE_CHECKING:
@@ -108,6 +109,64 @@ def _match_rules(failure: FailureInfo) -> list[RepairSuggestion]:
     return suggestions
 
 
+def _classify_failure(failure: FailureInfo) -> FailureClassification:
+    """Classify a failure by root cause (协议层 B20).
+
+    Rules (ordered by specificity):
+    1. Crash / game exit → mod (MOD code defect) or environment (process not found)
+    2. Adapter error + version mismatch → autotest
+    3. Adapter error + connection/port/endpoint → environment
+    4. Assertion error → test_case (wrong expectation) or mod (actual mismatch)
+    5. Timeout → mod (infinite loop/blocked) or environment (game hung)
+    6. Session error → environment
+    7. Game error → mod
+
+    Returns FailureClassification enum.
+    """
+    msg_lower = failure.message.lower()
+
+    # Crash with game process not found → environment
+    if failure.type == ErrorCategory.CRASH_ERROR.value:
+        if "process" in msg_lower and "not found" in msg_lower:
+            return FailureClassification.ENVIRONMENT
+        if any(w in msg_lower for w in ["exit", "terminat", "crash", "segfault"]):
+            return FailureClassification.MOD
+        return FailureClassification.MOD
+
+    # Adapter errors
+    if failure.type == ErrorCategory.ADAPTER_ERROR.value:
+        if "version_mismatch" in msg_lower or "版本" in failure.message:
+            return FailureClassification.AUTOTEST
+        if any(w in msg_lower for w in ["connect", "refused", "timeout", "endpoint"]):
+            return FailureClassification.ENVIRONMENT
+        if any(w in msg_lower for w in ["parse", "serialize", "schema", "field"]):
+            return FailureClassification.AUTOTEST
+        return FailureClassification.AUTOTEST
+
+    # Assertion errors
+    if failure.type == ErrorCategory.ASSERTION_ERROR.value:
+        if failure.expected is not None and failure.actual is None:
+            # State transition expected but no state returned
+            return FailureClassification.TEST_CASE
+        if failure.expected is not None and failure.actual is not None:
+            return FailureClassification.MOD
+        return FailureClassification.TEST_CASE
+
+    # Timeout
+    if failure.type == ErrorCategory.TIMEOUT_ERROR.value:
+        if any(w in msg_lower for w in ["init", "startup", "load"]):
+            return FailureClassification.ENVIRONMENT
+        return FailureClassification.MOD
+
+    # Session / game
+    if failure.type == ErrorCategory.SESSION_ERROR.value:
+        return FailureClassification.ENVIRONMENT
+    if failure.type == ErrorCategory.GAME_ERROR.value:
+        return FailureClassification.MOD
+
+    return FailureClassification.UNKNOWN
+
+
 # ── L2 stack trace parser ─────────────────────────────────────
 
 
@@ -180,7 +239,9 @@ class RepairAdvisor:
         self._enable_replay = enable_replay
 
     def analyze(self, summary: SummaryJson) -> RepairReport | None:
-        """Analyze a SummaryJson and produce a RepairReport.
+        """Analyze a SummaryJson and produce a RepairReport (协议层 B20).
+
+        Extended with failure classification for autofix routing.
 
         Returns None when summary.failure is None (no failure to analyze).
         """
@@ -189,6 +250,9 @@ class RepairAdvisor:
 
         start = time.monotonic()
         failure = summary.failure
+
+        # B20: classify failure before rule matching
+        classification = _classify_failure(failure)
 
         # L1: rule matching
         suggestions = _match_rules(failure)
@@ -205,6 +269,14 @@ class RepairAdvisor:
                 description=f"从 FailureInfo 记录的 {failure.type}: {failure.message}",
             ))
 
+        # Add classification info to first suggestion description
+        if suggestions:
+            first = suggestions[0]
+            class_msg = f"[分类: {classification.value}] "
+            suggestions[0] = first.model_copy(update={
+                "description": class_msg + first.description,
+            })
+
         # L2: stack trace parsing + enrichment
         if failure.stack_trace:
             locations = _parse_stack_trace(failure.stack_trace)
@@ -216,7 +288,7 @@ class RepairAdvisor:
 
         # Generate deterministic crash signature matching recovery.crash_signature() semantics
         code = str(failure.exit_code) if failure.exit_code is not None else "none"
-        signature = f"{failure.type}:{code}"
+        signature = f"{classification.value}:{failure.type}:{code}"
 
         return RepairReport(
             crash_signature=signature,

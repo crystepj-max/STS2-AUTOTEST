@@ -20,6 +20,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import asyncio
+import json
+from sts2_autotest.adapters.agent import AgentAdapter
 
 try:
     import yaml  # type: ignore
@@ -372,7 +375,7 @@ class TestAgentRunner:
         # Derive mod name for deployment (Issue 1 fix)
         self._mod_name = mod_name or _derive_mod_name(self._mod_project_path)
 
-        self._artifact_dir = self._mod_project_path / ".agent-runs" / task_id
+        self._artifact_dir = self._mod_project_path / "automation/autotest/output" / task_id
         self._state_dir = self._artifact_dir / "state"
         self._screenshot_dir = self._artifact_dir / "screenshots"
         self._report_path = self._artifact_dir / "test-report.md"
@@ -419,6 +422,39 @@ class TestAgentRunner:
 
     def _add(self, name: str, status: str, evidence: str = "", details: str = "") -> None:
         self.results.append(CheckResult(name=name, status=status, evidence=evidence, details=details))
+
+    # -- evidence helpers -----------------------------------------------------
+
+    def _capture_screenshot(self, name: str) -> str:
+        """Capture full-screen screenshot and save to screenshot dir.
+
+        Uses mss to grab the primary monitor. Saves as PNG.
+        Returns the relative evidence path (for the report).
+        Returns empty string on failure (non-blocking).
+        """
+        try:
+            import mss
+            path = self._screenshot_dir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with mss.mss() as sct:
+                sct.shot(mon=1, output=str(path))
+            return str(path.relative_to(self._mod_project_path))
+        except Exception as exc:
+            print(f'[agent-test] WARNING: Screenshot failed ({name}): {exc}', file=sys.__stdout__)
+            return ''
+
+    def _save_state_snapshot(self, step_name: str, state_dict: dict) -> str:
+        """Save a state JSON snapshot to state dir.
+
+        Returns the relative evidence path (for the report).
+        """
+        path = self._state_dir / f"{step_name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(state_dict, indent=2, ensure_ascii=False),
+            encoding='utf-8',
+        )
+        return str(path.relative_to(self._mod_project_path))
 
     # ------------------------------------------------------------------
     # Step 1: Validate inputs
@@ -562,62 +598,208 @@ class TestAgentRunner:
     # Step 6: Game smoke test
     # ------------------------------------------------------------------
 
+
+    def _navigate_to_first_combat(self, agent: AgentAdapter) -> dict:
+        """Navigate from MAIN_MENU to first combat. Raises _Failed on failure."""
+        nav_steps = [
+            ("open_character_select", {}),
+            ("select_character", {"option_index": 0}),
+            ("embark", {}),
+            ("choose_map_node", {"option_index": 0}),
+        ]
+        for action_name, params in nav_steps:
+            result = asyncio.run(agent.act(action_name, params))
+            if result.status != "success":
+                raise _Failed(f"Navigation failed at '{action_name}': {result.detail}")
+            asyncio.run(agent.wait_until_actionable(timeout=15))
+        state = asyncio.run(agent.get_state())
+        state_dict = dict(state) if hasattr(state, "__dict__") else {}
+        if state_dict.get("screen") != "COMBAT":
+            raise _Failed(f"Expected COMBAT screen, got {state_dict.get('screen')}")
+        return state_dict
+
+    def _verify_card_and_screenshot(
+        self, agent: AgentAdapter, card: dict, card_index: int, target_index: int,
+    ) -> dict:
+        """Play one card: screenshot before, play, verify, screenshot after.
+
+        card is a dict from combat.hand[] with card_id, name, index, energy_cost,
+        playable, dynamic_values.
+
+        Returns a dict with verification results for the report.
+        """
+        card_id = card.get("card_id", f"card_{card_index}")
+        card_name = card.get("name", card_id)
+        result = {
+            "card_id": card_id,
+            "name": card_name,
+            "index": card_index,
+            "status": "UNKNOWN",
+            "expected_damage": 0,
+            "actual_damage": 0,
+            "expected_block": 0,
+            "actual_block": 0,
+            "screenshot_before": "",
+            "screenshot_after": "",
+            "error": "",
+        }
+
+        for dv in card.get("dynamic_values", []):
+            dv_name = dv.get("name", "")
+            if dv_name == "damage":
+                result["expected_damage"] = dv.get("current_value", dv.get("base_value", 0))
+            elif dv_name == "block":
+                result["expected_block"] = dv.get("current_value", dv.get("base_value", 0))
+
+        result["screenshot_before"] = self._capture_screenshot(f"card-{card_id}-before.png")
+
+        before = asyncio.run(agent.get_state())
+        before_dict = dict(before) if hasattr(before, "__dict__") else {}
+        combat_before = before_dict.get("combat", {}) or {}
+        enemies_before = combat_before.get("enemies", [])
+        enemy_hp_before = enemies_before[0].get("current_hp", 0) if enemies_before else 0
+        player_block_before = combat_before.get("player", {}).get("block", 0)
+        self._save_state_snapshot(f"card-{card_id}-before", before_dict)
+
+        try:
+            play_result = asyncio.run(
+                agent.act("play_card", {"card_id": card_id, "target_index": target_index})
+            )
+        except Exception as exc:
+            result["status"] = "FAIL"
+            result["error"] = f"play_card failed: {exc}"
+            return result
+
+        if play_result.status != "success":
+            result["status"] = "FAIL"
+            result["error"] = f"play_card: {play_result.status}: {play_result.detail}"
+            return result
+
+        asyncio.run(agent.wait_until_actionable(timeout=10))
+
+        after = asyncio.run(agent.get_state())
+        after_dict = dict(after) if hasattr(after, "__dict__") else {}
+        combat_after = after_dict.get("combat", {}) or {}
+        enemies_after = combat_after.get("enemies", [])
+        enemy_hp_after = enemies_after[0].get("current_hp", 0) if enemies_after else 0
+        player_block_after = combat_after.get("player", {}).get("block", 0)
+        self._save_state_snapshot(f"card-{card_id}-after", after_dict)
+        result["screenshot_after"] = self._capture_screenshot(f"card-{card_id}-after.png")
+
+        errors = []
+        if result["expected_damage"] > 0:
+            hp_diff = enemy_hp_before - enemy_hp_after
+            result["actual_damage"] = hp_diff
+            if hp_diff != result["expected_damage"]:
+                errors.append(f"damage: expected {result['expected_damage']}, got {hp_diff}")
+        if result["expected_block"] > 0:
+            block_gained = player_block_after - player_block_before
+            result["actual_block"] = block_gained
+            if block_gained != result["expected_block"]:
+                errors.append(f"block: expected {result['expected_block']}, got {block_gained}")
+
+        result["status"] = "OK" if not errors else "FAIL"
+        if errors:
+            result["error"] = "; ".join(errors)
+        return result
+
     def _step_game_smoke(self) -> None:
+        """Execute in-game smoke test via STS2-Agent API.
+
+        Flow: wait for agent health -> navigate to first combat ->
+        screenshot + verify each hand card -> validate raw keys.
+        """
         if self._skip_game_smoke:
             smoke_log = self._artifact_dir / "game-smoke.log"
             smoke_log.write_text("Skipped by --skip-game-smoke\n", encoding="utf-8")
             self._add("Game Smoke", "SKIPPED", "game-smoke.log")
-            # Issue 2: validate require_game_running constraint
             if self._require_game_running:
                 self._add("Game Required", "BLOCKED", "test-plan",
                           "require_game_running is true but --skip-game-smoke was passed")
             return
 
-        # --- 6a: sts2 ping ---
-        cli_log = self._artifact_dir / "sts2-cli.log"
-        sts2 = shutil.which("sts2")
-        if sts2 is None:
-            # Try discovery
-            from sts2_autotest.adapters.discovery import discover_sts2_cli
-            sts2 = discover_sts2_cli()
-        if sts2 is None:
-            raise _Blocked(
-                f"sts2 CLI not found within {self._ping_timeout}s ping window. "
-                "Install STS2-Cli-Mod or use --skip-game-smoke."
-            )
-
+        # --- 6a: Wait for sts2-agent HTTP API ---
+        agent = AgentAdapter(endpoint="http://127.0.0.1:8080", timeout=10)
+        health_ok = False
         deadline = time.time() + self._ping_timeout
-        ping_ok = False
         while time.time() < deadline:
-            rc, out = _run_command("sts2 ping", [sts2, "ping"], cli_log, timeout=10)
-            if rc == 0:
-                ping_ok = True
-                break
+            try:
+                health = asyncio.run(agent.health_check())
+                if health.healthy:
+                    health_ok = True
+                    break
+            except Exception:
+                pass
             time.sleep(3)
-        if not ping_ok:
-            raise _Blocked(f"sts2 ping did not succeed within {self._ping_timeout}s.")
-        self._add("STS2-Cli-Mod Ping", "PASSED", "sts2-cli.log")
 
-        # --- 6b: sts2 state ---
-        state_path = self._state_dir / "initial-state.json"
-        rc, out = _run_command("sts2 state", [sts2, "state", "-p"], cli_log, timeout=10)
-        if rc != 0:
-            raise _Failed("sts2 state -p failed. See sts2-cli.log.")
-        # C5: save state JSON
-        state_path.write_text(out + "\n", encoding="utf-8")
+        if not health_ok:
+            raise _Blocked(
+                f"STS2-Agent HTTP API did not respond within {self._ping_timeout}s. "
+                "Ensure the game is running with STS2AIAgent mod loaded."
+            )
+        self._add("STS2-Agent Health", "PASSED", "http://127.0.0.1:8080/health")
 
-        # --- 6c: scan for raw keys ---
+        # --- 6b: Navigate to first combat ---
+        state = self._navigate_to_first_combat(agent)
+        self._add("First Combat Reached", "PASSED",
+                  self._save_state_snapshot("combat-start", state))
+
+        # --- 6c: Read hand ---
+        combat = state.get("combat", {}) or {}
+        hand = combat.get("hand", [])
+        if not hand:
+            raise _Failed("No cards in hand at combat start")
+
+        # --- 6d: Verify each card ---
+        self._card_results = []
+        for card in hand:
+            card_index = card.get("index", 0)
+            card_result = self._verify_card_and_screenshot(agent, card, card_index, 0)
+            self._card_results.append(card_result)
+
+        passed_count = sum(1 for r in self._card_results if r["status"] == "OK")
+        failed = [r for r in self._card_results if r["status"] != "OK"]
+
+        if failed:
+            detail = "; ".join(
+                f"{r['name']}({r['card_id']}): {r['error']}" for r in failed
+            )
+            raise _Failed(f"Card verification: {len(failed)} failed ({detail})")
+
+        self._add("Card Smoke Test", "PASSED",
+                  f"Verified {passed_count} cards; "
+                  f"screenshots in automation/autotest/output/{self._task_id}/screenshots/")
+
+        # --- 6e: Clean up ---
+        asyncio.run(agent.act("abandon_run"))
+        self._add("Abandon Run", "PASSED", "")
+
+        # --- 6f: Scan for raw keys in final state ---
+        final_state = asyncio.run(agent.get_state())
+        final_dict = dict(final_state) if hasattr(final_state, "__dict__") else {}
+        final_json = json.dumps(final_dict)
         raw_patterns = ["GAWAIN_", "MISSING", "missing localization", "KeyNotFound"]
         for pattern in raw_patterns:
-            if pattern.lower() in out.lower():
-                raise _Failed(f"Raw key or missing localization pattern found in game state: {pattern}")
+            if pattern.lower() in final_json.lower():
+                raise _Failed(f"Raw key found after combat: {pattern}")
 
-        self._add("Game Smoke", "PASSED", "game-smoke.log; state/initial-state.json")
-        self._add("No Raw Key", "PASSED", "state/initial-state.json")
+        self._add("No Raw Key", "PASSED",
+                  self._save_state_snapshot("final-state", final_dict))
 
-    # ------------------------------------------------------------------
-    # Report generation
-    # ------------------------------------------------------------------
+    def _build_card_detail_table(self) -> str:
+        """Build card verification table from _card_results for the report."""
+        if not hasattr(self, "_card_results") or not self._card_results:
+            return ""
+        rows = "| 卡牌 | ID | 预期伤害 | 实际伤害 | 预期格挡 | 实际格挡 | 状态 | 截图 |\n"
+        rows += "|------|-----|---------|---------|---------|---------|------|------|\n"
+        for r in self._card_results:
+            rows += (
+                f"| {r['name']} | {r['card_id']} "
+                f"| {r['expected_damage']} | {r['actual_damage']} "
+                f"| {r['expected_block']} | {r['actual_block']} "
+                f"| {r['status']} | before: {r['screenshot_before']}<br>after: {r['screenshot_after']} |\n"
+            )
+        return rows
 
     def _write_report(self) -> None:
         """Generate test-report.md in the artifact directory."""
@@ -682,8 +864,6 @@ class TestAgentRunner:
 - localization log: localization-check.log
 - deploy log: deploy.log
 - launch log: launch.log
-- sts2 cli log: sts2-cli.log
-- game smoke log: game-smoke.log
 - state snapshots: state/
 - screenshots: screenshots/
 

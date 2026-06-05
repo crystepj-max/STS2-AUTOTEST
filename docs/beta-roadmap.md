@@ -1,7 +1,7 @@
 # STS2-AUTOTEST BETA 阶段路线图
 
-> 生成日期：2026-05-26（P1 B25 验收通过）
-> 状态：B25/Epic5 主线合并已完成，真实环境验收待补跑
+> 生成日期：2026-06-03（P3 B10/B11/B13 已完成）
+> 状态：B25/Epic5 主线合并已完成；B10/B11/B13 已实现；真实环境验收待补跑
 
 ---
 
@@ -14,13 +14,24 @@
 | codex/b25-natural-language-test-pipeline | B25 NL 流水线 + B19 集成测试 + Epic10 技术债 + B1 崩溃恢复 + B7 AgentAdapter | 0 冲突 | 已合并 |
 | codex/epic5-runtime-control | B2 弹窗处置 + B3 无人值守 + B4 队列 + B5 进度 + B18 异步打包 + B14 能力发现 | 1 文件(agent.py) | 已合并 |
 
-合并后主干通过 1054 个单元测试，mypy strict 零错误。
+## P3 批量实现（2026-05-31 ~ 2026-06-03）
+
+通过 feat/b11-cicd-pipeline 分支及多个 worktree 实现：
+
+| 任务 | 内容 | 文件新增/修改 |
+|------|------|--------------|
+| B10 | 修复建议 | `core/repair_advisor.py`, `common/evidence.py` 新增 FailureInfo/RepairSuggestion/RepairReport, `evidence/packager.py` 集成, 单元测试 41 个 + 集成测试 4 个 |
+| B11 | CI/CD 流水线 | `.github/workflows/` 4 个工作流文件, `scripts/setup-mac-runner.sh` 自托管 Runner 脚本 |
+| B13 | 桌面通知 | `core/notifier.py` 三平台实现, `config/schema.py` NotificationsConfig, `common/types.py` DesktopNotifier Protocol, 单元测试 10 个 |
+| B17 | Health Check (补记) | `cli/health_server.py` 已实现，B11 流水线依赖此端点 |
+
+合并后主干通过 1221 个单元测试（含 B10/B13 新增），mypy strict 零错误。
 
 ---
 
 ## MVP 阶段完成概况
 
-MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 安全沙箱推迟到 Beta），Beta 又通过分支合并新增了 119 个测试，累计 **1054 个单元测试**，全程 mypy strict 零错误、lint-imports 层级隔离零违反。
+MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 安全沙箱推迟到 Beta），Beta 通过分支合并和 P3 任务新增了 167 个测试，累计 **1221 个单元测试**，全程 mypy strict 零错误、lint-imports 层级隔离零违反。
 
 | Epic | 内容 | Story | 测试增量 |
 |------|------|-------|---------|
@@ -31,6 +42,7 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 | Epic 5 | 运行时控制 | 5/5 | 804 - 854 |
 | Epic 6-9 | 扩展能力(部分) | - | 854 - 935 |
 | B25 + Epic10 + B19 | 附加 | - | 935 - 1054 |
+| B10/B11/B13 | P3 CI/CD + 修复建议 + 桌面通知 | - | 1054 - 1221 |
 
 ### MVP 遗留技术债（已清）
 
@@ -63,10 +75,10 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 | B7 | AgentAdapter | 已合入 | 接入 STS2-Agent，HTTP + MCP 双传输 |
 | B8 | Visual QA Engine | 待实现 | OCR + OpenCV + VLM 视觉审查 |
 | B9 | 多人冒烟测试 | 待实现 | 双 Runner 编排 |
-| B10 | Level 2 修复建议 | 待实现 | crash pack - patch.diff |
-| B11 | CI/CD 流水线 | 待实现 | GitHub Actions / 自托管 Runner，PR 注释 |
+| B10 | Level 2 修复建议 | 已实现 | RepairAdvisor（三层规则引擎：L1 分类匹配 + L2 堆栈解析 + L3 异常分析），集成到 EvidencePackager |
+| B11 | CI/CD 流水线 | 已实现 | 4 个 GitHub Actions 工作流（PR/push-to-main/game-integration/nightly）+ 自托管 Mac Runner 设置脚本 |
 | B12 | --ci 模式 + JUnit XML | 已合入 | 在 B25 分支中实现 |
-| B13 | 桌面通知 | 待实现 | 运行完成后通知 |
+| B13 | 桌面通知 | 已实现 | 零依赖平台通知器（Windows: ctypes Shell_NotifyIconW + macOS: osascript）|
 | B14 | 适配器能力发现 | 已合入 | Capabilities dataclass + capabilities 属性 |
 
 ### 三、MVP 遗留 Story
@@ -75,7 +87,7 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 |----|------|------|------|------|
 | B15 | 安全沙箱（Story 4.8） | Epic 4.8 | 待实现 | Windows Job Objects + ACL |
 | B16 | 完整 SessionQueue 异步排队 | Epic 4.6 | 已实现 | session_queue.py 完整异步排队 |
-| B17 | Health check HTTP 端点 | Epic 4.7 | 待实现 | 扩展 CLI doctor 为 HTTP 端点 |
+| B17 | Health check HTTP 端点 | Epic 4.7 | 已实现 | health_server.py：纯 stdlib asyncio，/health /health/live /health/ready |
 | B18 | Artifact ZIP 异步打包 | Epic 4.7 | 已合入 | packager.py，异步 job 等待 |
 
 ### 四、技术债修复
@@ -102,8 +114,8 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 | 优先级 | 任务 | 状态 |
 |--------|------|------|
 | P1 | 真实环境验收补跑（B25 端到端 + Epic5 4h 长跑） | 待执行 |
-| P2 | B15 安全沙箱、B17 Health Check HTTP 端点 | 排队 |
-| P3 | B11 CI/CD、B10 修复建议、B13 桌面通知 | 排队 |
+| P2 | B15 安全沙箱 | 排队 |
+| P3 | 无（B10/B11/B13/B17 已完成） | 已实现 |
 | P4 | B8 Visual QA、B9 多人冒烟 | 排队 |
 | P5 | B6 覆盖率报告、Retrospectives、最终验收记录 | 排队 |
 
@@ -119,8 +131,8 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 | 视觉 | 语法级截图校验（纯色检测） | OCR + OpenCV + VLM 语义审查（P4） |
 | 弹窗 | 无处理 | 95% 自动处置（已实现） |
 | 编成 | 单人单机 | 双 Runner 多人冒烟（P4） |
-| CI/CD | 本地 CLI | GitHub Actions + PR 注释 + HTTP 端点（P3） |
-| 测试 | 935 单元测试（全 mock） | 1054 单元测试 + 真实 CLI 集成测试 |
+| CI/CD | 本地 CLI | GitHub Actions + PR 注释 + HTTP 端点 + 4 个工作流 |
+| 测试 | 935 单元测试（全 mock） | 1221 单元测试 + 真实 CLI 集成测试 |
 | 无人值守 | >= 2h | >= 4h（已实现，待真实验收） |
 
 ## Epic 5 验证记录（2026-05-25）

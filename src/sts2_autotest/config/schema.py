@@ -124,12 +124,30 @@ class ServerConfig(BaseModel):
 
 
 class ProjectConfigModel(BaseModel):
-    """Configuration for a single MOD project in the workspace."""
+    """Configuration for a single MOD project in the workspace.
+
+    Extended (B20): added mod_id, manifest, source_dirs, design_docs,
+    suite_dirs for workspace manifest and autotest discovery.
+    """
     model_config = ConfigDict(frozen=True)
+
     name: str
+    mod_id: str = ""
+    manifest: str = ""
     spec_dir: str
     output_dir: str = ""
+    source_dirs: list[str] = []
+    design_docs: list[str] = []
+    suite_dirs: list[str] = []
+    agent_context_dir: str = ".sts2/context"
+    default_suite: str = ""
+    autotest_config: str = ""
 
+    @model_validator(mode="after")
+    def _ensure_mod_id(self) -> "ProjectConfigModel":
+        if not self.mod_id:
+            object.__setattr__(self, "mod_id", self.name)
+        return self
 
 class WorkspaceConfigModel(BaseModel):
     """Workspace configuration for multi-MOD-project support."""
