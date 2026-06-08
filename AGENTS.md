@@ -1,6 +1,13 @@
-# STS2-AUTOTEST Agent Rules
+# STS2-AUTOTEST Agent 规则
 
 本仓库是 STS2 Mod 通用自动化测试平台，承担角色化多 Agent 流程中的 Test Agent 底座。
+
+## 交流语言
+
+**默认使用中文交流。** 所有回复、文档、代码注释均使用中文，除非遇到以下情况可保留英文原文（需附加中文说明）：
+- 编程语言关键字（如 `async`、`await`）
+- 领域专有名词（如 Harmony Patch、Godot）
+- 遵循项目命名规范的文件名、模块名、类名、函数名、变量名
 
 ## 仓库职责
 

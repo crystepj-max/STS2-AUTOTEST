@@ -1,82 +1,38 @@
-# Agent Collaboration Protocol Implementation Plan
+# Agent 协作协议实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 归档说明：本文件原为英文计划稿。为统一中文规范，现保留中文摘要；原始英文版本请通过 Git 历史查看。
 
-**Goal:** Add a reusable agent collaboration protocol that lets Codex, ClaudeCode, and other coding agents coordinate development, review, verification, and architecture decisions.
+## 目标
 
-**Architecture:** The protocol is workflow-agnostic and lives in `.agent-collab/`. Project-specific delivery rules live in `.agent-collab/WORKFLOW_ADAPTER.md`; this repository uses BMAD as its adapter.
+为仓库引入一套可复用的 agent collaboration protocol，使 Codex、Claude Code 和其他 coding agent 可以围绕开发、评审、验证与架构决策进行协作。
 
-**Tech Stack:** Markdown protocol files, append-only mailbox folders, BMAD story artifacts, pytest, mypy, import-linter.
+## 核心思路
 
----
+- 协议本体放在 `.agent-collab/`。
+- 项目专属交付规则由 `.agent-collab/WORKFLOW_ADAPTER.md` 承载。
+- 当前仓库以 BMAD 作为 adapter，不把 BMAD 假设写死到通用协议中。
 
-### Task 1: Create Protocol Skeleton
+## 主要任务
 
-**Files:**
-- Create: `.agent-collab/AGENT_PROTOCOL.md`
-- Create: `.agent-collab/WORKFLOW_ADAPTER.md`
-- Create: `.agent-collab/README.md`
+### 任务 1：建立协议骨架
 
-- [x] **Step 1: Define universal states, roles, mailbox ownership, and gates**
+- 创建 `.agent-collab/AGENT_PROTOCOL.md`
+- 创建 `.agent-collab/WORKFLOW_ADAPTER.md`
+- 创建 `.agent-collab/README.md`
 
-Write the protocol so every agent can understand when to implement, when to stop, when to request a decision, and when a story is approved.
+### 任务 2：建立角色与消息模板
 
-- [x] **Step 2: Define the BMAD adapter**
+- 创建角色文件，如 developer、architect、reviewer、verifier。
+- 创建 dev-done、review、decision-request、decision、verify-result 等消息模板。
 
-Document where BMAD stories live, which files are final sources of truth, and who may update final status.
+### 任务 3：建立 inbox 与日志目录
 
-- [x] **Step 3: Add operator-facing README**
+- 创建 `.agent-collab/inbox/*`
+- 创建 `.agent-collab/log/*`
+- 创建 `.agent-collab/state/board.md`
 
-Explain how to onboard another agent and what it must read before work.
+## 预期结果
 
-### Task 2: Create Roles and Templates
-
-**Files:**
-- Create: `.agent-collab/roles/claude-developer.md`
-- Create: `.agent-collab/roles/codex-architect-reviewer.md`
-- Create: `.agent-collab/templates/dev-done.md`
-- Create: `.agent-collab/templates/review.md`
-- Create: `.agent-collab/templates/decision-request.md`
-- Create: `.agent-collab/templates/decision.md`
-- Create: `.agent-collab/templates/verify-result.md`
-
-- [x] **Step 1: Add role files**
-
-Define ClaudeCode as developer and Codex as architect/reviewer/verifier.
-
-- [x] **Step 2: Add message templates**
-
-Require AC coverage, changed files, verification evidence, known shortcuts, findings, and next actions.
-
-### Task 3: Create Mailbox and Log Folders
-
-**Files:**
-- Create: `.agent-collab/inbox/codex/.gitkeep`
-- Create: `.agent-collab/inbox/claude/.gitkeep`
-- Create: `.agent-collab/inbox/other-agents/.gitkeep`
-- Create: `.agent-collab/log/decisions/.gitkeep`
-- Create: `.agent-collab/log/handoffs/.gitkeep`
-- Create: `.agent-collab/log/reviews/.gitkeep`
-- Create: `.agent-collab/state/board.md`
-
-- [x] **Step 1: Add append-only mailbox directories**
-
-Each agent writes only to its own mailbox directory.
-
-- [x] **Step 2: Add shared board**
-
-Track active work, window size, and open decisions.
-
-### Task 4: Verify Structure
-
-**Files:**
-- Read: `.agent-collab/**`
-
-- [x] **Step 1: List created files**
-
-Run `Get-ChildItem .agent-collab -Recurse` and confirm protocol files exist.
-
-- [x] **Step 2: Review content for ambiguous ownership**
-
-Confirm every writable area has one owner and every gate has a clear approver.
-
+- 所有 agent 都能明确何时开始实现、何时暂停、何时请求决策、何时进入审批。
+- 仓库内形成 append-only handoff 与 review 轨迹。
+- BMAD 仅作为仓库专属 adapter 存在。

@@ -1,13 +1,13 @@
-# Epic 5 Runtime Resilience And Operator Control Implementation Plan
+# Epic 5 运行健壮性与操作者控制实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-> 中文说明：本计划只覆盖 Epic 5。执行时按 Story 独立提交，每个 Story 结束前运行单元测试、`mypy src/sts2_autotest --strict` 和 `lint-imports`。
+> **面向代理执行者：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务逐项执行本计划。步骤使用复选框（`- [ ]`）语法跟踪。
+> 本计划只覆盖 Epic 5。执行时按 Story 独立提交，每个 Story 结束前运行单元测试、`mypy src/sts2_autotest --strict` 和 `lint-imports`。
 
-**Goal:** 完成 Epic 5 的 Beta 运行健壮性与操作者控制能力：弹窗处置、异步 ZIP、队列暂停继续、实时进度暂停继续、场景覆盖报告和四小时无人值守验证。
+**目标：** 完成 Epic 5 的 Beta 运行健壮性与操作者控制能力：弹窗处置、异步 ZIP、队列暂停继续、实时进度暂停继续、场景覆盖报告和四小时无人值守验证。
 
-**Architecture:** 以现有 Epic 1-4 与 Epic 6 代码为基础，不重做已完成的恢复、进度、队列、证据和真实适配器能力。实现顺序先去除收尾阻塞，再补恢复阻塞点，再补操作者控制和覆盖报告，最后用四小时长跑做验收。所有新增共享模型优先留在所属模块内，只有被三个以上模块引用时才进入 `common/`。
+**架构：** 以现有 Epic 1-4 与 Epic 6 代码为基础，不重做已完成的恢复、进度、队列、证据和真实适配器能力。实现顺序先去除收尾阻塞，再补恢复阻塞点，再补操作者控制和覆盖报告，最后用四小时长跑做验收。所有新增共享模型优先留在所属模块内，只有被三个以上模块引用时才进入 `common/`。
 
-**Tech Stack:** Python 3.11+、pytest、mypy strict、import-linter、argparse CLI、pydantic v2、stdlib `zipfile`/`threading`/`concurrent.futures`、Windows 本地 Steam/STS2-Cli-Mod 集成环境。
+**技术栈：** Python 3.11+、pytest、mypy strict、import-linter、argparse CLI、pydantic v2、stdlib `zipfile` / `threading` / `concurrent.futures`、Windows 本地 Steam / STS2-Cli-Mod 集成环境。
 
 ---
 

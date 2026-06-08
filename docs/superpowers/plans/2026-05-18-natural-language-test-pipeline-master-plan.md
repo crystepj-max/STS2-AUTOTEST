@@ -1,12 +1,12 @@
-# Natural Language Test Pipeline Implementation Plan
+# 自然语言测试流水线主计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **面向代理执行者：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 按任务逐项执行本计划。步骤使用复选框（`- [ ]`）语法跟踪。
 
-**Goal:** 将自然语言测试规格完整接入 STS2-AUTOTEST 主链路，并把首场战斗冒烟场景推进到真实可执行闭环。
+**目标：** 将自然语言测试规格完整接入 STS2-AUTOTEST 主链路，并把首场战斗冒烟场景推进到真实可执行闭环。
 
-**Architecture:** 面向用户的输入是 `specs/cases/*.md` 与 `specs/suites/*.md`，框架先审查规格，再编译为 `TestSpec` / `SuiteSpec`，最后生成 `pytest + Fluent DSL` 测试文件交给 pytest 执行。CLI 保持 `review` / `compile` / `run` 分层命令，同时由 `run --all` 负责编排全流程。
+**架构：** 面向用户的输入是 `specs/cases/*.md` 与 `specs/suites/*.md`，框架先审查规格，再编译为 `TestSpec` / `SuiteSpec`，最后生成 `pytest + Fluent DSL` 测试文件交给 pytest 执行。CLI 保持 `review` / `compile` / `run` 分层命令，同时由 `run --all` 负责编排全流程。
 
-**Tech Stack:** Python 3.11、dataclasses、argparse、pytest、现有 `TestOrchestrator`、`ActionDescriptor`、`Fluent DSL`、`CliModAdapter`
+**技术栈：** Python 3.11、dataclasses、argparse、pytest、现有 `TestOrchestrator`、`ActionDescriptor`、`Fluent DSL`、`CliModAdapter`
 
 ---
 

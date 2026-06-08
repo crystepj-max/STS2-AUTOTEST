@@ -1,79 +1,38 @@
-# Agent Loop Automation Implementation Plan
+# Agent 循环自动化实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> 归档说明：本文件原为英文计划稿。为统一中文规范，现保留中文摘要；原始英文版本请通过 Git 历史查看。
 
-**Goal:** Add a local automation loop that lets ClaudeCode implement, Codex review, and ClaudeCode fix until Codex approves.
+## 目标
 
-**Architecture:** Keep ACP/BMAD as the source of truth and add a PowerShell runner under `.agent-collab/tools/`. The runner invokes configurable local CLI commands, waits for append-only ACP files, and records state and final summaries under `.agent-collab/state/`.
+增加本地自动化循环，让 Claude Code 负责实现，Codex 负责评审，直到 Codex 给出 `APPROVED`。
 
-**Tech Stack:** PowerShell, Markdown ACP records, BMAD file artifacts.
+## 架构摘要
 
----
+- ACP / BMAD 继续作为事实来源。
+- 在 `.agent-collab/tools/` 下新增 PowerShell runner。
+- runner 调用可配置的本地 CLI 命令，等待 append-only ACP 文件，并将状态与最终摘要写入 `.agent-collab/state/`。
 
-### Task 1: Add Orchestrator Smoke Test
+## 主要任务
 
-**Files:**
-- Create: `.agent-collab/tools/test-run-agent-loop.ps1`
+### 任务 1：新增 orchestrator smoke test
 
-- [x] **Step 1: Write a failing smoke test**
+- 创建 `.agent-collab/tools/test-run-agent-loop.ps1`
+- 覆盖 dry-run 与 mock loop 行为
 
-Run:
+### 任务 2：实现本地循环 runner
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .agent-collab/tools/test-run-agent-loop.ps1
-```
+- 创建 `.agent-collab/tools/run-agent-loop.ps1`
+- 支持 `-Task`、`-FromNextAction`、`-MaxRounds`、`-DryRun` 等参数
+- 处理 `DEV_DONE`、`FIX_DONE`、`CHANGES_REQUESTED`、`BLOCKED`、`APPROVED`
 
-Expected before implementation: failure because `.agent-collab/tools/run-agent-loop.ps1` does not exist.
+### 任务 3：补充文档入口
 
-- [x] **Step 2: Cover dry-run and mock loop behavior**
+- 更新工具 README
+- 更新协议与 adapter 文档
+- 补充 operator-facing bootstrap 说明
 
-The test asserts dry-run state exists, then uses mock Claude/Codex PowerShell commands to create `DEV_DONE` and `REVIEW: APPROVED`.
+## 验收口径
 
-### Task 2: Implement Local Loop Runner
-
-**Files:**
-- Create: `.agent-collab/tools/run-agent-loop.ps1`
-
-- [x] **Step 1: Add configurable command entry**
-
-Support `-Task`, `-FromNextAction`, `-ClaudeCommand`, `-ClaudeArgs`, `-CodexCommand`, `-CodexArgs`, `-MaxRounds`, `-DryRun`, and `-SkipCoordinator`.
-
-- [x] **Step 2: Add event waiting and decision routing**
-
-Wait for `DEV_DONE` / `FIX_DONE`, call Codex review, route `CHANGES_REQUESTED` / `BLOCKED` back to Claude, and stop on `APPROVED`.
-
-- [x] **Step 3: Record loop state**
-
-Write `active-loop.json`, prompt files, command logs, and `last-loop-summary.md`.
-
-### Task 3: Document Both Entry Points
-
-**Files:**
-- Modify: `.agent-collab/tools/README.md`
-- Modify: `.agent-collab/AGENT_PROTOCOL.md`
-- Modify: `.agent-collab/WORKFLOW_ADAPTER.md`
-- Modify: `.agent-collab/AGENT_BOOTSTRAP.md`
-
-- [x] **Step 1: Document direct PowerShell usage**
-
-Show `run-agent-loop.ps1 -Task` and `run-agent-loop.ps1 -FromNextAction`.
-
-- [x] **Step 2: Document natural-language startup**
-
-Tell agents that "启动自动协作任务" maps to the local runner command.
-
-### Task 4: Verify
-
-**Files:**
-- Read: `.agent-collab/tools/run-agent-loop.ps1`
-- Read: `.agent-collab/tools/test-run-agent-loop.ps1`
-
-- [x] **Step 1: Run smoke test**
-
-Run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .agent-collab/tools/test-run-agent-loop.ps1
-```
-
-Expected: `PASS run-agent-loop smoke test`.
+- dry-run 状态可见
+- mock Claude / Codex 循环可完整跑通
+- 最终能生成 loop state、prompt、command log 与 summary
