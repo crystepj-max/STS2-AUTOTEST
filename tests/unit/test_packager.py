@@ -417,6 +417,37 @@ class TestGenerateReport:
         content = (tmp_path / "run_versioned" / "summary.md").read_text(encoding="utf-8")
         assert f"- **Autotest Version:** {__version__}" in content
 
+    def test_generate_report_legacy_pack_skips_none_autotest_version(self, tmp_path: Path) -> None:
+        pack_dir = tmp_path / "run_legacy"
+        pack_dir.mkdir()
+        (pack_dir / "screenshots").mkdir()
+        (pack_dir / "logs").mkdir()
+        (pack_dir / "reports").mkdir()
+        data = {
+            "schema_version": SCHEMA_VERSION,
+            "pack_id": "run_legacy",
+            "test_run": {
+                "run_id": "run_legacy",
+                "result": "passed",
+                "duration_ms": 100,
+                "autotest_version": None,
+            },
+            "environment": {
+                "framework": "fw",
+                "adapter": "cli",
+                "game": "game",
+                "os": "test",
+                "python": "3.11",
+            },
+        }
+        (pack_dir / "summary.json").write_text(json.dumps(data), encoding="utf-8")
+
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.generate_report("run_legacy")
+
+        content = (pack_dir / "summary.md").read_text(encoding="utf-8")
+        assert "- **Autotest Version:** None" not in content
+
 
 # ── from_config ─────────────────────────────────────────────
 
