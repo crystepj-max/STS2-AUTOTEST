@@ -40,6 +40,10 @@ class TestRunInfo:
         assert info.result == "PASS"
         assert info.duration_ms == 5000
 
+    def test_create_without_autotest_version_for_backward_compatibility(self) -> None:
+        info = RunInfo(run_id="run-001", result="PASS", duration_ms=5000)
+        assert info.autotest_version is None
+
     def test_frozen(self) -> None:
         info = RunInfo(
             run_id="run-001",
@@ -194,6 +198,29 @@ class TestSummaryJson:
         )
         restored = SummaryJson.model_validate(summary.model_dump(mode="json"))
         assert restored.compatibility_block_reason == "autotest_compatibility_blocked"
+
+    def test_summary_json_model_validate_accepts_legacy_run_info_without_autotest_version(
+        self,
+    ) -> None:
+        restored = SummaryJson.model_validate(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "pack_id": "legacy-pack",
+                "test_run": {
+                    "run_id": "legacy-run",
+                    "result": "blocked",
+                    "duration_ms": 0,
+                },
+                "environment": {
+                    "framework": "sts2-autotest",
+                    "adapter": "agent",
+                    "game": "Slay the Spire 2",
+                    "os": "macOS",
+                    "python": "3.11.0",
+                },
+            }
+        )
+        assert restored.test_run.autotest_version is None
 
 
 class TestEvidencePack:

@@ -16,7 +16,7 @@ class RunInfo(BaseModel):  # noqa: N801 — renamed to avoid pytest collection w
     run_id: str
     result: str
     duration_ms: int = Field(ge=0)
-    autotest_version: str
+    autotest_version: str | None = None
 
 
 class EnvironmentInfo(BaseModel):
