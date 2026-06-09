@@ -448,6 +448,21 @@ class TestGenerateReport:
         content = (pack_dir / "summary.md").read_text(encoding="utf-8")
         assert "- **Autotest Version:** None" not in content
 
+    def test_generate_report_includes_compatibility_block_reason(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack("run_blocked", run_result="blocked")
+        summary_path = pack_dir / "summary.json"
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        data["compatibility_block_reason"] = "autotest_compatibility_blocked"
+        summary_path.write_text(json.dumps(data), encoding="utf-8")
+
+        pkgr.generate_report("run_blocked")
+
+        content = (pack_dir / "summary.md").read_text(encoding="utf-8")
+        assert "- **Compatibility Block Reason:** autotest_compatibility_blocked" in content
+        assert "This run was blocked by STS2-AUTOTEST platform compatibility" in content
+        assert "not by the MOD project's business logic" in content
+
 
 # ── from_config ─────────────────────────────────────────────
 

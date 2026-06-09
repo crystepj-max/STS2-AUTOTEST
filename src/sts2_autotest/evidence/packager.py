@@ -284,6 +284,17 @@ class EvidencePackager:
             lines.append(f"- **Autotest Version:** {run.autotest_version}")
         lines.append("")
 
+        if summary.compatibility_block_reason is not None:
+            lines.append(
+                f"- **Compatibility Block Reason:** {summary.compatibility_block_reason}"
+            )
+            lines.append("")
+            lines.append(
+                "This run was blocked by STS2-AUTOTEST platform compatibility, "
+                "not by the MOD project's business logic."
+            )
+            lines.append("")
+
         # Environment
         env = summary.environment
         lines.append("## Environment")
