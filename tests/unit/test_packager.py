@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from sts2_autotest import __version__
 from sts2_autotest.common.evidence import FailureInfo, SCHEMA_VERSION
 from sts2_autotest.common.types import EvidencePackagerSettings
 from sts2_autotest.evidence.packager import EvidencePackager
@@ -80,6 +81,13 @@ class TestCreatePack:
         pkgr = EvidencePackager(tmp_path)
         pkgr.create_pack("run_ac6_auto")
         assert (tmp_path / "run_ac6_auto" / "summary.md").is_file()
+
+    def test_create_pack_writes_autotest_version_to_summary_json(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack("run_versioned")
+
+        data = json.loads((pack_dir / "summary.json").read_text(encoding="utf-8"))
+        assert data["test_run"]["autotest_version"] == __version__
 
     def test_create_pack_with_failure_auto_generates_md(self, tmp_path: Path) -> None:
         """AC6 regression: even failed packs get summary.md automatically."""
@@ -401,6 +409,13 @@ class TestGenerateReport:
         content = (tmp_path / "run_no_ea" / "summary.md").read_text(encoding="utf-8")
         assert "FAIL" in content
         assert "**Expected**" not in content
+
+    def test_generate_report_includes_autotest_version(self, tmp_path: Path) -> None:
+        pkgr = EvidencePackager(tmp_path)
+        pkgr.create_pack("run_versioned")
+
+        content = (tmp_path / "run_versioned" / "summary.md").read_text(encoding="utf-8")
+        assert f"- **Autotest Version:** {__version__}" in content
 
 
 # ── from_config ─────────────────────────────────────────────

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sts2_autotest import __version__
 from sts2_autotest.common.evidence import (
     SCHEMA_VERSION,
     ArtifactsInfo,
@@ -125,6 +126,7 @@ class EvidencePackager:
                 run_id=pack_id,
                 result=run_result,
                 duration_ms=duration_ms,
+                autotest_version=__version__,
             ),
             environment=EnvironmentInfo(
                 framework=self._framework,
@@ -278,6 +280,7 @@ class EvidencePackager:
         lines.append(f"- **Result:** {result_marker}")
         lines.append(f"- **Duration:** {run.duration_ms} ms")
         lines.append(f"- **Run ID:** {run.run_id}")
+        lines.append(f"- **Autotest Version:** {run.autotest_version}")
         lines.append("")
 
         # Environment
@@ -570,5 +573,4 @@ def _generate_junit_xml(summary: SummaryJson) -> str:
             ET.SubElement(tc, "screenshot", {"name": ss})
 
     return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(suites, encoding="unicode")
-
 
