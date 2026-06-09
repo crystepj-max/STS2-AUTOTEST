@@ -16,6 +16,7 @@ class RunInfo(BaseModel):  # noqa: N801 — renamed to avoid pytest collection w
     run_id: str
     result: str
     duration_ms: int = Field(ge=0)
+    autotest_version: str
 
 
 class EnvironmentInfo(BaseModel):
@@ -104,6 +105,7 @@ class SummaryJson(BaseModel):
     failure: FailureInfo | None = None
     artifact_path: str | None = None
     repair_report: RepairReport | None = None
+    compatibility_block_reason: str | None = None
 
 
 class EvidencePack(BaseModel):
@@ -123,3 +125,4 @@ class EvidencePack(BaseModel):
     artifacts: ArtifactsInfo = ArtifactsInfo()
     failure: FailureInfo | None = None
     artifact_path: str | None = None
+    compatibility_block_reason: str | None = None

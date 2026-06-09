@@ -30,13 +30,23 @@ class TestRunInfo:
     """RunInfo model tests."""
 
     def test_create_with_required_fields(self) -> None:
-        info = RunInfo(run_id="run-001", result="PASS", duration_ms=5000)
+        info = RunInfo(
+            run_id="run-001",
+            result="PASS",
+            duration_ms=5000,
+            autotest_version="0.1.0",
+        )
         assert info.run_id == "run-001"
         assert info.result == "PASS"
         assert info.duration_ms == 5000
 
     def test_frozen(self) -> None:
-        info = RunInfo(run_id="run-001", result="PASS", duration_ms=5000)
+        info = RunInfo(
+            run_id="run-001",
+            result="PASS",
+            duration_ms=5000,
+            autotest_version="0.1.0",
+        )
         with pytest.raises(ValidationError):
             info.result = "FAIL"  # type: ignore[misc]
 
@@ -113,7 +123,12 @@ class TestSummaryJson:
     def _make_summary(self, **overrides: object) -> SummaryJson:
         defaults = {
             "pack_id": "pack-001",
-            "test_run": RunInfo(run_id="run-001", result="PASS", duration_ms=5000),
+            "test_run": RunInfo(
+                run_id="run-001",
+                result="PASS",
+                duration_ms=5000,
+                autotest_version="0.1.0",
+            ),
             "environment": EnvironmentInfo(
                 framework="0.1.0", adapter="CliMod", game="STS2", os="Win", python="3.11"
             ),
@@ -140,6 +155,46 @@ class TestSummaryJson:
         summary = self._make_summary()
         assert summary.failure is None
 
+    def test_summary_json_carries_autotest_version(self) -> None:
+        summary = SummaryJson(
+            pack_id="run_demo",
+            test_run=RunInfo(
+                run_id="run_demo",
+                result="blocked",
+                duration_ms=0,
+                autotest_version="0.1.0",
+            ),
+            environment=EnvironmentInfo(
+                framework="sts2-autotest",
+                adapter="agent",
+                game="Slay the Spire 2",
+                os="macOS",
+                python="3.11.0",
+            ),
+        )
+        assert summary.test_run.autotest_version == "0.1.0"
+
+    def test_summary_json_roundtrip_preserves_compatibility_block_reason(self) -> None:
+        summary = SummaryJson(
+            pack_id="run_blocked",
+            test_run=RunInfo(
+                run_id="run_blocked",
+                result="blocked",
+                duration_ms=0,
+                autotest_version="0.1.0",
+            ),
+            environment=EnvironmentInfo(
+                framework="sts2-autotest",
+                adapter="agent",
+                game="Slay the Spire 2",
+                os="macOS",
+                python="3.11.0",
+            ),
+            compatibility_block_reason="autotest_compatibility_blocked",
+        )
+        restored = SummaryJson.model_validate(summary.model_dump(mode="json"))
+        assert restored.compatibility_block_reason == "autotest_compatibility_blocked"
+
 
 class TestEvidencePack:
     """EvidencePack model tests."""
@@ -148,7 +203,12 @@ class TestEvidencePack:
         pack = EvidencePack(
             pack_id="pack-001",
             output_dir="evidence/pack-001",
-            test_run=RunInfo(run_id="run-001", result="PASS", duration_ms=5000),
+            test_run=RunInfo(
+                run_id="run-001",
+                result="PASS",
+                duration_ms=5000,
+                autotest_version="0.1.0",
+            ),
             environment=EnvironmentInfo(
                 framework="0.1.0", adapter="CliMod", game="STS2", os="Win", python="3.11"
             ),
@@ -159,7 +219,12 @@ class TestEvidencePack:
         pack = EvidencePack(
             pack_id="pack-001",
             output_dir="evidence/pack-001",
-            test_run=RunInfo(run_id="run-001", result="PASS", duration_ms=5000),
+            test_run=RunInfo(
+                run_id="run-001",
+                result="PASS",
+                duration_ms=5000,
+                autotest_version="0.1.0",
+            ),
             environment=EnvironmentInfo(
                 framework="0.1.0", adapter="CliMod", game="STS2", os="Win", python="3.11"
             ),
@@ -320,7 +385,12 @@ class TestSummaryJsonWithRepairReport:
 
         s = SummaryJson(
             pack_id="p1",
-            test_run=RunInfo(run_id="r1", result="passed", duration_ms=100),
+            test_run=RunInfo(
+                run_id="r1",
+                result="passed",
+                duration_ms=100,
+                autotest_version="0.1.0",
+            ),
             environment=EnvironmentInfo(
                 framework="fw", adapter="ad", game="g", os="os", python="3.11",
             ),
@@ -341,7 +411,12 @@ class TestSummaryJsonWithRepairReport:
         )
         s = SummaryJson(
             pack_id="p2",
-            test_run=RunInfo(run_id="r2", result="failed", duration_ms=200),
+            test_run=RunInfo(
+                run_id="r2",
+                result="failed",
+                duration_ms=200,
+                autotest_version="0.1.0",
+            ),
             environment=EnvironmentInfo(
                 framework="fw", adapter="ad", game="g", os="os", python="3.11",
             ),
@@ -367,7 +442,12 @@ class TestSummaryJsonWithRepairReport:
         )
         s = SummaryJson(
             pack_id="p3",
-            test_run=RunInfo(run_id="r3", result="crashed", duration_ms=0),
+            test_run=RunInfo(
+                run_id="r3",
+                result="crashed",
+                duration_ms=0,
+                autotest_version="0.1.0",
+            ),
             environment=EnvironmentInfo(
                 framework="fw", adapter="ad", game="g", os="os", python="3.11",
             ),
