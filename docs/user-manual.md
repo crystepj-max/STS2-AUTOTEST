@@ -608,6 +608,24 @@ STS2_FRAMEWORK__LOG_BACKUP_DIR=C:\path\backup
 
 导出 artifact 时会生成 `reports/junit.xml`，便于 CI 系统消费。
 
+### 13.4 版本可观测性
+
+STS2-AUTOTEST 采用统一滚动升级策略：工作区内只维护一个当前生效版本，所有接入的 MOD 项目直接跟随。为保证升级问题可追溯，所有核心测试产物都会记录当前 `autotest version`（来源为 `src/sts2_autotest/__init__.py` 中的 `__version__`）：
+
+- `summary.json` 的 `test_run.autotest_version` 字段。
+- `summary.md` 的 `- **Autotest Version:**` 行。
+- Test Agent 报告（`test-report.md`）环境段的 `- Autotest version:` 行。
+
+任何一次测试结果都能据此回答：这是哪个 MOD 项目、哪次 run、由哪个 autotest 版本执行的。旧版本生成的证据包没有该字段，读取时按缺省 `null` 兼容处理，报告中不渲染版本行。
+
+### 13.5 平台兼容性阻塞
+
+若报告中出现 `autotest_compatibility_blocked`，表示该次运行被 STS2-AUTOTEST 平台升级的兼容性问题阻塞，而非被测 MOD 业务逻辑失败。此时：
+
+- `summary.json` 的 `compatibility_block_reason` 字段为 `autotest_compatibility_blocked`，运行结果归类为 `BLOCKED`。
+- `summary.md` 会渲染 `- **Compatibility Block Reason:**` 行及解释文案。
+- 处理顺序：优先交回 STS2-AUTOTEST 平台侧补兼容层，其次增加迁移适配逻辑，最后才考虑宣布废弃旧行为并提供迁移说明。MOD 项目侧无需为此锁版本或回退。
+
 ## 14. 会话锁、看门狗与失败恢复
 
 ### 14.1 会话锁
