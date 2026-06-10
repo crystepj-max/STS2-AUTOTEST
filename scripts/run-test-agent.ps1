@@ -54,6 +54,7 @@ $Conclusion
 - Commit:
 - STS2 version:
 - BaseLib version:
+- Autotest version: $autotestVersion
 - OS: $([System.Environment]::OSVersion.VersionString)
 - Test runner: STS2-AUTOTEST/scripts/run-test-agent.ps1
 - Test plan: $TestPlanPath
@@ -95,12 +96,20 @@ $BlockedDetails
 
 - FAILED：交回 Developer Agent 修复。
 - BLOCKED：先补齐环境、游戏、自动化接口或构建目标。
+- BLOCKED：若原因为 autotest_compatibility_blocked，优先交回 STS2-AUTOTEST 平台侧补兼容。
 "@
     Set-Content -Path $ReportPath -Value $content -Encoding UTF8
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location (Join-Path $scriptRoot "..")
+
+# 版本从 src/sts2_autotest/__init__.py 单一来源解析，禁止硬编码
+$autotestVersion = "unknown"
+$versionMatch = Select-String -Path "src/sts2_autotest/__init__.py" -Pattern '__version__\s*=\s*"([^"]+)"' -ErrorAction SilentlyContinue
+if ($versionMatch) {
+    $autotestVersion = $versionMatch.Matches[0].Groups[1].Value
+}
 
 $testPlanPath = Resolve-FullPath $TestPlan
 $modProjectPath = Resolve-FullPath $ModProject
