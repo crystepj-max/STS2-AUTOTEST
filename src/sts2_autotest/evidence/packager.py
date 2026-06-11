@@ -103,14 +103,32 @@ class EvidencePackager:
         run_result: str = "unknown",
         duration_ms: int = 0,
         failure: FailureInfo | None = None,
+        compatibility_block_reason: str | None = None,
     ) -> Path:
-        """Create an evidence pack directory with summary.json.
+        """创建包含 summary.json 的证据包目录。
 
-        Returns the pack directory path.
+        Args:
+            pack_id: 证据包唯一标识；为空时自动生成。
+            run_result: 运行结果，例如 "passed"、"failed"、"crashed"、"blocked"。
+            duration_ms: 测试运行耗时，单位毫秒。
+            failure: 失败或崩溃运行的可选失败详情。
+            compatibility_block_reason: 设置后表示该运行因平台兼容性被阻塞，
+                例如 "autotest_compatibility_blocked"。必须搭配 run_result="blocked"，
+                否则抛出 ValueError。
+
+        Raises:
+            ValueError: compatibility_block_reason 非空但 run_result 不是 "blocked"。
         """
         if pack_id is None:
             now = datetime.now(timezone.utc)
             pack_id = now.strftime("run_%Y%m%dT%H%M%S")
+
+        reason_stripped = compatibility_block_reason.strip() if compatibility_block_reason else ""
+        if reason_stripped and run_result != "blocked":
+            raise ValueError(
+                f"compatibility_block_reason={compatibility_block_reason!r} requires "
+                f"run_result='blocked', got {run_result!r}"
+            )
 
         pack_dir = self._evidence_dir / pack_id
         pack_dir.mkdir(parents=True, exist_ok=True)
@@ -136,6 +154,7 @@ class EvidencePackager:
                 python=platform.python_version(),
             ),
             failure=failure,
+            compatibility_block_reason=compatibility_block_reason,
         )
 
         summary_path = pack_dir / "summary.json"
@@ -284,10 +303,9 @@ class EvidencePackager:
             lines.append(f"- **Autotest Version:** {run.autotest_version}")
         lines.append("")
 
-        if summary.compatibility_block_reason is not None:
-            lines.append(
-                f"- **Compatibility Block Reason:** {summary.compatibility_block_reason}"
-            )
+        reason = summary.compatibility_block_reason.strip() if summary.compatibility_block_reason else ""
+        if reason:
+            lines.append(f"- **Compatibility Block Reason:** {reason}")
             lines.append("")
             lines.append(
                 "This run was blocked by STS2-AUTOTEST platform compatibility, "

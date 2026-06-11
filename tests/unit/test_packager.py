@@ -89,6 +89,22 @@ class TestCreatePack:
         data = json.loads((pack_dir / "summary.json").read_text(encoding="utf-8"))
         assert data["test_run"]["autotest_version"] == __version__
 
+    def test_create_pack_writes_compatibility_block_reason(self, tmp_path: Path) -> None:
+        """验证 create_pack 会把 compatibility_block_reason 写入 summary.json 和 summary.md。"""
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack(
+            "run_blocked",
+            run_result="blocked",
+            compatibility_block_reason="autotest_compatibility_blocked",
+        )
+
+        data = json.loads((pack_dir / "summary.json").read_text(encoding="utf-8"))
+        assert data["compatibility_block_reason"] == "autotest_compatibility_blocked"
+
+        content = (pack_dir / "summary.md").read_text(encoding="utf-8")
+        assert "- **Compatibility Block Reason:** autotest_compatibility_blocked" in content
+        assert "blocked by STS2-AUTOTEST platform compatibility" in content
+
     def test_create_pack_with_failure_auto_generates_md(self, tmp_path: Path) -> None:
         """AC6 regression: even failed packs get summary.md automatically."""
         pkgr = EvidencePackager(tmp_path)
@@ -97,6 +113,33 @@ class TestCreatePack:
         assert (tmp_path / "run_ac6_fail" / "summary.md").is_file()
         content = (tmp_path / "run_ac6_fail" / "summary.md").read_text(encoding="utf-8")
         assert "FAIL" in content
+
+    def test_create_pack_rejects_inconsistent_compatibility_block_reason(self, tmp_path: Path) -> None:
+        """验证 compatibility_block_reason 与非 blocked 结果组合时会抛出 ValueError。"""
+        pkgr = EvidencePackager(tmp_path)
+        with pytest.raises(ValueError, match="requires run_result.*blocked"):
+            pkgr.create_pack(
+                "run_bad",
+                run_result="passed",
+                compatibility_block_reason="autotest_compatibility_blocked",
+            )
+
+        with pytest.raises(ValueError, match="requires run_result.*blocked"):
+            pkgr.create_pack(
+                "run_bad2",
+                run_result="failed",
+                compatibility_block_reason="some_reason",
+            )
+
+    def test_create_pack_accepts_compatibility_block_reason_with_blocked(self, tmp_path: Path) -> None:
+        """验证 compatibility_block_reason 与 blocked 结果组合时可以通过校验。"""
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack(
+            "run_good",
+            run_result="blocked",
+            compatibility_block_reason="autotest_compatibility_blocked",
+        )
+        assert (pack_dir / "summary.json").is_file()
 
 
 # ── copy_artifacts ──────────────────────────────────────────
@@ -462,6 +505,51 @@ class TestGenerateReport:
         assert "- **Compatibility Block Reason:** autotest_compatibility_blocked" in content
         assert "This run was blocked by STS2-AUTOTEST platform compatibility" in content
         assert "not by the MOD project's business logic" in content
+
+    def test_report_skips_compatibility_block_reason_for_empty_string(self, tmp_path: Path) -> None:
+        """空字符串 compatibility_block_reason 不应渲染阻塞说明区块。"""
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack("run_skip", run_result="passed")
+        summary_path = pack_dir / "summary.json"
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        data["compatibility_block_reason"] = ""
+        summary_path.write_text(json.dumps(data), encoding="utf-8")
+
+        pkgr.generate_report("run_skip")
+
+        content = (pack_dir / "summary.md").read_text(encoding="utf-8")
+        assert "- **Compatibility Block Reason:**" not in content
+        assert "platform compatibility" not in content
+
+    def test_report_skips_compatibility_block_reason_for_whitespace(self, tmp_path: Path) -> None:
+        """仅包含空白字符的 compatibility_block_reason 不应渲染阻塞说明区块。"""
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack("run_skip_ws", run_result="passed")
+        summary_path = pack_dir / "summary.json"
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        data["compatibility_block_reason"] = "   "
+        summary_path.write_text(json.dumps(data), encoding="utf-8")
+
+        pkgr.generate_report("run_skip_ws")
+
+        content = (pack_dir / "summary.md").read_text(encoding="utf-8")
+        assert "- **Compatibility Block Reason:**" not in content
+        assert "platform compatibility" not in content
+
+    def test_report_skips_compatibility_block_reason_for_none(self, tmp_path: Path) -> None:
+        """值为 None 的 compatibility_block_reason 不应渲染阻塞说明区块。"""
+        pkgr = EvidencePackager(tmp_path)
+        pack_dir = pkgr.create_pack("run_skip_none", run_result="passed")
+        summary_path = pack_dir / "summary.json"
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        data["compatibility_block_reason"] = None
+        summary_path.write_text(json.dumps(data), encoding="utf-8")
+
+        pkgr.generate_report("run_skip_none")
+
+        content = (pack_dir / "summary.md").read_text(encoding="utf-8")
+        assert "- **Compatibility Block Reason:**" not in content
+        assert "platform compatibility" not in content
 
 
 # ── from_config ─────────────────────────────────────────────

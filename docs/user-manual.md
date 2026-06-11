@@ -622,7 +622,7 @@ STS2-AUTOTEST 采用统一滚动升级策略：工作区内只维护一个当前
 
 若报告中出现 `autotest_compatibility_blocked`，表示该次运行被 STS2-AUTOTEST 平台升级的兼容性问题阻塞，而非被测 MOD 业务逻辑失败。此时：
 
-- `summary.json` 的 `compatibility_block_reason` 字段为 `autotest_compatibility_blocked`，运行结果归类为 `BLOCKED`。
+- 上游检测到平台兼容性问题后，通过 `create_pack(compatibility_block_reason=...)` 将原因写入 `summary.json` 的 `compatibility_block_reason` 字段（例如 `"autotest_compatibility_blocked"`），并将运行结果归类为 `BLOCKED`。
 - `summary.md` 会渲染 `- **Compatibility Block Reason:**` 行及解释文案。
 - 处理顺序：优先交回 STS2-AUTOTEST 平台侧补兼容层，其次增加迁移适配逻辑，最后才考虑宣布废弃旧行为并提供迁移说明。MOD 项目侧无需为此锁版本或回退。
 

@@ -57,6 +57,7 @@ Makefile
 __pycache__/
 *.pyc
 *.pyo
+.venv/
 .pytest_cache/
 .mypy_cache/
 .import_linter_cache/
@@ -72,6 +73,9 @@ _bmad-output/
 
 # Codex local config
 .agents/
+
+# Editor local config
+.vscode/
 
 # Local external downloads and runtime evidence
 .external/
