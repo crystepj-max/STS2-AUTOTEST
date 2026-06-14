@@ -42,6 +42,34 @@ def enemy_hp_decreased_by(amount: int) -> AssertionFn:
     return check
 
 
+def enemy_took_exact_hits(damage: int, hits: int) -> AssertionFn:
+    """Assert the last action recorded exact enemy damage events."""
+
+    def check(state: GameState) -> tuple[bool, str]:
+        events = getattr(state, "damage_events", None)
+        if events is None:
+            combat = getattr(state, "combat", None)
+            if isinstance(combat, dict):
+                events = combat.get("damage_events")
+        if not isinstance(events, list):
+            return False, "damage_events not in state, cannot verify exact hits"
+
+        amounts: list[int] = []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            raw_amount = event.get("amount", event.get("damage"))
+            if isinstance(raw_amount, int):
+                amounts.append(raw_amount)
+
+        expected = [damage] * hits
+        ok = amounts == expected
+        msg = "" if ok else f"Expected enemy damage events {damage} x {hits}, got {amounts}"
+        return ok, msg
+
+    return check
+
+
 def player_energy_decreased_by(amount: int) -> AssertionFn:
     """Assert player energy decreased by the given amount."""
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import asyncio
+import json
+from sts2_autotest.adapters.agent import AgentAdapter
+from sts2_autotest.core.steam import SteamController
+from sts2_autotest.report_html import write_html_report
 
 try:
     import yaml  # type: ignore
@@ -29,6 +35,9 @@ except Exception:  # pragma: no cover
 _IS_MACOS = platform.system() == "Darwin"
 _IS_WINDOWS = platform.system() == "Windows"
 _IS_LINUX = platform.system() == "Linux"
+_GAME_WINDOW_TITLE = "Slay the Spire 2"
+_GAWAIN_CHARACTER_IDS = {"gawain", "gawainmod-gawain", "gawain:character"}
+_GAWAIN_CHARACTER_NAMES = {"gawain", "高文"}
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -96,6 +105,172 @@ def _find_project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent.parent
 
 
+def _normalize_window_token(value: Any) -> str:
+    """Normalize window/process labels for loose title matching."""
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
+    """Return the best matching macOS on-screen window id and size."""
+    try:
+        import Quartz
+    except Exception:
+        return None
+
+    target = _normalize_window_token(window_title)
+    if not target:
+        return None
+
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionAll,
+        Quartz.kCGNullWindowID,
+    ) or []
+    candidates: list[tuple[int, int, int, int, int]] = []
+    for window in windows:
+        layer = int(window.get(Quartz.kCGWindowLayer, 0) or 0)
+        if layer != 0:
+            continue
+
+        owner = _normalize_window_token(window.get(Quartz.kCGWindowOwnerName, ""))
+        name = _normalize_window_token(window.get(Quartz.kCGWindowName, ""))
+        if not owner and not name:
+            continue
+        if not (
+            target in owner
+            or owner in target
+            or target in name
+            or name in target
+        ):
+            continue
+
+        bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
+        width = int(round(float(bounds.get("Width", 0) or 0)))
+        height = int(round(float(bounds.get("Height", 0) or 0)))
+        window_id = int(window.get(Quartz.kCGWindowNumber, 0) or 0)
+        if window_id <= 0 or width <= 0 or height <= 0:
+            continue
+
+        exact_match = int(target == owner or target == name)
+        candidates.append((exact_match, width * height, window_id, width, height))
+
+    if not candidates:
+        return None
+
+    candidates.sort(reverse=True)
+    _, _, window_id, width, height = candidates[0]
+    return window_id, (width, height)
+
+
+def _capture_macos_window_png(path: Path, window_title: str) -> bool:
+    """Capture a specific macOS window directly into a PNG file."""
+    try:
+        import Quartz
+        from AppKit import NSBitmapImageRep, NSPNGFileType
+    except Exception:
+        script = r"""
+from pathlib import Path
+import re
+import sys
+
+import Quartz
+from AppKit import NSBitmapImageRep, NSPNGFileType
+
+
+def norm(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+path = Path(sys.argv[1])
+window_title = sys.argv[2]
+target = norm(window_title)
+windows = Quartz.CGWindowListCopyWindowInfo(
+    Quartz.kCGWindowListOptionAll,
+    Quartz.kCGNullWindowID,
+) or []
+candidates = []
+for window in windows:
+    layer = int(window.get(Quartz.kCGWindowLayer, 0) or 0)
+    if layer != 0:
+        continue
+    owner = norm(window.get(Quartz.kCGWindowOwnerName, ""))
+    name = norm(window.get(Quartz.kCGWindowName, ""))
+    if not owner and not name:
+        continue
+    if not (
+        target in owner
+        or owner in target
+        or target in name
+        or name in target
+    ):
+        continue
+    bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
+    width = int(round(float(bounds.get("Width", 0) or 0)))
+    height = int(round(float(bounds.get("Height", 0) or 0)))
+    window_id = int(window.get(Quartz.kCGWindowNumber, 0) or 0)
+    if window_id <= 0 or width <= 0 or height <= 0:
+        continue
+    exact_match = int(target == owner or target == name)
+    candidates.append((exact_match, width * height, window_id))
+
+if not candidates:
+    raise SystemExit(1)
+
+candidates.sort(reverse=True)
+window_id = candidates[0][2]
+image = Quartz.CGWindowListCreateImage(
+    Quartz.CGRectNull,
+    Quartz.kCGWindowListOptionIncludingWindow,
+    window_id,
+    Quartz.kCGWindowImageBoundsIgnoreFraming,
+)
+if image is None:
+    raise SystemExit(1)
+
+path.parent.mkdir(parents=True, exist_ok=True)
+bitmap = NSBitmapImageRep.alloc().initWithCGImage_(image)
+if bitmap is None:
+    raise SystemExit(1)
+png_data = bitmap.representationUsingType_properties_(NSPNGFileType, {})
+if png_data is None:
+    raise SystemExit(1)
+if not png_data.writeToFile_atomically_(str(path), True):
+    raise SystemExit(1)
+"""
+        try:
+            result = subprocess.run(
+                ["python3", "-c", script, str(path), window_title],
+                capture_output=True,
+                text=True,
+                timeout=15.0,
+            )
+        except Exception:
+            return False
+        return result.returncode == 0 and path.exists()
+
+    match = _find_macos_window(window_title)
+    if match is None:
+        return False
+
+    window_id, _ = match
+    image = Quartz.CGWindowListCreateImage(
+        Quartz.CGRectNull,
+        Quartz.kCGWindowListOptionIncludingWindow,
+        window_id,
+        Quartz.kCGWindowImageBoundsIgnoreFraming,
+    )
+    if image is None:
+        return False
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    bitmap = NSBitmapImageRep.alloc().initWithCGImage_(image)
+    if bitmap is None:
+        return False
+    png_data = bitmap.representationUsingType_properties_(NSPNGFileType, {})
+    if png_data is None:
+        return False
+    return bool(png_data.writeToFile_atomically_(str(path), True))
+
+
 def _find_sln_or_csproj(project_path: Path) -> Path | None:
     """Find a .sln or .csproj file under *project_path*.
 
@@ -128,7 +303,7 @@ def _find_build_output(project_path: Path) -> Path | None:
     C1 enhancement: scans all nested bin dirs, not just the first match.
     Skips directories that cannot be stat'd (permission errors).
     """
-    _EXCLUDE_PARTS = {".git", ".claude", ".agent-runs", "bin", "obj", "node_modules", ".godot"}
+    _EXCLUDE_PARTS = {".git", ".claude", ".agent-runs", "obj", "node_modules"}
     candidates: list[Path] = []
     for pattern in ["**/bin/Release", "**/bin/Debug"]:
         for d in project_path.glob(pattern):
@@ -277,6 +452,168 @@ def _run_command(
         return -3, msg
 
 
+def _run_launch_command(name: str, cmd: list[str], log_path: Path) -> str:
+    """Run a desktop launch command and append its output to *log_path*."""
+    with log_path.open("a", encoding="utf-8") as f:
+        f.write(f"# {name}\n")
+        f.write(f"> {' '.join(cmd)}\n")
+    result = subprocess.run(cmd, capture_output=True, timeout=15.0)
+    output = (
+        result.stdout.decode("utf-8", errors="replace")
+        + result.stderr.decode("utf-8", errors="replace")
+    ).strip()
+    with log_path.open("a", encoding="utf-8") as f:
+        if output:
+            f.write(output + "\n")
+        f.write(f"ExitCode: {result.returncode}\n")
+    if result.returncode != 0:
+        raise RuntimeError(output or f"{cmd[0]} exited {result.returncode}")
+    return output
+
+
+def _steam_executable_candidates() -> list[Path]:
+    return [
+        Path.home() / "Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steam_osx",
+        Path("/Applications/Steam.app/Contents/MacOS/steam_osx"),
+    ]
+
+
+def _find_steam_executable() -> Path | None:
+    for steam_exe in _steam_executable_candidates():
+        if steam_exe.exists():
+            return steam_exe
+    return None
+
+
+def _popen_steam_executable(steam_exe: Path, args: list[str], launch_log: Path, name: str) -> None:
+    with launch_log.open("a", encoding="utf-8") as f:
+        f.write(f"# {name}\n")
+        f.write(f"> {steam_exe} {' '.join(args)}\n")
+    subprocess.Popen(
+        [str(steam_exe), *args],
+        cwd=str(steam_exe.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _start_steam_client_without_polling(launch_log: Path) -> Path | None:
+    """Start the Steam client in a desktop session without reading process lists."""
+    failures: list[str] = []
+    steam_app = Path("/Applications/Steam.app")
+    if steam_app.exists():
+        try:
+            _run_launch_command("Start Steam", ["open", str(steam_app)], launch_log)
+            return _find_steam_executable()
+        except RuntimeError as exc:
+            failures.append(str(exc))
+            with launch_log.open("a", encoding="utf-8") as f:
+                f.write(f"Steam.app launch failed: {exc}\n")
+
+    for steam_exe in _steam_executable_candidates():
+        if not steam_exe.exists():
+            continue
+        _popen_steam_executable(steam_exe, [], launch_log, "Start Steam executable")
+        return steam_exe
+
+    details = "; ".join(failures) if failures else "Steam executable not found"
+    raise RuntimeError(details)
+
+
+def _launch_game_via_desktop_open(app_id: str, launch_log: Path) -> None:
+    """Launch through Steam without process-list polling.
+
+    This fallback is for restricted desktop sandboxes where macOS denies
+    psutil/sysctl process scans. It still uses Steam, not the game binary.
+    """
+    if _IS_MACOS:
+        steam_exe = _start_steam_client_without_polling(launch_log)
+        time.sleep(float(os.environ.get("STS2_STEAM_FALLBACK_DELAY", "5")))
+        try:
+            _run_launch_command(
+                "Start game via Steam bundle",
+                ["open", "-b", "com.valvesoftware.steam", f"steam://run/{app_id}"],
+                launch_log,
+            )
+        except RuntimeError as exc:
+            with launch_log.open("a", encoding="utf-8") as f:
+                f.write(f"Steam bundle URL launch failed: {exc}\n")
+            try:
+                _run_launch_command("Start game via Steam", ["open", f"steam://run/{app_id}"], launch_log)
+                return
+            except RuntimeError as url_exc:
+                with launch_log.open("a", encoding="utf-8") as f:
+                    f.write(f"Steam URL handler failed: {url_exc}\n")
+            if steam_exe is None:
+                raise
+            _popen_steam_executable(
+                steam_exe,
+                ["-applaunch", app_id],
+                launch_log,
+                "Start game via Steam executable",
+            )
+        return
+    if _IS_WINDOWS:
+        os.startfile(f"steam://run/{app_id}")  # type: ignore[attr-defined]
+        return
+    _run_launch_command("Start game via Steam", ["xdg-open", f"steam://run/{app_id}"], launch_log)
+
+
+def _as_msbuild_dir(path: Path) -> str:
+    """Return an MSBuild directory property value with a trailing separator."""
+    value = str(path)
+    if value.endswith(("/", "\\")):
+        return value
+    return value + os.sep
+
+
+def _find_root_manifest(project_path: Path, mod_name: str) -> Path | None:
+    preferred = project_path / f"{mod_name}.json"
+    if preferred.exists():
+        return preferred
+    manifests = sorted(project_path.glob("*.json"))
+    return manifests[0] if manifests else None
+
+
+def _manifest_declares_pck(project_path: Path, mod_name: str) -> bool:
+    manifest = _find_root_manifest(project_path, mod_name)
+    if manifest is None:
+        return False
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    return bool(data.get("has_pck"))
+
+
+def _read_manifest_id(project_path: Path, mod_name: str) -> str:
+    manifest = _find_root_manifest(project_path, mod_name)
+    if manifest is None:
+        return mod_name
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return mod_name
+    manifest_id = str(data.get("id", "")).strip()
+    return manifest_id or mod_name
+
+
+def _find_godot_path() -> str:
+    env_path = os.environ.get("GODOT_PATH", "").strip()
+    if env_path:
+        return env_path
+    if _IS_MACOS:
+        for candidate in [
+            Path.home() / "Applications/Godot.app/Contents/MacOS/Godot",
+            Path("/Applications/Godot.app/Contents/MacOS/Godot"),
+            Path("/Applications/Godot_mono.app/Contents/MacOS/Godot"),
+        ]:
+            if candidate.exists():
+                return str(candidate)
+    return ""
+
+
 def _derive_mod_name(mod_project: Path) -> str:
     """Derive the mod name from the csproj file or project directory name.
 
@@ -372,7 +709,7 @@ class TestAgentRunner:
         # Derive mod name for deployment (Issue 1 fix)
         self._mod_name = mod_name or _derive_mod_name(self._mod_project_path)
 
-        self._artifact_dir = self._mod_project_path / ".agent-runs" / task_id
+        self._artifact_dir = self._mod_project_path / "automation/autotest/output" / task_id
         self._state_dir = self._artifact_dir / "state"
         self._screenshot_dir = self._artifact_dir / "screenshots"
         self._report_path = self._artifact_dir / "test-report.md"
@@ -402,6 +739,7 @@ class TestAgentRunner:
             self._failure_details = str(exc)
         finally:
             self._write_report()
+            self._generate_html_report()
         return TestAgentResult(
             conclusion=self._conclusion,
             results=list(self.results),
@@ -419,6 +757,49 @@ class TestAgentRunner:
 
     def _add(self, name: str, status: str, evidence: str = "", details: str = "") -> None:
         self.results.append(CheckResult(name=name, status=status, evidence=evidence, details=details))
+
+    # -- evidence helpers -----------------------------------------------------
+
+    def _capture_screenshot(self, name: str) -> str:
+        """Capture a screenshot and save to the report screenshot dir.
+
+        On macOS we capture the actual game window directly so report evidence
+        cannot silently degrade into a desktop or Steam screenshot.
+        Other platforms keep the existing primary-monitor fallback.
+        """
+        try:
+            path = self._screenshot_dir / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if _IS_MACOS:
+                if not _capture_macos_window_png(path, _GAME_WINDOW_TITLE):
+                    print(
+                        f"[agent-test] WARNING: Screenshot skipped ({name}): "
+                        f"game window '{_GAME_WINDOW_TITLE}' was not available",
+                        file=sys.__stdout__,
+                    )
+                    return ""
+                return str(path.relative_to(self._mod_project_path))
+
+            import mss
+            with mss.mss() as sct:
+                sct.shot(mon=1, output=str(path))
+            return str(path.relative_to(self._mod_project_path))
+        except Exception as exc:
+            print(f'[agent-test] WARNING: Screenshot failed ({name}): {exc}', file=sys.__stdout__)
+            return ''
+
+    def _save_state_snapshot(self, step_name: str, state_dict: dict) -> str:
+        """Save a state JSON snapshot to state dir.
+
+        Returns the relative evidence path (for the report).
+        """
+        path = self._state_dir / f"{step_name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(state_dict, indent=2, ensure_ascii=False),
+            encoding='utf-8',
+        )
+        return str(path.relative_to(self._mod_project_path))
 
     # ------------------------------------------------------------------
     # Step 1: Validate inputs
@@ -461,9 +842,30 @@ class TestAgentRunner:
             raise _Failed(f"dotnet restore failed. See build.log.\n{out[:500]}")
 
         # dotnet build
-        rc, out = _run_command("dotnet build", ["dotnet", "build", str(target), "--no-restore"], build_log)
+        build_cmd = ["dotnet", "build", str(target), "--no-restore"]
+        if self._skip_deploy:
+            build_cmd.append("-p:ModsPath=")
+        elif self._game_mods_path is not None:
+            build_cmd.append(f"-p:ModsPath={_as_msbuild_dir(self._game_mods_path)}")
+        rc, out = _run_command("dotnet build", build_cmd, build_log)
         if rc != 0:
             raise _Failed(f"dotnet build failed. See build.log.\n{out[:500]}")
+
+        if not self._skip_deploy and _manifest_declares_pck(self._mod_project_path, self._mod_name):
+            publish_cmd = ["dotnet", "publish", str(target), "--no-restore"]
+            if self._game_mods_path is not None:
+                publish_cmd.append(f"-p:ModsPath={_as_msbuild_dir(self._game_mods_path)}")
+            godot_path = _find_godot_path()
+            if godot_path:
+                publish_cmd.append(f"-p:GodotPath={godot_path}")
+            rc, out = _run_command("dotnet publish", publish_cmd, build_log, timeout=300.0)
+            if rc != 0:
+                raise _Failed(f"dotnet publish failed. See build.log.\n{out[:500]}")
+            if self._game_mods_path is not None:
+                pck_name = _read_manifest_id(self._mod_project_path, self._mod_name)
+                expected_pck = self._game_mods_path / self._mod_name / f"{pck_name}.pck"
+                if not expected_pck.exists():
+                    raise _Failed(f"dotnet publish did not create expected pck: {expected_pck}")
 
         # C1: locate build output
         build_out = _find_build_output(self._mod_project_path)
@@ -548,76 +950,518 @@ class TestAgentRunner:
             self._add("Launch Game", "SKIPPED", "launch.log")
             return
 
-        # Launch via steam:// protocol
-        if _IS_MACOS:
-            subprocess.Popen(["open", f"steam://rungameid/{self._steam_app_id}"])
-        elif _IS_WINDOWS:
-            os.startfile(f"steam://rungameid/{self._steam_app_id}")  # type: ignore[attr-defined]
-        else:
-            subprocess.Popen(["xdg-open", f"steam://rungameid/{self._steam_app_id}"])
-        launch_log.write_text(f"Started steam://rungameid/{self._steam_app_id}\n", encoding="utf-8")
+        steam = SteamController(
+            app_id=self._steam_app_id,
+            startup_timeout=60.0,
+        )
+        try:
+            steam_pid = steam.start_steam()
+            game_pid = steam.start_game(reuse_existing=True)
+        except Exception as exc:
+            launch_log.write_text(
+                f"SteamController launch failed for app {self._steam_app_id}: {exc}\n"
+                "Falling back to desktop open commands.\n",
+                encoding="utf-8",
+            )
+            try:
+                _launch_game_via_desktop_open(self._steam_app_id, launch_log)
+            except Exception as fallback_exc:
+                with launch_log.open("a", encoding="utf-8") as f:
+                    f.write(f"Desktop open fallback failed: {fallback_exc}\n")
+                raise _Blocked(f"Failed to launch game via Steam: {fallback_exc}") from fallback_exc
+
+            with launch_log.open("a", encoding="utf-8") as f:
+                f.write(f"Steam launch URI: steam://run/{self._steam_app_id}\n")
+            self._add("Launch Game", "PASSED", "launch.log")
+            return
+
+        launch_log.write_text(
+            "\n".join(
+                [
+                    f"Started Steam PID {steam_pid}",
+                    f"Started game PID {game_pid}",
+                    f"Steam launch URI: steam://run/{self._steam_app_id}",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
         self._add("Launch Game", "PASSED", "launch.log")
 
     # ------------------------------------------------------------------
     # Step 6: Game smoke test
     # ------------------------------------------------------------------
 
+    def _state_to_dict(self, state: Any) -> dict[str, Any]:
+        """Convert adapter state objects or dict-like payloads into a plain dict."""
+        if isinstance(state, dict):
+            return dict(state)
+        if hasattr(state, "model_dump"):
+            dumped = state.model_dump(mode="json")
+            return dumped if isinstance(dumped, dict) else {}
+        if hasattr(state, "__dict__"):
+            return {
+                key: value
+                for key, value in vars(state).items()
+                if not key.startswith("_") and value is not None
+            }
+        return {}
+
+    def _is_gawain_character_value(self, value: Any) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lower = text.lower()
+        return (
+            lower in _GAWAIN_CHARACTER_IDS
+            or lower in _GAWAIN_CHARACTER_NAMES
+            or "高文" in text
+            or "gawain" in lower
+        )
+
+    def _resolve_gawain_character_option_index(self, state: dict[str, Any]) -> int:
+        """Find Gawain's character-select option index in an STS2-Agent state payload."""
+        character_select = state.get("character_select") or state.get("multiplayer_lobby") or {}
+        characters = character_select.get("characters", []) if isinstance(character_select, dict) else []
+        for fallback_index, character in enumerate(characters):
+            if not isinstance(character, dict):
+                continue
+            identity_fields = (
+                character.get("character_id"),
+                character.get("id"),
+                character.get("character"),
+                character.get("name"),
+                character.get("line"),
+            )
+            if not any(self._is_gawain_character_value(value) for value in identity_fields):
+                continue
+            index = character.get("index", fallback_index)
+            if isinstance(index, int):
+                return index
+        raise _Failed("Gawain character option was not found in character_select state")
+
+    def _find_unresolved_localization_keys(self, payload: Any) -> list[str]:
+        """Return unresolved localization-like strings found in runtime state."""
+        findings: list[str] = []
+        raw_key = re.compile(r"\bGAWAINMOD-[A-Z0-9_]+(?:\.[A-Za-z0-9_.-]+)+")
+        generic_failures = ("missing localization", "KeyNotFound")
+
+        def visit(value: Any, path: str) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    visit(child, f"{path}.{key}" if path else str(key))
+                return
+            if isinstance(value, list):
+                for index, child in enumerate(value):
+                    visit(child, f"{path}[{index}]")
+                return
+            if not isinstance(value, str):
+                return
+            lower = value.lower()
+            if raw_key.search(value) or any(pattern.lower() in lower for pattern in generic_failures):
+                findings.append(f"{path}: {value}")
+
+        visit(payload, "")
+        return findings
+
+    def _assert_no_unresolved_localization_keys(self, label: str, state: dict[str, Any]) -> None:
+        findings = self._find_unresolved_localization_keys(state)
+        if findings:
+            preview = "; ".join(findings[:5])
+            raise _Failed(f"Raw localization keys found in {label}: {preview}")
+
+    def _require_localized_text(self, value: Any, label: str) -> None:
+        text = str(value or "").strip()
+        if not text:
+            raise _Failed(f"Missing localized text for {label}")
+        if self._find_unresolved_localization_keys(text):
+            raise _Failed(f"Raw localization key found for {label}: {text}")
+
+    def _assert_gawain_selected(self, state: dict[str, Any]) -> None:
+        combat = state.get("combat", {}) or {}
+        players = combat.get("players", []) if isinstance(combat, dict) else []
+        for player in players:
+            if not isinstance(player, dict):
+                continue
+            if (
+                self._is_gawain_character_value(player.get("character_id"))
+                or self._is_gawain_character_value(player.get("character_name"))
+            ):
+                return
+        raise _Failed("Expected active combat player to be Gawain")
+
+    def _assert_gawain_runtime_text_state(self, state: dict[str, Any]) -> None:
+        """Validate the runtime payload exposes Gawain text for character, relic, and deck."""
+        self._assert_no_unresolved_localization_keys("gawain-runtime-text", state)
+
+        run = state.get("run", {}) or {}
+        if not isinstance(run, dict):
+            raise _Failed("Runtime state is missing run payload")
+        if not self._is_gawain_character_value(run.get("character_id")):
+            raise _Failed(f"Expected run.character_id to be Gawain, got {run.get('character_id')}")
+        self._require_localized_text(run.get("character_name"), "run.character_name")
+
+        relics = run.get("relics", [])
+        relic = next(
+            (
+                item for item in relics
+                if isinstance(item, dict)
+                and str(item.get("relic_id", "")).strip() == "GAWAINMOD-MAGIC_TERMINAL"
+            ),
+            None,
+        )
+        if relic is None:
+            raise _Failed("Starter relic GAWAINMOD-MAGIC_TERMINAL was not found in run.relics")
+        self._require_localized_text(relic.get("name"), "starter relic name")
+        self._require_localized_text(relic.get("description"), "starter relic description")
+
+        required_cards = {
+            "GAWAINMOD-STRIKE_GAWAIN",
+            "GAWAINMOD-DEFEND_GAWAIN",
+            "GAWAINMOD-EMERGENCY_RECRUIT",
+            "GAWAINMOD-MAGIC_DRAW",
+            "GAWAINMOD-PORTABLE_MAGIC_TERMINAL",
+        }
+        deck = run.get("deck", [])
+        if not isinstance(deck, list):
+            raise _Failed("Runtime state run.deck is missing or malformed")
+        cards_by_id = {
+            str(card.get("card_id", "")).strip(): card
+            for card in deck
+            if isinstance(card, dict)
+        }
+        missing = sorted(card_id for card_id in required_cards if card_id not in cards_by_id)
+        if missing:
+            raise _Failed(f"Starter deck is missing cards: {', '.join(missing)}")
+        for card_id in sorted(required_cards):
+            card = cards_by_id[card_id]
+            self._require_localized_text(card.get("name"), f"{card_id} name")
+            rules_text = card.get("resolved_rules_text") or card.get("rules_text")
+            self._require_localized_text(rules_text, f"{card_id} rules text")
+
+    def _act_and_wait(self, agent: AgentAdapter, action_name: str, params: dict[str, Any]) -> None:
+        result = asyncio.run(agent.act(action_name, params))
+        if result.status != "success":
+            raise _Failed(f"Navigation failed at '{action_name}': {result.detail}")
+        asyncio.run(agent.wait_until_actionable(timeout=15))
+
+    def _is_existing_gawain_run_state(self, state: dict[str, Any]) -> bool:
+        run = state.get("run", {}) or {}
+        return isinstance(run, dict) and self._is_gawain_character_value(run.get("character_id"))
+
+    def _is_character_select_ready(self, agent: AgentAdapter) -> bool:
+        state = self._state_to_dict(asyncio.run(agent.get_state()))
+        screen = str(state.get("screen", "")).upper()
+        if "CHARACTER_SELECT" in screen or "START_RUN_LOBBY" in screen:
+            self._save_state_snapshot("character-select", state)
+            return True
+        actions = asyncio.run(agent.get_available_actions())
+        if "select_character" in actions and "embark" in actions:
+            self._save_state_snapshot("character-select", state)
+            return True
+        return False
+
+    def _open_character_select(self, agent: AgentAdapter) -> None:
+        """Open character select, tolerating main-menu preload races and reused sessions."""
+        last_detail = ""
+        for _ in range(12):
+            if self._is_character_select_ready(agent):
+                return
+            result = asyncio.run(agent.act("open_character_select", {}))
+            if result.status == "success":
+                asyncio.run(agent.wait_until_actionable(timeout=15))
+                if self._is_character_select_ready(agent):
+                    return
+            last_detail = result.detail
+            time.sleep(2)
+        raise _Failed(f"Navigation failed at 'open_character_select': {last_detail}")
+
+    def _select_gawain_character(self, agent: AgentAdapter) -> None:
+        """Select Gawain, preferring stable ids over UI option positions."""
+        for params in (
+            {"character_id": "GAWAINMOD-GAWAIN"},
+            {"character_id": "gawain"},
+            {"character": "GAWAINMOD-GAWAIN"},
+            {"character": "gawain"},
+        ):
+            result = asyncio.run(agent.act("select_character", params))
+            if result.status == "success":
+                asyncio.run(agent.wait_until_actionable(timeout=15))
+                return
+
+        character_select_state = self._state_to_dict(asyncio.run(agent.get_state()))
+        self._save_state_snapshot("character-select", character_select_state)
+        option_index = self._resolve_gawain_character_option_index(character_select_state)
+        self._act_and_wait(agent, "select_character", {"option_index": option_index})
+
+    def _advance_to_first_combat(self, agent: AgentAdapter, state_dict: dict[str, Any]) -> dict:
+        """Advance through deterministic pre-combat screens until combat starts."""
+        for _ in range(12):
+            screen = str(state_dict.get("screen", "")).upper()
+            if screen == "COMBAT":
+                self._assert_gawain_selected(state_dict)
+                self._assert_gawain_runtime_text_state(state_dict)
+                return state_dict
+            if screen == "EVENT":
+                self._save_state_snapshot("navigation-event", state_dict)
+                self._act_and_wait(agent, "choose_event_option", {"option_index": 0})
+                state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
+                continue
+            if screen == "MAP":
+                self._save_state_snapshot("navigation-map", state_dict)
+                self._act_and_wait(agent, "choose_map_node", {"option_index": 0})
+                state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
+                continue
+            raise _Failed(f"Expected COMBAT, EVENT, or MAP screen, got {state_dict.get('screen')}")
+        raise _Failed(f"Expected COMBAT screen, got {state_dict.get('screen')}")
+
+    def _navigate_to_first_combat(self, agent: AgentAdapter) -> dict:
+        """Navigate from MAIN_MENU to first combat. Raises _Failed on failure."""
+        state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
+        if not self._is_existing_gawain_run_state(state_dict):
+            self._open_character_select(agent)
+            self._select_gawain_character(agent)
+            self._act_and_wait(agent, "embark", {})
+            state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
+        return self._advance_to_first_combat(agent, state_dict)
+
+    def _verify_card_and_screenshot(
+        self, agent: AgentAdapter, card: dict, card_index: int, target_index: int,
+    ) -> dict:
+        """Play one card: screenshot before, play, verify, screenshot after.
+
+        card is a dict from combat.hand[] with card_id, name, index, energy_cost,
+        playable, dynamic_values.
+
+        Returns a dict with verification results for the report.
+        """
+        card_id = card.get("card_id", f"card_{card_index}")
+        card_name = card.get("name", card_id)
+        result = {
+            "card_id": card_id,
+            "name": card_name,
+            "index": card_index,
+            "status": "UNKNOWN",
+            "expected_damage": 0,
+            "actual_damage": 0,
+            "expected_block": 0,
+            "actual_block": 0,
+            "screenshot_before": "",
+            "screenshot_after": "",
+            "error": "",
+        }
+
+        for dv in card.get("dynamic_values", []):
+            dv_name = dv.get("name", "")
+            if dv_name == "damage":
+                result["expected_damage"] = dv.get("current_value", dv.get("base_value", 0))
+            elif dv_name == "block":
+                result["expected_block"] = dv.get("current_value", dv.get("base_value", 0))
+
+        result["screenshot_before"] = self._capture_screenshot(f"card-{card_id}-before.png")
+
+        before = asyncio.run(agent.get_state())
+        before_dict = self._state_to_dict(before)
+        combat_before = before_dict.get("combat", {}) or {}
+        enemies_before = combat_before.get("enemies", [])
+        enemy_hp_before = enemies_before[0].get("current_hp", 0) if enemies_before else 0
+        player_block_before = combat_before.get("player", {}).get("block", 0)
+        self._save_state_snapshot(f"card-{card_id}-before", before_dict)
+
+        try:
+            play_result = asyncio.run(
+                agent.act("play_card", {"card_id": card_id, "target_index": target_index})
+            )
+        except Exception as exc:
+            result["status"] = "FAIL"
+            result["error"] = f"play_card failed: {exc}"
+            return result
+
+        if play_result.status != "success":
+            result["status"] = "FAIL"
+            result["error"] = f"play_card: {play_result.status}: {play_result.detail}"
+            return result
+
+        asyncio.run(agent.wait_until_actionable(timeout=10))
+
+        after = asyncio.run(agent.get_state())
+        after_dict = self._state_to_dict(after)
+        combat_after = after_dict.get("combat", {}) or {}
+        enemies_after = combat_after.get("enemies", [])
+        enemy_hp_after = enemies_after[0].get("current_hp", 0) if enemies_after else 0
+        player_block_after = combat_after.get("player", {}).get("block", 0)
+        self._save_state_snapshot(f"card-{card_id}-after", after_dict)
+        result["screenshot_after"] = self._capture_screenshot(f"card-{card_id}-after.png")
+
+        errors = []
+        if result["expected_damage"] > 0:
+            hp_diff = enemy_hp_before - enemy_hp_after
+            result["actual_damage"] = hp_diff
+            if hp_diff != result["expected_damage"]:
+                errors.append(f"damage: expected {result['expected_damage']}, got {hp_diff}")
+        if result["expected_block"] > 0:
+            block_gained = player_block_after - player_block_before
+            result["actual_block"] = block_gained
+            if block_gained != result["expected_block"]:
+                errors.append(f"block: expected {result['expected_block']}, got {block_gained}")
+
+        result["status"] = "OK" if not errors else "FAIL"
+        if errors:
+            result["error"] = "; ".join(errors)
+        return result
+
+    def _build_text_only_card_result(self, card: dict, card_index: int, state_dict: dict[str, Any]) -> dict[str, Any]:
+        """Capture text evidence for a card that is visible but not currently playable."""
+        card_id = card.get("card_id", f"card_{card_index}")
+        card_name = card.get("name", card_id)
+        result = {
+            "card_id": card_id,
+            "name": card_name,
+            "index": card_index,
+            "status": "TEXT_ONLY",
+            "expected_damage": 0,
+            "actual_damage": 0,
+            "expected_block": 0,
+            "actual_block": 0,
+            "screenshot_before": self._capture_screenshot(f"card-{card_id}-before.png"),
+            "screenshot_after": "",
+            "error": "",
+        }
+        self._require_localized_text(card_name, f"{card_id} hand name")
+        rules_text = card.get("resolved_rules_text") or card.get("rules_text")
+        self._require_localized_text(rules_text, f"{card_id} hand rules text")
+        self._save_state_snapshot(f"card-{card_id}-before", state_dict)
+        return result
+
+    def _resolve_current_hand_card(self, state_dict: dict[str, Any], target_card: dict) -> dict[str, Any] | None:
+        """Resolve the current copy of a hand card by id, preferring exact index when still valid."""
+        combat = state_dict.get("combat", {}) or {}
+        hand = combat.get("hand", []) if isinstance(combat, dict) else []
+        if not isinstance(hand, list):
+            return None
+        target_id = str(target_card.get("card_id", "")).strip()
+        target_index = target_card.get("index")
+        for current in hand:
+            if not isinstance(current, dict):
+                continue
+            if target_index is not None and current.get("index") == target_index and str(current.get("card_id", "")).strip() == target_id:
+                return current
+        for current in hand:
+            if isinstance(current, dict) and str(current.get("card_id", "")).strip() == target_id:
+                return current
+        return None
+
     def _step_game_smoke(self) -> None:
+        """Execute in-game smoke test via STS2-Agent API.
+
+        Flow: wait for agent health -> navigate to first combat ->
+        screenshot + verify each hand card -> validate raw keys.
+        """
         if self._skip_game_smoke:
             smoke_log = self._artifact_dir / "game-smoke.log"
             smoke_log.write_text("Skipped by --skip-game-smoke\n", encoding="utf-8")
             self._add("Game Smoke", "SKIPPED", "game-smoke.log")
-            # Issue 2: validate require_game_running constraint
             if self._require_game_running:
                 self._add("Game Required", "BLOCKED", "test-plan",
                           "require_game_running is true but --skip-game-smoke was passed")
             return
 
-        # --- 6a: sts2 ping ---
-        cli_log = self._artifact_dir / "sts2-cli.log"
-        sts2 = shutil.which("sts2")
-        if sts2 is None:
-            # Try discovery
-            from sts2_autotest.adapters.discovery import discover_sts2_cli
-            sts2 = discover_sts2_cli()
-        if sts2 is None:
+        # --- 6a: Wait for sts2-agent HTTP API ---
+        agent = AgentAdapter(endpoint="http://127.0.0.1:8080", timeout=10)
+        health_ok = False
+        deadline = time.time() + self._ping_timeout
+        while time.time() < deadline:
+            try:
+                health = asyncio.run(agent.health_check())
+                if health.healthy:
+                    health_ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+
+        if not health_ok:
             raise _Blocked(
-                f"sts2 CLI not found within {self._ping_timeout}s ping window. "
-                "Install STS2-Cli-Mod or use --skip-game-smoke."
+                f"STS2-Agent HTTP API did not respond within {self._ping_timeout}s. "
+                "Ensure the game is running with STS2AIAgent mod loaded."
+            )
+        self._add("STS2-Agent Health", "PASSED", "http://127.0.0.1:8080/health")
+        if not asyncio.run(agent.wait_until_actionable(timeout=self._ping_timeout)):
+            raise _Blocked(
+                f"STS2-Agent did not become actionable within {self._ping_timeout}s after health passed."
             )
 
-        deadline = time.time() + self._ping_timeout
-        ping_ok = False
-        while time.time() < deadline:
-            rc, out = _run_command("sts2 ping", [sts2, "ping"], cli_log, timeout=10)
-            if rc == 0:
-                ping_ok = True
-                break
-            time.sleep(3)
-        if not ping_ok:
-            raise _Blocked(f"sts2 ping did not succeed within {self._ping_timeout}s.")
-        self._add("STS2-Cli-Mod Ping", "PASSED", "sts2-cli.log")
+        # --- 6b: Navigate to first combat ---
+        state = self._navigate_to_first_combat(agent)
+        self._add("First Combat Reached", "PASSED",
+                  self._save_state_snapshot("combat-start", state))
 
-        # --- 6b: sts2 state ---
-        state_path = self._state_dir / "initial-state.json"
-        rc, out = _run_command("sts2 state", [sts2, "state", "-p"], cli_log, timeout=10)
-        if rc != 0:
-            raise _Failed("sts2 state -p failed. See sts2-cli.log.")
-        # C5: save state JSON
-        state_path.write_text(out + "\n", encoding="utf-8")
+        # --- 6c: Read hand ---
+        combat = state.get("combat", {}) or {}
+        hand = combat.get("hand", [])
+        if not hand:
+            raise _Failed("No cards in hand at combat start")
 
-        # --- 6c: scan for raw keys ---
-        raw_patterns = ["GAWAIN_", "MISSING", "missing localization", "KeyNotFound"]
-        for pattern in raw_patterns:
-            if pattern.lower() in out.lower():
-                raise _Failed(f"Raw key or missing localization pattern found in game state: {pattern}")
+        # --- 6d: Verify each card ---
+        self._card_results = []
+        for card in hand:
+            current_state = self._state_to_dict(asyncio.run(agent.get_state()))
+            current_card = self._resolve_current_hand_card(current_state, card)
+            if current_card is None:
+                continue
+            card_index = current_card.get("index", card.get("index", 0))
+            available_actions = current_state.get("available_actions", [])
+            can_play_cards = isinstance(available_actions, list) and "play_card" in available_actions
+            if not can_play_cards or not bool(current_card.get("playable", False)):
+                card_result = self._build_text_only_card_result(current_card, card_index, current_state)
+            else:
+                valid_targets = current_card.get("valid_target_indices", [])
+                target_index = 0
+                if isinstance(valid_targets, list) and valid_targets:
+                    target_index = int(valid_targets[0])
+                card_result = self._verify_card_and_screenshot(agent, current_card, card_index, target_index)
+            self._card_results.append(card_result)
 
-        self._add("Game Smoke", "PASSED", "game-smoke.log; state/initial-state.json")
-        self._add("No Raw Key", "PASSED", "state/initial-state.json")
+        passed_count = sum(1 for r in self._card_results if r["status"] == "OK")
+        text_only_count = sum(1 for r in self._card_results if r["status"] == "TEXT_ONLY")
+        failed = [r for r in self._card_results if r["status"] == "FAIL"]
 
-    # ------------------------------------------------------------------
-    # Report generation
-    # ------------------------------------------------------------------
+        if failed:
+            detail = "; ".join(
+                f"{r['name']}({r['card_id']}): {r['error']}" for r in failed
+            )
+            raise _Failed(f"Card verification: {len(failed)} failed ({detail})")
+
+        self._add("Card Smoke Test", "PASSED",
+                  f"Verified {passed_count} playable cards, captured text for {text_only_count} additional cards; "
+                  f"screenshots in automation/autotest/output/{self._task_id}/screenshots/")
+
+        # --- 6e: Clean up ---
+        asyncio.run(agent.act("abandon_run"))
+        self._add("Abandon Run", "PASSED", "")
+
+        # --- 6f: Scan for raw keys in final state ---
+        final_state = asyncio.run(agent.get_state())
+        final_dict = self._state_to_dict(final_state)
+        self._assert_no_unresolved_localization_keys("final-state", final_dict)
+
+        self._add("No Raw Key", "PASSED",
+                  self._save_state_snapshot("final-state", final_dict))
+
+    def _build_card_detail_table(self) -> str:
+        """Build card verification table from _card_results for the report."""
+        if not hasattr(self, "_card_results") or not self._card_results:
+            return ""
+        rows = "| 卡牌 | ID | 预期伤害 | 实际伤害 | 预期格挡 | 实际格挡 | 状态 | 截图 |\n"
+        rows += "|------|-----|---------|---------|---------|---------|------|------|\n"
+        for r in self._card_results:
+            rows += (
+                f"| {r['name']} | {r['card_id']} "
+                f"| {r['expected_damage']} | {r['actual_damage']} "
+                f"| {r['expected_block']} | {r['actual_block']} "
+                f"| {r['status']} | before: {r['screenshot_before']}<br>after: {r['screenshot_after']} |\n"
+            )
+        return rows
 
     def _write_report(self) -> None:
         """Generate test-report.md in the artifact directory."""
@@ -682,8 +1526,6 @@ class TestAgentRunner:
 - localization log: localization-check.log
 - deploy log: deploy.log
 - launch log: launch.log
-- sts2 cli log: sts2-cli.log
-- game smoke log: game-smoke.log
 - state snapshots: state/
 - screenshots: screenshots/
 
@@ -694,12 +1536,117 @@ class TestAgentRunner:
 """
         self._report_path.write_text(report, encoding="utf-8")
 
+    def _status_to_html_report_result(self, status: str) -> str:
+        mapping = {
+            "PASSED": "通过",
+            "FAILED": "失败",
+            "BLOCKED": "阻塞",
+            "SKIPPED": "跳过",
+        }
+        return mapping.get(status, "跳过")
+
+    def _build_html_report_card_results(self) -> list[dict[str, Any]]:
+        card_results = getattr(self, "_card_results", []) or []
+        entries: list[dict[str, Any]] = []
+        for result in card_results:
+            exp: dict[str, Any] = {}
+            if result.get("expected_damage"):
+                exp["伤害"] = result["expected_damage"]
+            if result.get("expected_block"):
+                exp["格挡"] = result["expected_block"]
+            status = str(result.get("status", "TEXT_ONLY"))
+            report_result = {
+                "OK": "通过",
+                "FAIL": "失败",
+                "TEXT_ONLY": "跳过",
+            }.get(status, "跳过")
+            before_path = self._normalize_html_artifact_path(result.get("screenshot_before", ""))
+            after_path = self._normalize_html_artifact_path(result.get("screenshot_after", ""))
+            entries.append(
+                {
+                    "card_id": result.get("card_id", ""),
+                    "name": result.get("name", ""),
+                    "cost": result.get("energy_cost"),
+                    "exp": exp,
+                    "result": report_result,
+                    "screenshot_before": before_path,
+                    "screenshot_after": after_path,
+                    "state_before": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-before.json"),
+                    "state_after": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-after.json") if after_path else "",
+                }
+            )
+        return entries
+
+    def _normalize_html_artifact_path(self, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        path = Path(text)
+        if path.is_absolute():
+            try:
+                return str(path.relative_to(self._artifact_dir))
+            except ValueError:
+                return text
+        candidate = self._artifact_dir / path
+        if candidate.exists():
+            return str(path)
+        parts = path.parts
+        for anchor in ("screenshots", "state"):
+            if anchor in parts:
+                return str(Path(*parts[parts.index(anchor):]))
+        return text
+
+    def _build_html_report_config(self) -> dict[str, Any]:
+        card_results = self._build_html_report_card_results()
+        test_cases: list[dict[str, Any]] = []
+        for result in self.results:
+            case = {
+                "id": result.name,
+                "name": result.name,
+                "scenario": result.details or "see evidence",
+                "assertions": [],
+                "actual": result.details or "",
+                "result": self._status_to_html_report_result(result.status),
+                "steps": [
+                    {
+                        "name": "Execute",
+                        "result": self._status_to_html_report_result(result.status),
+                        "detail": result.evidence,
+                    }
+                ],
+            }
+            if result.name == "Card Smoke Test" and card_results:
+                case["card_results"] = card_results
+            test_cases.append(case)
+        return {
+            "test_run_id": self._task_id,
+            "test_cases": test_cases,
+            "card_results": card_results,
+            "metadata": {
+                "game": "Slay the Spire 2",
+                "runner": "STS2-AUTOTEST",
+                "repo": str(self._mod_project_path.name),
+            },
+            "_config_dir": str(self._artifact_dir),
+        }
+
 
 # ---------------------------------------------------------------------------
 # Internal exceptions
 # ---------------------------------------------------------------------------
 
 
+
+    def _generate_html_report(self) -> None:
+        """Generate HTML test report from the current run data."""
+        try:
+            config = self._build_html_report_config()
+            config_path = self._artifact_dir / "test-results.json"
+            config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+            output_path = self._artifact_dir / "test-report.html"
+            write_html_report(config_path, output_path)
+        except Exception as exc:
+            print(f"[agent-test] HTML report generation skipped: {exc}")
 class _Blocked(Exception):
     """Non-code failure: missing env, game, or automation interface."""
 

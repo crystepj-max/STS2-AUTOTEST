@@ -1,6 +1,7 @@
 """Tests for core/orchestrator.py — TestOrchestrator lifecycle and recovery."""
 
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 

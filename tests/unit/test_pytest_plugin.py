@@ -88,8 +88,8 @@ class TestPytestPlugin:
                 calls.append("start_steam")
                 return 1
 
-            def start_game(self) -> int:
-                calls.append("start_game")
+            def start_game(self, *, reuse_existing: bool = False) -> int:
+                calls.append(("start_game", reuse_existing))
                 return 2
 
         monkeypatch.setattr(fixtures_module, "_find_game_dir_for_bootstrap", lambda: "D:/Games/STS2")
@@ -100,7 +100,7 @@ class TestPytestPlugin:
         assert calls == [
             ("init", 60.0, "D:/Games/STS2", "C:/Steam/steam.exe"),
             "start_steam",
-            "start_game",
+            ("start_game", True),
         ]
 
     def test_start_orchestrator_session_retries_after_bootstrap(self, monkeypatch) -> None:
@@ -119,6 +119,33 @@ class TestPytestPlugin:
             loop.close()
 
         assert ok is True
+        assert orch.start_session.await_count == 2
+        adapter.cleanup.assert_awaited_once()
+
+    def test_agent_start_orchestrator_session_bootstraps_steam_when_not_ready(self, monkeypatch) -> None:
+        from sts2_autotest.pytest_plugin import fixtures as fixtures_module
+
+        calls: list[str] = []
+        orch = MagicMock()
+        orch.start_session = AsyncMock(side_effect=[False, True])
+        adapter = MagicMock()
+        adapter.cleanup = AsyncMock()
+        loop = asyncio.new_event_loop()
+        try:
+            monkeypatch.setenv("STS2_ADAPTER__AGENT__ENABLED", "true")
+            monkeypatch.setattr(
+                fixtures_module,
+                "_bootstrap_runtime",
+                lambda: calls.append("bootstrap") or True,
+            )
+            monkeypatch.setattr(fixtures_module, "_wait_for_adapter_ready", lambda _loop, _adapter: True)
+
+            ok = fixtures_module._start_orchestrator_session(loop, orch, adapter)
+        finally:
+            loop.close()
+
+        assert ok is True
+        assert calls == ["bootstrap"]
         assert orch.start_session.await_count == 2
         adapter.cleanup.assert_awaited_once()
 
@@ -159,6 +186,22 @@ class TestPytestPlugin:
         assert ok is False
         assert orch.start_session.await_count == 1
         adapter.cleanup.assert_awaited_once()
+
+    def test_agent_adapter_factory_preserves_debug_actions(self, monkeypatch) -> None:
+        from sts2_autotest.adapters.agent import AgentAdapter
+        from sts2_autotest.pytest_plugin import fixtures as fixtures_module
+
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__ENABLED", "true")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__ENDPOINT", "http://127.0.0.1:8080")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__DEBUG_ACTIONS", "true")
+        monkeypatch.setenv("STS2_ADAPTER__AGENT__TIMEOUT", "7")
+
+        adapter = fixtures_module._create_adapter_factory()()
+
+        assert isinstance(adapter, AgentAdapter)
+        assert adapter.endpoint == "http://127.0.0.1:8080"
+        assert adapter.debug_actions is True
+        assert adapter.timeout == 7
 
 
 class TestLifecycleHooks:

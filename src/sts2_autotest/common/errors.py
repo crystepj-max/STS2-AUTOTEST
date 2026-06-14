@@ -5,6 +5,19 @@ from enum import StrEnum
 from typing import Any
 
 
+class FailureClassification(StrEnum):
+    """Classification of test failure root cause (协议层 B20).
+
+    Used by RepairAdvisor and autofix workflow to determine which
+    repository or component needs repair.
+    """
+    MOD = "mod"
+    AUTOTEST = "autotest"
+    TEST_CASE = "test_case"
+    ENVIRONMENT = "environment"
+    UNKNOWN = "unknown"
+
+
 class ErrorCategory(StrEnum):
     """Top-level error classification (6 categories)."""
 

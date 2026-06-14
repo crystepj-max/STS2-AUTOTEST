@@ -15,6 +15,7 @@ from sts2_autotest.dsl import FluentBuilder, define
 from sts2_autotest.dsl.assertions import (
     end_turn,
     enemy_hp_decreased_by,
+    enemy_took_exact_hits,
     enter_combat,
     game_reached_state,
     give_card,
@@ -205,6 +206,28 @@ class TestAssertionFunctions:
         ok, msg = fn(state)
         assert ok is False
         assert "decrease" in msg
+
+    def test_enemy_took_exact_hits_from_top_level_damage_events(self) -> None:
+        fn = enemy_took_exact_hits(5, 2)
+        state = GameState(
+            screen=GameScreen.COMBAT,
+            damage_events=[
+                {"amount": 5, "target": 0},
+                {"amount": 5, "target": 0},
+            ],
+        )
+        ok, _ = fn(state)
+        assert ok is True
+
+    def test_enemy_took_exact_hits_rejects_wrong_hit_count(self) -> None:
+        fn = enemy_took_exact_hits(5, 2)
+        state = GameState(
+            screen=GameScreen.COMBAT,
+            damage_events=[{"amount": 10, "target": 0}],
+        )
+        ok, msg = fn(state)
+        assert ok is False
+        assert "5 x 2" in msg
 
     def test_player_energy_decreased_by(self) -> None:
         fn = player_energy_decreased_by(1)

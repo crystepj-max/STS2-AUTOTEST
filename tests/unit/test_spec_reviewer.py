@@ -112,6 +112,66 @@ class TestSpecReviewer:
         report = self.reviewer.review(spec)
         assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
 
+    def test_review_accepts_gawain_character_selection(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-PREPARE",
+            title="Prepare Gawain",
+            priority="P0",
+            start_state="MAIN_MENU",
+            end_state="EVENT",
+            steps=["开始新局", "选择 Gawain", "开始冒险"],
+            assertions=["不 crash"],
+        )
+
+        report = self.reviewer.review(spec)
+
+        assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
+
+    def test_review_accepts_chinese_ironclad_selection_without_space(self) -> None:
+        spec = TestSpec(
+            id="TC-IRONCLAD-PREPARE",
+            title="Prepare Ironclad",
+            priority="P0",
+            start_state="MAIN_MENU",
+            end_state="EVENT",
+            steps=["开始新局", "选择战士", "开始冒险"],
+            assertions=["不 crash"],
+        )
+
+        report = self.reviewer.review(spec)
+
+        assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
+
+    def test_review_accepts_event_and_combat_state_assertions(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-SCREENS",
+            title="Gawain screens",
+            priority="P0",
+            start_state="MAIN_MENU",
+            end_state="COMBAT",
+            steps=["开始新局"],
+            assertions=["game reached event", "game reached combat", "不 crash"],
+        )
+
+        report = self.reviewer.review(spec)
+
+        assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
+
+    def test_review_accepts_give_card_and_exact_hit_assertion(self) -> None:
+        spec = TestSpec(
+            id="TC-IRONCLAD-TWIN-STRIKE",
+            title="Ironclad Twin Strike",
+            priority="P0",
+            start_state="COMBAT",
+            end_state="COMBAT",
+            steps=["添加 TWIN_STRIKE 到手牌", "使用 TWIN_STRIKE"],
+            assertions=["造成 5 点伤害 2 次", "不 crash"],
+        )
+
+        report = self.reviewer.review(spec)
+
+        assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
+
     def test_review_multiple_issues(self) -> None:
         spec = TestSpec(
             id="TC-MULTI",
