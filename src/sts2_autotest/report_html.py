@@ -56,6 +56,42 @@ def build_report_html(config: dict[str, Any]) -> str:
   <pre class="log"># {test_case.get('name', '')} - 步骤 {index + 1}\n# 结果: {result}\n# {detail}</pre>
 </div></div>"""
 
+    def ocr_html(analysis: Any) -> str:
+        if not isinstance(analysis, dict):
+            return ""
+        status = str(analysis.get("status", "skipped"))
+        provider = str(analysis.get("provider", "unknown"))
+        message = str(analysis.get("message") or "")
+        findings = analysis.get("findings", [])
+        if not isinstance(findings, list):
+            findings = []
+
+        if status == "passed":
+            body = "OCR 辅助分析：未发现 localization 风险"
+        elif status == "warning":
+            rows = []
+            for finding in findings:
+                if not isinstance(finding, dict):
+                    continue
+                severity = str(finding.get("severity", "warning"))
+                text = str(finding.get("text", ""))
+                finding_message = str(finding.get("message", ""))
+                rows.append(
+                    f"<li>[{severity}] {finding_message}: <code>{text}</code></li>"
+                )
+            joined = "".join(rows)
+            body = f"OCR 辅助分析：发现 {len(rows)} 条可疑文案<ul>{joined}</ul>"
+        else:
+            suffix = f" - {message}" if message else ""
+            body = f"OCR 辅助分析：未执行{suffix}"
+
+        return (
+            '<div class="ocr-box">'
+            f"<div>{body}</div>"
+            f'<div class="ocr-provider">Provider: {provider}</div>'
+            "</div>"
+        )
+
     def card_html(card: dict[str, Any]) -> str:
         before_img = str(card.get("screenshot_before", ""))
         after_img = str(card.get("screenshot_after", ""))
@@ -65,6 +101,8 @@ def build_report_html(config: dict[str, Any]) -> str:
         exp_str = "、".join(f"{key}={value}" for key, value in exp_items.items()) or "无直接数值校验"
         result = str(card.get("result", "跳过"))
         badge = _badge_kind(result)
+        before_ocr = ocr_html(card.get("screenshot_before_ocr"))
+        after_ocr = ocr_html(card.get("screenshot_after_ocr"))
         return f"""<div class="step"><div class="step-header" onclick="toggle(this)">
   <span class="step-name">{card.get('name', '')} ({card.get('card_id', '')})</span>
   <span class="badge badge-{badge}">{result}</span>
@@ -72,8 +110,8 @@ def build_report_html(config: dict[str, Any]) -> str:
 <div class="step-evidence">
   <p>期望: {exp_str}</p>
   <div class="img-row">
-    <div class="img-box"><div class="img-label">打出前</div>{f'<img src="{before_src}">' if before_src else '<i>无截图</i>'}</div>
-    <div class="img-box"><div class="img-label">打出后</div>{f'<img src="{after_src}">' if after_src else '<i>无截图</i>'}</div>
+    <div class="img-box"><div class="img-label">打出前</div>{f'<img src="{before_src}">' if before_src else '<i>无截图</i>'}{before_ocr}</div>
+    <div class="img-box"><div class="img-label">打出后</div>{f'<img src="{after_src}">' if after_src else '<i>无截图</i>'}{after_ocr}</div>
   </div>
 </div></div>"""
 
@@ -170,6 +208,10 @@ pre.log{{background:#050510;color:#6ee;padding:8px;border-radius:4px;font-size:1
 .img-row img{{max-width:100%;height:auto;border-radius:4px;border:1px solid #22222a}}
 .img-box{{flex:1;min-width:150px}}
 .img-label{{font-size:11px;color:#666;margin-bottom:4px}}
+.ocr-box{{margin-top:6px;padding:8px;border-radius:4px;background:#111827;border:1px solid #374151;font-size:12px;color:#cbd5e1}}
+.ocr-box ul{{margin:6px 0 0 18px}}
+.ocr-box code{{color:#facc15;font-family:"SF Mono",Menlo,monospace}}
+.ocr-provider{{margin-top:4px;color:#64748b;font-size:11px}}
 </style>
 </head><body>
 <div class="container">
