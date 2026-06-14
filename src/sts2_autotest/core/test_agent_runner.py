@@ -24,7 +24,9 @@ from typing import Any
 import asyncio
 import json
 from sts2_autotest.adapters.agent import AgentAdapter
+from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
 from sts2_autotest.core.steam import SteamController
+from sts2_autotest.core.visual_qa import VisualQaEngine
 from sts2_autotest.report_html import write_html_report
 
 try:
@@ -1562,20 +1564,34 @@ class TestAgentRunner:
             }.get(status, "跳过")
             before_path = self._normalize_html_artifact_path(result.get("screenshot_before", ""))
             after_path = self._normalize_html_artifact_path(result.get("screenshot_after", ""))
-            entries.append(
-                {
-                    "card_id": result.get("card_id", ""),
-                    "name": result.get("name", ""),
-                    "cost": result.get("energy_cost"),
-                    "exp": exp,
-                    "result": report_result,
-                    "screenshot_before": before_path,
-                    "screenshot_after": after_path,
-                    "state_before": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-before.json"),
-                    "state_after": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-after.json") if after_path else "",
-                }
-            )
+            entry: dict[str, Any] = {
+                "card_id": result.get("card_id", ""),
+                "name": result.get("name", ""),
+                "cost": result.get("energy_cost"),
+                "exp": exp,
+                "result": report_result,
+                "screenshot_before": before_path,
+                "screenshot_after": after_path,
+                "state_before": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-before.json"),
+                "state_after": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-after.json") if after_path else "",
+            }
+            before_ocr = self._get_screenshot_ocr_payload(before_path)
+            if before_ocr is not None:
+                entry["screenshot_before_ocr"] = before_ocr
+            after_ocr = self._get_screenshot_ocr_payload(after_path)
+            if after_ocr is not None:
+                entry["screenshot_after_ocr"] = after_ocr
+            entries.append(entry)
         return entries
+
+    def _get_screenshot_ocr_payload(self, screenshot_path: str) -> dict[str, Any] | None:
+        analysis_by_path = getattr(self, "_screenshot_ocr", {}) or {}
+        analysis = analysis_by_path.get(screenshot_path)
+        if isinstance(analysis, ScreenshotOcrAnalysis):
+            return analysis.model_dump(mode="json")
+        if isinstance(analysis, dict):
+            return analysis
+        return None
 
     def _normalize_html_artifact_path(self, value: Any) -> str:
         text = str(value or "").strip()
@@ -1596,7 +1612,27 @@ class TestAgentRunner:
                 return str(Path(*parts[parts.index(anchor):]))
         return text
 
+    def _get_visual_qa_engine(self) -> VisualQaEngine:
+        engine = getattr(self, "_visual_qa_engine", None)
+        if isinstance(engine, VisualQaEngine):
+            return engine
+        engine = VisualQaEngine()
+        self._visual_qa_engine = engine
+        return engine
+
+    def _analyze_html_report_screenshots(self) -> None:
+        engine = self._get_visual_qa_engine()
+        cache: dict[str, ScreenshotOcrAnalysis] = getattr(self, "_screenshot_ocr", {}) or {}
+        for result in getattr(self, "_card_results", []) or []:
+            for key in ("screenshot_before", "screenshot_after"):
+                normalized = self._normalize_html_artifact_path(result.get(key, ""))
+                if not normalized or normalized in cache:
+                    continue
+                cache[normalized] = engine.analyze_screenshot(self._artifact_dir / normalized)
+        self._screenshot_ocr = cache
+
     def _build_html_report_config(self) -> dict[str, Any]:
+        self._analyze_html_report_screenshots()
         card_results = self._build_html_report_card_results()
         test_cases: list[dict[str, Any]] = []
         for result in self.results:
