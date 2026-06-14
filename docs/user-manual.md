@@ -608,6 +608,10 @@ STS2_FRAMEWORK__LOG_BACKUP_DIR=C:\path\backup
 
 导出 artifact 时会生成 `reports/junit.xml`，便于 CI 系统消费。
 
+HTML 测试报告会在截图旁展示 OCR 辅助分析。该分析用于提示 localization 裸 key、missing localization 占位和未替换 token 风险，不改变测试结果。
+
+当 OCR provider 未配置或不可用时，报告会显示未执行或跳过，不影响 `test-report.html` 生成。
+
 ### 13.4 版本可观测性
 
 STS2-AUTOTEST 采用统一滚动升级策略：工作区内只维护一个当前生效版本，所有接入的 MOD 项目直接跟随。为保证升级问题可追溯，所有核心测试产物都会记录当前 `autotest version`（来源为 `src/sts2_autotest/__init__.py` 中的 `__version__`）：
