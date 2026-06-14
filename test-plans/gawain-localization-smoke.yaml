@@ -13,13 +13,13 @@ environment:
   game: Slay the Spire 2
   launch_method: steam
   steam_app_id: 2868840
-  automation_backend: STS2-Cli-Mod
+  automation_backend: STS2-Agent
   require_game_running: true
 
 inputs:
   mod_project: ../STS2-GAWAIN
   task_file: ../STS2-GAWAIN/tasks/gawain-localization-key-fix.task.yaml
-  report_output: ../STS2-GAWAIN/.agent-runs/gawain-localization-key-fix/test-report.md
+  report_output: ../STS2-GAWAIN/automation/autotest/output/gawain-localization-key-fix/test-report.md
 
 checks:
   - id: build
@@ -48,9 +48,9 @@ checks:
       - launch_log
 
   - id: wait_automation_backend
-    name: Wait for STS2-Cli-Mod ping
+    name: Wait for STS2-Agent HTTP API
     required: true
-    command: sts2 ping
+    command: curl http://127.0.0.1:8080/health
     evidence:
       - cli_log
 
@@ -102,6 +102,8 @@ checks:
     evidence:
       - state_json
       - cli_log
+      - screenshot
+      - state_json
       - game_log
 
 result_rules:

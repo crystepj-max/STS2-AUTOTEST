@@ -407,12 +407,44 @@ class CliModAdapter:
                 return ActionResult(status="success", state_changed=False)
         if action == "start_new_run":
             return self._start_new_run_sync()
+        if action == "embark":
+            return self._embark_sync()
         cli_args = _build_cli_args(action, args)
         try:
             raw = self._run_cli(*cli_args)
             self._parse_response(raw)
             self._cache_stale = True
             self._available_actions_cache = None
+            return ActionResult(status="success", state_changed=True)
+        except STS2Error as exc:
+            self._cache_stale = True
+            self._available_actions_cache = None
+            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
+            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+
+    def _embark_sync(self) -> ActionResult:
+        """Embark and wait for the game to leave character select."""
+        try:
+            raw = self._run_cli("embark")
+            self._parse_response(raw)
+            self._cache_stale = True
+            self._available_actions_cache = None
+
+            deadline = time.monotonic() + min(self.timeout, 10.0)
+            state = self._get_state_sync()
+            while state.screen == GameScreen.CHARACTER_SELECT and time.monotonic() < deadline:
+                time.sleep(0.5)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+
+            if state.screen == GameScreen.CHARACTER_SELECT:
+                return ActionResult(
+                    status="failure",
+                    state_changed=False,
+                    detail="embark did not leave CHARACTER_SELECT before timeout",
+                )
             return ActionResult(status="success", state_changed=True)
         except STS2Error as exc:
             self._cache_stale = True
@@ -628,7 +660,7 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
         GameScreen.MAIN_MENU: ["start_new_run", "new_run", "continue_run", "abandon_run", "choose_game_mode", "probe", "return_to_menu"],
         GameScreen.CHARACTER_SELECT: ["select_character", "set_ascension", "embark", "probe"],
         GameScreen.MAP: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_map_node", "proceed", "choose_event", "advance_dialogue", "probe"],
-        GameScreen.COMBAT: ["return_to_menu", "start_new_run", "select_character", "embark", "enter_combat", "choose_map_node", "choose_event", "advance_dialogue", "combat_basic_policy", "play_card", "end_turn", "use_potion", "probe"],
+        GameScreen.COMBAT: ["return_to_menu", "start_new_run", "select_character", "embark", "enter_combat", "choose_map_node", "choose_event", "advance_dialogue", "combat_basic_policy", "give_card", "play_card", "end_turn", "use_potion", "probe"],
         GameScreen.SHOP: ["shop_buy_card", "shop_buy_relic", "shop_buy_potion", "shop_remove_card", "probe"],
         GameScreen.REST: ["choose_rest_option", "probe"],
         GameScreen.EVENT: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
@@ -776,6 +808,7 @@ _POSITIONAL_ARG_KEYS: dict[str, tuple[str, ...]] = {
     "hand_select_card": ("card_ids",),
     "grid_select_card": ("card_id", "card_ids"),
     "tri_select_card": ("card_id", "card_ids"),
+    "give_card": ("card_id",),
 }
 
 

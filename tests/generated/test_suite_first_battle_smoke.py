@@ -12,8 +12,10 @@ from sts2_autotest.dsl.assertions import (
     combat_basic_policy,
     embark,
     end_turn,
+    enemy_took_exact_hits,
     enter_combat,
     game_reached_state,
+    give_card,
     no_crash_detected,
     has_travelable_node,
     play_card,
@@ -32,7 +34,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
     # Suite assertion: 整条链路应可连续完成
     # Suite assertion: 任一子用例失败时应给出失败位置
     suite_results = []
-    summary_path = Path('tests/output/suite-summaries') / "SUITE-FIRST-BATTLE-SMOKE.json"
+    summary_path = Path(__file__).resolve().parent.parent / "output" / "suite-summaries" / "SUITE-FIRST-BATTLE-SMOKE.json"
 
     def _write_suite_summary():
         summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +133,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
         )
         .assert_that(
             no_crash_detected(),
-            # TODO: implement assertion for '战斗结束后应回到奖励界面或地图界面'
+            game_reached_state(GameScreen.COMBAT),
         )
     )
     case_summary = {

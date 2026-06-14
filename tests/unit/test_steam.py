@@ -65,9 +65,23 @@ class TestStartGame:
         with patch("subprocess.Popen"):
             with patch.object(sc, "_find_game_pids", return_value=set()):
                 with patch.object(sc, "_find_game_pid", return_value=54321):
-                    pid = sc.start_game()
+                    pid = sc.start_game(reuse_existing=True)
                     assert pid == 54321
                     assert sc._game_pid == 54321
+
+    def test_start_game_reuses_existing_process_and_focuses_game(self, sc: SteamController) -> None:
+        with patch("subprocess.Popen") as mock_popen:
+            with patch.object(sc, "_find_game_pids", return_value={54321}):
+                with patch.object(sc, "_find_game_pid") as mock_find_new:
+                    pid = sc.start_game(reuse_existing=True)
+
+        assert pid == 54321
+        assert sc._game_pid == 54321
+        mock_find_new.assert_not_called()
+        if _IS_MACOS:
+            mock_popen.assert_called_once_with(["open", "steam://run/2868840"])
+        else:
+            mock_popen.assert_called_once_with([sc.steam_exe, "-applaunch", "2868840"])
 
     def test_start_game_uses_steam_applaunch(self) -> None:
         if _IS_MACOS:

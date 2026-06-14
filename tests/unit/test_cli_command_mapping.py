@@ -65,6 +65,10 @@ class TestBuildCliArgs:
         result = _build_cli_args("grid_select_card", {"card_id": "Strike"})
         assert result == ["grid_select_card", "Strike"]
 
+    def test_give_card_uses_positional_card_id(self) -> None:
+        result = _build_cli_args("give_card", {"card_id": "TWIN_STRIKE"})
+        assert result == ["give_card", "TWIN_STRIKE"]
+
     def test_action_with_none_args(self) -> None:
         assert _build_cli_args("end_turn", None) == ["end_turn"]
 
@@ -114,6 +118,7 @@ class TestScreenToActions:
         assert "advance_dialogue" in actions
         assert "choose_event" in actions
         assert "play_card" in actions
+        assert "give_card" in actions
         assert "end_turn" in actions
         assert "use_potion" in actions
 

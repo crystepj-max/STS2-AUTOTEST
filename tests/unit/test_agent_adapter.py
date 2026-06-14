@@ -144,8 +144,8 @@ class TestAgentAdapterTransport:
 
         assert exc.value.category == ErrorCategory.ADAPTER_ERROR
         assert exc.value.detail.get("subtype") == AdapterErrorSubType.JSON_PARSE_FAILURE
-        assert exc.value.detail.get("path") == "game_state"
-        assert exc.value.detail.get("method") == "POST"
+        assert exc.value.detail.get("path") == "state"
+        assert exc.value.detail.get("method") == "GET"
 
     def test_mcp_business_value_error_is_not_json_parse_failure(self) -> None:
         adapter = AgentAdapter(transport="mcp", mcp_client=ValueErrorMcpClient())
@@ -167,6 +167,15 @@ class TestAgentAdapterHealthCheck:
         assert result.healthy is True
         assert mock._requests[0]["url"] == "http://localhost:8080/health"
 
+    def test_real_agent_enveloped_ready_health_is_healthy(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"status": "ready"}})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.health_check())
+
+        assert result.healthy is True
+
     def test_unhealthy(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"status": "degraded"})
@@ -187,7 +196,7 @@ class TestAgentAdapterHealthCheck:
 
 
 class TestAgentAdapterGetState:
-    """get_state() maps to POST {endpoint}/game_state"""
+    """get_state() maps to POST {endpoint}/state"""
 
     def test_returns_game_state(self) -> None:
         mock = MockAsyncClient()
@@ -198,6 +207,16 @@ class TestAgentAdapterGetState:
 
         assert isinstance(state, GameState)
         assert state.screen == GameScreen.MAIN_MENU
+
+    def test_real_agent_enveloped_state(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "COMBAT", "in_combat": True}})
+        adapter = AgentAdapter(client=mock)
+
+        state = _run(adapter.get_state())
+
+        assert state.screen == GameScreen.COMBAT
+        assert state.in_combat is True
 
     def test_unknown_screen_maps_to_unknown(self) -> None:
         mock = MockAsyncClient()
@@ -219,7 +238,7 @@ class TestAgentAdapterGetState:
 
 
 class TestAgentAdapterAvailableActions:
-    """get_available_actions() maps to POST {endpoint}/available_actions"""
+    """get_available_actions() maps to POST {endpoint}/actions/available"""
 
     def test_returns_list(self) -> None:
         mock = MockAsyncClient()
@@ -230,6 +249,26 @@ class TestAgentAdapterAvailableActions:
 
         assert actions == ["play_card", "end_turn"]
 
+    def test_real_agent_enveloped_action_objects(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "end_turn", "requires_target": False},
+                        {"name": "play_card", "requires_index": True},
+                    ]
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["end_turn", "play_card"]
+
     def test_empty_list(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"actions": []})
@@ -239,19 +278,92 @@ class TestAgentAdapterAvailableActions:
 
         assert actions == []
 
+    def test_debug_actions_adds_give_card(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": ["play_card"]})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["play_card", "give_card"]
+
 
 class TestAgentAdapterAct:
-    """act() maps to POST {endpoint}/act"""
+    """act() maps to POST {endpoint}/action"""
 
     def test_success(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock)
 
-        result = _run(adapter.act("play_card", {"card_id": "strike"}))
+        result = _run(adapter.act("choose_event", {"index": 0}))
 
         assert isinstance(result, ActionResult)
         assert result.status == "success"
+
+    def test_success_flattens_action_args(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "choose_event",
+            "index": 0,
+        }
+
+    def test_play_card_resolves_card_id_to_agent_card_index(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "COMBAT",
+                    "combat": {
+                        "hand": [
+                            {"index": 0, "card_id": "STRIKE_IRONCLAD"},
+                            {"index": 1, "card_id": "TWIN_STRIKE"},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("play_card", {"card_id": "TWIN_STRIKE", "target": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "play_card",
+            "card_index": 1,
+            "target_index": 0,
+        }
+
+    def test_give_card_uses_debug_console_command(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("give_card", {"card_id": "TWIN_STRIKE"}))
+
+        assert result.status == "success"
+        assert mock._requests[0]["url"] == "http://localhost:8080/action"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "card TWIN_STRIKE hand",
+        }
+
+    def test_give_card_requires_debug_actions(self) -> None:
+        adapter = AgentAdapter()
+
+        result = _run(adapter.act("give_card", {"card_id": "TWIN_STRIKE"}))
+
+        assert result.status == "failure"
+        assert result.detail == "give_card requires AgentAdapter(debug_actions=True)"
 
     def test_failure(self) -> None:
         mock = MockAsyncClient()
@@ -273,20 +385,35 @@ class TestAgentAdapterAct:
 
 
 class TestAgentAdapterWaitUntilActionable:
-    """wait_until_actionable() polls via POST {endpoint}/wait_until_actionable"""
+    """wait_until_actionable() polls real Agent health/actions endpoints."""
 
     def test_returns_true_when_ready(self) -> None:
         mock = MockAsyncClient()
-        mock.add_response(200, {"actionable": True})
+        mock.add_response(200, {"ok": True, "data": {"status": "ready"}})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "play_card"},
+                    ]
+                },
+            },
+        )
         adapter = AgentAdapter(client=mock)
 
         result = _run(adapter.wait_until_actionable(10.0))
 
         assert result is True
+        assert [request["method"] for request in mock._requests] == ["GET", "GET"]
+        assert mock._requests[0]["url"] == "http://localhost:8080/health"
+        assert mock._requests[1]["url"] == "http://localhost:8080/actions/available"
 
     def test_returns_false_on_timeout(self) -> None:
         mock = MockAsyncClient()
-        mock.add_response(200, {"actionable": False})
+        mock.add_response(200, {"ok": True, "data": {"status": "ready"}})
+        mock.add_response(200, {"ok": True, "data": {"actions": []}})
         adapter = AgentAdapter(client=mock)
 
         result = _run(adapter.wait_until_actionable(0.1))

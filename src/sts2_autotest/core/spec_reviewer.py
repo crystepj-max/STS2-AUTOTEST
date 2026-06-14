@@ -32,9 +32,10 @@ _SUPPORTED_STEP_PATTERNS: list[re.Pattern[str]] = [
     re.compile(pattern)
     for pattern in (
         r"启动游戏|返回主菜单|选择标准模式|开始新\s*run|开始新局",
-        r"选择\s+Ironclad|开始冒险",
+        r"选择\s*(Ironclad|Gawain|战士|铁甲战士)|开始冒险",
         r"开局事件.*第\s*\d+\s*个选项|推进事件对话",
         r"地图节点.*\(\s*\d+\s*,\s*\d+\s*\)|进入首次战斗|进入首场战斗",
+        r"添加\s+[A-Za-z0-9_:-]+\s+到手牌",
         r"基础策略.*战斗|跳过卡牌奖励",
         r"结束回合|使用\s+.+",
     )
@@ -45,6 +46,9 @@ _SUPPORTED_ASSERTION_PATTERNS: list[re.Pattern[str]] = [
     for pattern in (
         r"crash",
         r"到达\s*MAP|位于\s*MAP|\bMAP\b|地图",
+        r"到达\s*EVENT|位于\s*EVENT|\bEVENT\b|事件",
+        r"到达\s*COMBAT|位于\s*COMBAT|\bCOMBAT\b|战斗|combat",
+        r"造成\s*\d+\s*点伤害\s*\d+\s*次",
         r"节点|node",
     )
 ]

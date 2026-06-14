@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from sts2_autotest.cli.mcp_tools import (
     handle_get_report,
     handle_list_specs,
     handle_run_pipeline,
+    run_tests_in_dir,
 )
 
 
@@ -109,6 +111,21 @@ class TestCompileSpec:
 
 
 class TestRunTest:
+    @patch("sts2_autotest.cli.mcp_tools.subprocess.run")
+    def test_run_tests_in_dir_uses_current_python(self, mock_run, tmp_path):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="test_example.py::test_ok PASSED\n",
+            stderr="",
+        )
+
+        result = run_tests_in_dir(tmp_path, timeout=60)
+
+        cmd = mock_run.call_args.args[0]
+        assert cmd[0] == sys.executable
+        assert "--timeout" not in cmd
+        assert result["status"] == "OK"
+
     @patch("sts2_autotest.cli.mcp_tools.run_tests_in_dir")
     def test_run_test_returns_result(self, mock_run):
         mock_run.return_value = {

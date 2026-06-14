@@ -68,8 +68,10 @@ __pycache__/
 _bmad/
 _bmad-output/
 
-# Claude Code local config
-.claude/
+# Claude Code local config（本地配置忽略，但共享技能目录入库）
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 # Codex local config
 .agents/

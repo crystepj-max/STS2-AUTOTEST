@@ -19,6 +19,7 @@ from typing import Any, Callable, Literal, Sequence, cast
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
 from sts2_autotest.cli import mcp_server
+from sts2_autotest.report_html import write_html_report
 
 
 DEFAULT_EVIDENCE_DIR = "tests/output"
@@ -124,6 +125,13 @@ def _create_parser() -> Any:
     serve_mcp_parser.add_argument("--host", default="127.0.0.1", help="Bind address")
     serve_mcp_parser.add_argument("--port", type=int, default=8090, help="Bind port")
     serve_mcp_parser.set_defaults(func=serve_mcp_cmd)
+
+    # autotest gen-report
+    gen_report_parser = sub.add_parser("gen-report", help="Generate HTML test report via test-report-html skill")
+    gen_report_parser.add_argument("--task-id", help="Task ID (reads from automation/autotest/output/{task-id}/)")
+    gen_report_parser.add_argument("--config", help="Path to test-results JSON config file")
+    gen_report_parser.add_argument("--output", help="Output HTML path (default: auto-detect)")
+    gen_report_parser.set_defaults(func=gen_report_cmd)
 
     return p
 
@@ -1131,6 +1139,46 @@ def report_cmd(args: Any) -> int:
         return 1
 
 
+
+def _resolve_gen_report_dirs(args: Any) -> tuple[str, str]:
+    """Resolve config and output paths for gen-report."""
+    config_path = args.config
+    output_path = args.output
+
+    if config_path and output_path:
+        return config_path, output_path
+
+    if args.task_id:
+        base = Path("STS2-GAWAIN") / "automation" / "autotest" / "output" / args.task_id
+        resolved_config = base / "test-results.json"
+        if not resolved_config.exists():
+            resolved_config = base / "test-results.json"
+        config_path = str(resolved_config) if config_path is None else config_path
+        output_path = output_path or str(base / "test-report.html")
+        return config_path or str(resolved_config), output_path
+
+    print("[autotest] Specify --task-id or --config")
+    return "", ""
+
+
+def gen_report_cmd(args: Any) -> int:
+    """Generate HTML test report from a structured AUTOTEST JSON config."""
+    config_path, output_path = _resolve_gen_report_dirs(args)
+    if not config_path or not output_path:
+        return 1
+
+    if not os.path.isfile(config_path):
+        print(f"[autotest] Config file not found: {config_path}")
+        return 1
+
+    try:
+        write_html_report(config_path, output_path)
+        print(f"[autotest] HTML test report generated: {output_path}")
+        return 0
+    except Exception as exc:
+        print(f"[autotest] Report generation failed: {exc}")
+        return 1
+
 def cli(argv: Sequence[str] | None = None) -> None:
     """Main CLI entry point. Used by pyproject.toml [project.scripts]."""
     # Ensure UTF-8 output in Windows terminal (fix GBK encoding issues)
@@ -1158,6 +1206,8 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(agent_test_cmd(args))
     elif args.command == "serve":
         sys.exit(serve_cmd(args))
+    elif args.command == "gen-report":
+        sys.exit(gen_report_cmd(args))
     elif args.command == "serve-mcp":
         sys.exit(serve_mcp_cmd(args))
     else:

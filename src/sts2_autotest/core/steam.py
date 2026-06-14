@@ -88,7 +88,12 @@ class SteamController:
         logger.info("Steam started (PID %s)", self._steam_pid)
         return self._steam_pid
 
-    def start_game(self, *, allow_direct_fallback: bool = False) -> int:
+    def start_game(
+        self,
+        *,
+        allow_direct_fallback: bool = False,
+        reuse_existing: bool = False,
+    ) -> int:
         """Launch the game via Steam and return its PID."""
         logger.info("Starting game (app %s)...", self.app_id)
         existing_pids = self._find_game_pids()
@@ -96,6 +101,12 @@ class SteamController:
             subprocess.Popen(["open", f"steam://run/{self.app_id}"])
         else:
             subprocess.Popen([self.steam_exe, "-applaunch", self.app_id])
+        if reuse_existing and existing_pids:
+            pid = sorted(existing_pids)[0]
+            self._game_pid = pid
+            self._assign_to_job(pid)
+            logger.info("Game is already running (PID %s)", pid)
+            return pid
         # Wait for game process to appear.
         start = time.monotonic()
         while time.monotonic() - start < self.startup_timeout:
