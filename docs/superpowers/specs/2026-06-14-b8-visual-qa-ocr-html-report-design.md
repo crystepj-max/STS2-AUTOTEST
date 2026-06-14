@@ -221,7 +221,7 @@ class VisualQaConfig(BaseModel):
 
 ## 9. 测试策略
 
-单元测试优先，不依赖真实游戏、真实截图或真实 OCR。
+单元测试优先，不依赖真实游戏进程或真实 OCR。除此之外，必须支持把用户提供的真实游戏截图作为 fixture 输入，用于验证 HTML 报告链路能在真实截图文件上生成 OCR 辅助结论，并保持测试结果通过。
 
 新增或扩展测试：
 
@@ -237,10 +237,15 @@ class VisualQaConfig(BaseModel):
 3. `tests/unit/test_agent_runner_html_report.py` 或现有 runner 测试
    - `_build_html_report_card_results()` 能把截图 OCR 结果写入 `test-results.json` 配置。
    - OCR skipped 不改变 card/test case 的 `result`。
+4. `tests/fixtures/visual_qa/` 游戏截图 fixture
+   - 支持放入用户提供的 PNG 截图，例如 `gawain-card-before.png`。
+   - 测试用例构造包含该截图的 `test-results.json` 或 card result。
+   - 使用 fake/static OCR provider 时，按截图文件名或测试注入文本返回可控 OCR 文本，确保测试不依赖本机 OCR 安装。
+   - 生成 HTML 后断言图片和 OCR 辅助块同时存在，且对应测试结果仍为 `通过`。
 
 可选集成测试：
 
-- 在本机安装 Tesseract 后，对 fixture 图片执行真实 OCR。该测试默认跳过，不作为 CI 必需项。
+- 在本机安装 Tesseract 后，对用户提供的 fixture 截图执行真实 OCR。该测试默认跳过，不作为 CI 必需项。
 
 ## 10. 验收标准
 
@@ -249,7 +254,8 @@ class VisualQaConfig(BaseModel):
 3. OCR 不可用时，HTML 显示未执行或不显示 OCR 块，报告生成成功。
 4. `test-results.json` 可承载截图级 OCR 结果，旧字段保持兼容。
 5. 不安装真实 OCR/VLM 依赖时，现有单元测试和 HTML 报告测试仍可通过。
-6. B8 设计不要求 `main` 已合入 HTML 报告分支；实现时应基于包含 `report_html.py` 的分支或先完成分支合并。
+6. 用户提供一张游戏截图作为 fixture 后，测试能用该截图生成 HTML 报告，报告中显示截图和 OCR 辅助分析，且测试结果仍为 `通过`。
+7. B8 设计不要求 `main` 已合入 HTML 报告分支；实现时应基于包含 `report_html.py` 的分支或先完成分支合并。
 
 ## 11. 后续扩展
 
