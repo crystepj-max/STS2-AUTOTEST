@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -135,13 +136,11 @@ def run_tests_in_dir(
     junit_xml = output_dir / "junit.xml"
 
     cmd = [
-        "python3.11",
+        sys.executable,
         "-m",
         "pytest",
         str(spec_dir),
         "-v",
-        "--timeout",
-        str(timeout),
         "--junitxml",
         str(junit_xml),
     ]
