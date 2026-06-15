@@ -5,8 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis, VisualQaFinding
+from sts2_autotest.config.schema import FrameworkConfig
 from sts2_autotest.core.test_agent_runner import TestAgentRunner
-from sts2_autotest.core.visual_qa import StaticOcrProvider, VisualQaEngine
+from sts2_autotest.core.visual_qa import (
+    DisabledOcrProvider,
+    StaticOcrProvider,
+    TesseractOcrProvider,
+    VisualQaEngine,
+)
 
 
 def _make_runner(tmp_path: Path) -> TestAgentRunner:
@@ -79,3 +85,27 @@ def test_analyze_html_report_screenshots_populates_cache(tmp_path: Path) -> None
     analysis = runner._screenshot_ocr["screenshots/card-before.png"]
     assert analysis.status == "warning"
     assert analysis.findings[0].text == "gawain.card.strike.name"
+
+
+def test_get_visual_qa_engine_defaults_to_disabled_provider(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path)
+
+    engine = runner._get_visual_qa_engine()
+
+    assert isinstance(engine._provider, DisabledOcrProvider)
+
+
+def test_get_visual_qa_engine_uses_tesseract_provider_from_config(
+    tmp_path: Path,
+) -> None:
+    runner = _make_runner(tmp_path)
+    runner._framework_config = FrameworkConfig(
+        visual_qa_ocr_provider="tesseract",
+        visual_qa_tesseract_cmd="custom-tesseract",
+        visual_qa_tesseract_lang="eng",
+        visual_qa_timeout_seconds=2.0,
+    )
+
+    engine = runner._get_visual_qa_engine()
+
+    assert isinstance(engine._provider, TesseractOcrProvider)

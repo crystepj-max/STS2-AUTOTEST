@@ -25,8 +25,13 @@ import asyncio
 import json
 from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
+from sts2_autotest.config.schema import FrameworkConfig
 from sts2_autotest.core.steam import SteamController
-from sts2_autotest.core.visual_qa import VisualQaEngine
+from sts2_autotest.core.visual_qa import (
+    DisabledOcrProvider,
+    TesseractOcrProvider,
+    VisualQaEngine,
+)
 from sts2_autotest.report_html import write_html_report
 
 try:
@@ -1616,7 +1621,21 @@ class TestAgentRunner:
         engine = getattr(self, "_visual_qa_engine", None)
         if isinstance(engine, VisualQaEngine):
             return engine
-        engine = VisualQaEngine()
+
+        framework_config = getattr(self, "_framework_config", FrameworkConfig())
+        provider_name = getattr(framework_config, "visual_qa_ocr_provider", "disabled")
+        if not getattr(framework_config, "visual_qa_enabled", True):
+            provider = DisabledOcrProvider()
+        elif provider_name == "tesseract":
+            provider = TesseractOcrProvider(
+                command=framework_config.visual_qa_tesseract_cmd,
+                lang=framework_config.visual_qa_tesseract_lang,
+                timeout_seconds=framework_config.visual_qa_timeout_seconds,
+            )
+        else:
+            provider = DisabledOcrProvider()
+
+        engine = VisualQaEngine(provider)
         self._visual_qa_engine = engine
         return engine
 
