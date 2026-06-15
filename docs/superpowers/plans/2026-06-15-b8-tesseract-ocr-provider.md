@@ -326,10 +326,9 @@ def test_get_visual_qa_engine_uses_tesseract_provider_from_config(tmp_path: Path
 
 - [ ] **步骤 3：实现 runner provider 选择**
 
-在 `test_agent_runner.py` 导入：
+在 `test_agent_runner.py` 扩展 `core.visual_qa` 导入。不要从 `core/` 导入 `config.schema`，否则会违反 import-linter 的 common layer isolation：
 
 ```python
-from sts2_autotest.config.schema import FrameworkConfig
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
     TesseractOcrProvider,
@@ -345,15 +344,19 @@ from sts2_autotest.core.visual_qa import (
         if isinstance(engine, VisualQaEngine):
             return engine
 
-        framework_config = getattr(self, "_framework_config", FrameworkConfig())
+        framework_config = getattr(self, "_framework_config", None)
         provider_name = getattr(framework_config, "visual_qa_ocr_provider", "disabled")
         if not getattr(framework_config, "visual_qa_enabled", True):
             provider = DisabledOcrProvider()
         elif provider_name == "tesseract":
             provider = TesseractOcrProvider(
-                command=framework_config.visual_qa_tesseract_cmd,
-                lang=framework_config.visual_qa_tesseract_lang,
-                timeout_seconds=framework_config.visual_qa_timeout_seconds,
+                command=getattr(framework_config, "visual_qa_tesseract_cmd", "tesseract"),
+                lang=getattr(framework_config, "visual_qa_tesseract_lang", "chi_sim+eng"),
+                timeout_seconds=getattr(
+                    framework_config,
+                    "visual_qa_timeout_seconds",
+                    10.0,
+                ),
             )
         else:
             provider = DisabledOcrProvider()
