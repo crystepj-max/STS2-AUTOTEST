@@ -87,6 +87,21 @@ class TestEnvOverride:
         cfg = load_config(project_dir=config_dir)
         assert cfg.adapter.cli.timeout == 15.0
 
+    def test_env_overrides_visual_qa_settings(
+        self,
+        config_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_OCR_PROVIDER", "tesseract")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_TESSERACT_LANG", "eng")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_TIMEOUT_SECONDS", "3.5")
+
+        cfg = load_config(project_dir=config_dir)
+
+        assert cfg.framework.visual_qa_ocr_provider == "tesseract"
+        assert cfg.framework.visual_qa_tesseract_lang == "eng"
+        assert cfg.framework.visual_qa_timeout_seconds == 3.5
+
     def test_non_sts2_env_ignored(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OTHER_VAR", "ignored")
         cfg = load_config(project_dir=config_dir)

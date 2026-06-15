@@ -76,6 +76,11 @@ class FrameworkConfig(BaseModel):
     artifact_dir: str = "tests/output/artifacts"
     disk_threshold_mb: int = Field(default=100, ge=1)
     lock_file: str = "tests/output/.sts2-autotest.lock"
+    visual_qa_enabled: bool = True
+    visual_qa_ocr_provider: Literal["disabled", "tesseract"] = "disabled"
+    visual_qa_tesseract_cmd: str = "tesseract"
+    visual_qa_tesseract_lang: str = "chi_sim+eng"
+    visual_qa_timeout_seconds: float = Field(default=10.0, gt=0)
 
 
 class ExecutionConfig(BaseModel):

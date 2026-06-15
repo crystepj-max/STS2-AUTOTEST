@@ -24,6 +24,18 @@ class TestFrameworkConfig:
         assert cfg.evidence_dir == "tests/output"
         assert cfg.evidence_retention == 20
 
+    def test_visual_qa_defaults(self) -> None:
+        cfg = FrameworkConfig()
+        assert cfg.visual_qa_enabled is True
+        assert cfg.visual_qa_ocr_provider == "disabled"
+        assert cfg.visual_qa_tesseract_cmd == "tesseract"
+        assert cfg.visual_qa_tesseract_lang == "chi_sim+eng"
+        assert cfg.visual_qa_timeout_seconds == 10.0
+
+    def test_visual_qa_provider_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_ocr_provider="easyocr")
+
     def test_valid_log_levels(self) -> None:
         for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
             cfg = FrameworkConfig(log_level=level)
