@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Protocol
@@ -56,6 +57,46 @@ class StaticOcrProvider:
         return [
             OcrTextBlock(text=text, confidence=1.0)
             for text in self._text_by_name.get(image_path.name, [])
+        ]
+
+
+class TesseractOcrProvider:
+    """OCR provider backed by the local tesseract command."""
+
+    name = "tesseract"
+
+    def __init__(
+        self,
+        command: str = "tesseract",
+        lang: str = "chi_sim+eng",
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self._command = command
+        self._lang = lang
+        self._timeout_seconds = timeout_seconds
+
+    def extract_text(self, image_path: Path) -> list[OcrTextBlock]:
+        try:
+            completed = subprocess.run(
+                [self._command, str(image_path), "stdout", "-l", self._lang],
+                capture_output=True,
+                text=True,
+                timeout=self._timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"tesseract command not found: {self._command}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"tesseract timed out after {self._timeout_seconds} seconds"
+            ) from exc
+        if completed.returncode != 0:
+            message = completed.stderr.strip() or f"exit code {completed.returncode}"
+            raise RuntimeError(f"tesseract failed: {message}")
+        return [
+            OcrTextBlock(text=line)
+            for line in (line.strip() for line in completed.stdout.splitlines())
+            if line
         ]
 
 

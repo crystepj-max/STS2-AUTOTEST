@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from sts2_autotest.common.visual_qa import (
     OcrTextBlock,
@@ -13,6 +15,7 @@ from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
     LocalizationTextDetector,
     StaticOcrProvider,
+    TesseractOcrProvider,
     VisualQaEngine,
 )
 
@@ -132,3 +135,82 @@ def test_visual_qa_engine_returns_skipped_for_missing_image(tmp_path: Path) -> N
     assert analysis.status == "skipped"
     assert analysis.provider == "static"
     assert "screenshot not found" in str(analysis.message)
+
+
+def test_tesseract_provider_extracts_stdout_lines(tmp_path: Path) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+
+    completed = subprocess.CompletedProcess(
+        args=["tesseract"],
+        returncode=0,
+        stdout="便携魔导终端\n消耗 1 储能\n\n",
+        stderr="",
+    )
+    with patch(
+        "sts2_autotest.core.visual_qa.subprocess.run",
+        return_value=completed,
+    ) as run:
+        blocks = TesseractOcrProvider(
+            command="tesseract",
+            lang="chi_sim+eng",
+            timeout_seconds=3.0,
+        ).extract_text(image)
+
+    assert [block.text for block in blocks] == ["便携魔导终端", "消耗 1 储能"]
+    run.assert_called_once_with(
+        ["tesseract", str(image), "stdout", "-l", "chi_sim+eng"],
+        capture_output=True,
+        text=True,
+        timeout=3.0,
+        check=False,
+    )
+
+
+def test_tesseract_provider_missing_command_becomes_skipped(tmp_path: Path) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+    engine = VisualQaEngine(TesseractOcrProvider(command="missing-tesseract"))
+
+    with patch(
+        "sts2_autotest.core.visual_qa.subprocess.run",
+        side_effect=FileNotFoundError("missing-tesseract"),
+    ):
+        analysis = engine.analyze_screenshot(image)
+
+    assert analysis.status == "skipped"
+    assert analysis.provider == "tesseract"
+    assert "command not found" in str(analysis.message)
+
+
+def test_tesseract_provider_timeout_becomes_skipped(tmp_path: Path) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+    engine = VisualQaEngine(TesseractOcrProvider(timeout_seconds=0.1))
+
+    with patch(
+        "sts2_autotest.core.visual_qa.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="tesseract", timeout=0.1),
+    ):
+        analysis = engine.analyze_screenshot(image)
+
+    assert analysis.status == "skipped"
+    assert "timed out" in str(analysis.message)
+
+
+def test_tesseract_provider_nonzero_exit_becomes_skipped(tmp_path: Path) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+    completed = subprocess.CompletedProcess(
+        args=["tesseract"],
+        returncode=1,
+        stdout="",
+        stderr="Error opening data file",
+    )
+    engine = VisualQaEngine(TesseractOcrProvider())
+
+    with patch("sts2_autotest.core.visual_qa.subprocess.run", return_value=completed):
+        analysis = engine.analyze_screenshot(image)
+
+    assert analysis.status == "skipped"
+    assert "tesseract failed" in str(analysis.message)
