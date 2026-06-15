@@ -25,7 +25,6 @@ import asyncio
 import json
 from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
-from sts2_autotest.config.schema import FrameworkConfig
 from sts2_autotest.core.steam import SteamController
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
@@ -1622,15 +1621,19 @@ class TestAgentRunner:
         if isinstance(engine, VisualQaEngine):
             return engine
 
-        framework_config = getattr(self, "_framework_config", FrameworkConfig())
+        framework_config = getattr(self, "_framework_config", None)
         provider_name = getattr(framework_config, "visual_qa_ocr_provider", "disabled")
         if not getattr(framework_config, "visual_qa_enabled", True):
             provider = DisabledOcrProvider()
         elif provider_name == "tesseract":
             provider = TesseractOcrProvider(
-                command=framework_config.visual_qa_tesseract_cmd,
-                lang=framework_config.visual_qa_tesseract_lang,
-                timeout_seconds=framework_config.visual_qa_timeout_seconds,
+                command=getattr(framework_config, "visual_qa_tesseract_cmd", "tesseract"),
+                lang=getattr(framework_config, "visual_qa_tesseract_lang", "chi_sim+eng"),
+                timeout_seconds=getattr(
+                    framework_config,
+                    "visual_qa_timeout_seconds",
+                    10.0,
+                ),
             )
         else:
             provider = DisabledOcrProvider()

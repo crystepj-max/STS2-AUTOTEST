@@ -612,6 +612,17 @@ HTML 测试报告会在截图旁展示 OCR 辅助分析。该分析用于提示 
 
 当 OCR provider 未配置或不可用时，报告会显示未执行或跳过，不影响 `test-report.html` 生成。
 
+可通过配置启用本机 Tesseract OCR：
+
+```dotenv
+STS2_FRAMEWORK__VISUAL_QA_OCR_PROVIDER=tesseract
+STS2_FRAMEWORK__VISUAL_QA_TESSERACT_CMD=tesseract
+STS2_FRAMEWORK__VISUAL_QA_TESSERACT_LANG=chi_sim+eng
+STS2_FRAMEWORK__VISUAL_QA_TIMEOUT_SECONDS=10
+```
+
+Tesseract 和语言包不是 STS2-AUTOTEST 的硬依赖。未安装命令、缺少语言包或执行超时时，OCR 分析会显示为未执行，不改变测试结果。
+
 ### 13.4 版本可观测性
 
 STS2-AUTOTEST 采用统一滚动升级策略：工作区内只维护一个当前生效版本，所有接入的 MOD 项目直接跟随。为保证升级问题可追溯，所有核心测试产物都会记录当前 `autotest version`（来源为 `src/sts2_autotest/__init__.py` 中的 `__version__`）：
