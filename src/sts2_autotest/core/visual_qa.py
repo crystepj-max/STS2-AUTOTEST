@@ -15,7 +15,11 @@ from sts2_autotest.common.visual_qa import (
 )
 
 
-_RAW_KEY_PATTERN = re.compile(r"([A-Za-z0-9_]+[.:/]){2,}[A-Za-z0-9_]+")
+_RAW_KEY_PATTERN = re.compile(
+    r"\b(?=[A-Za-z0-9_./]*[A-Za-z_][A-Za-z0-9_./]*[./])"
+    r"(?!(?:v|V)[0-9]+(?:[./][0-9]+)+\b)"
+    r"(?:[A-Za-z_][A-Za-z0-9_]*[./]){2,}[A-Za-z_][A-Za-z0-9_]*\b"
+)
 _MISSING_MARKERS = (
     "MISSING",
     "TODO_LOCALIZE",

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 import asyncio
+import inspect
 import json
 from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
@@ -116,29 +117,22 @@ def _normalize_window_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
 
 
-def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
-    """Return the best matching macOS on-screen window id and size."""
-    try:
-        import Quartz
-    except Exception:
-        return None
-
+def _select_macos_window(
+    windows: list[dict[str, Any]],
+    window_title: str,
+) -> tuple[int, tuple[int, int]] | None:
     target = _normalize_window_token(window_title)
     if not target:
         return None
 
-    windows = Quartz.CGWindowListCopyWindowInfo(
-        Quartz.kCGWindowListOptionAll,
-        Quartz.kCGNullWindowID,
-    ) or []
     candidates: list[tuple[int, int, int, int, int]] = []
     for window in windows:
-        layer = int(window.get(Quartz.kCGWindowLayer, 0) or 0)
+        layer = int(window.get("layer", 0) or 0)
         if layer != 0:
             continue
 
-        owner = _normalize_window_token(window.get(Quartz.kCGWindowOwnerName, ""))
-        name = _normalize_window_token(window.get(Quartz.kCGWindowName, ""))
+        owner = _normalize_window_token(window.get("owner_name", ""))
+        name = _normalize_window_token(window.get("window_name", ""))
         if not owner and not name:
             continue
         if not (
@@ -149,10 +143,9 @@ def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
         ):
             continue
 
-        bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
-        width = int(round(float(bounds.get("Width", 0) or 0)))
-        height = int(round(float(bounds.get("Height", 0) or 0)))
-        window_id = int(window.get(Quartz.kCGWindowNumber, 0) or 0)
+        width = int(round(float(window.get("width", 0) or 0)))
+        height = int(round(float(window.get("height", 0) or 0)))
+        window_id = int(window.get("window_id", 0) or 0)
         if window_id <= 0 or width <= 0 or height <= 0:
             continue
 
@@ -167,13 +160,43 @@ def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
     return window_id, (width, height)
 
 
+def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
+    """Return the best matching macOS on-screen window id and size."""
+    try:
+        import Quartz
+    except Exception:
+        return None
+
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionAll,
+        Quartz.kCGNullWindowID,
+    ) or []
+    normalized_windows = []
+    for window in windows:
+        bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
+        normalized_windows.append(
+            {
+                "layer": window.get(Quartz.kCGWindowLayer, 0),
+                "owner_name": window.get(Quartz.kCGWindowOwnerName, ""),
+                "window_name": window.get(Quartz.kCGWindowName, ""),
+                "width": bounds.get("Width", 0),
+                "height": bounds.get("Height", 0),
+                "window_id": window.get(Quartz.kCGWindowNumber, 0),
+            }
+        )
+    return _select_macos_window(normalized_windows, window_title)
+
+
 def _capture_macos_window_png(path: Path, window_title: str) -> bool:
     """Capture a specific macOS window directly into a PNG file."""
     try:
         import Quartz
         from AppKit import NSBitmapImageRep, NSPNGFileType
     except Exception:
-        script = r"""
+        selector_source = inspect.getsource(_normalize_window_token) + "\n\n" + inspect.getsource(_select_macos_window)
+        script = f"""
+from __future__ import annotations
+
 from pathlib import Path
 import re
 import sys
@@ -182,47 +205,32 @@ import Quartz
 from AppKit import NSBitmapImageRep, NSPNGFileType
 
 
-def norm(value):
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+{selector_source}
 
 
 path = Path(sys.argv[1])
 window_title = sys.argv[2]
-target = norm(window_title)
-windows = Quartz.CGWindowListCopyWindowInfo(
+quartz_windows = Quartz.CGWindowListCopyWindowInfo(
     Quartz.kCGWindowListOptionAll,
     Quartz.kCGNullWindowID,
 ) or []
-candidates = []
-for window in windows:
-    layer = int(window.get(Quartz.kCGWindowLayer, 0) or 0)
-    if layer != 0:
-        continue
-    owner = norm(window.get(Quartz.kCGWindowOwnerName, ""))
-    name = norm(window.get(Quartz.kCGWindowName, ""))
-    if not owner and not name:
-        continue
-    if not (
-        target in owner
-        or owner in target
-        or target in name
-        or name in target
-    ):
-        continue
-    bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
-    width = int(round(float(bounds.get("Width", 0) or 0)))
-    height = int(round(float(bounds.get("Height", 0) or 0)))
-    window_id = int(window.get(Quartz.kCGWindowNumber, 0) or 0)
-    if window_id <= 0 or width <= 0 or height <= 0:
-        continue
-    exact_match = int(target == owner or target == name)
-    candidates.append((exact_match, width * height, window_id))
+windows = []
+for window in quartz_windows:
+    bounds = window.get(Quartz.kCGWindowBounds, {{}}) or {{}}
+    windows.append({{
+        "layer": window.get(Quartz.kCGWindowLayer, 0),
+        "owner_name": window.get(Quartz.kCGWindowOwnerName, ""),
+        "window_name": window.get(Quartz.kCGWindowName, ""),
+        "width": bounds.get("Width", 0),
+        "height": bounds.get("Height", 0),
+        "window_id": window.get(Quartz.kCGWindowNumber, 0),
+    }})
 
-if not candidates:
+match = _select_macos_window(windows, window_title)
+if match is None:
     raise SystemExit(1)
 
-candidates.sort(reverse=True)
-window_id = candidates[0][2]
+window_id, _ = match
 image = Quartz.CGWindowListCreateImage(
     Quartz.CGRectNull,
     Quartz.kCGWindowListOptionIncludingWindow,
@@ -236,7 +244,7 @@ path.parent.mkdir(parents=True, exist_ok=True)
 bitmap = NSBitmapImageRep.alloc().initWithCGImage_(image)
 if bitmap is None:
     raise SystemExit(1)
-png_data = bitmap.representationUsingType_properties_(NSPNGFileType, {})
+png_data = bitmap.representationUsingType_properties_(NSPNGFileType, {{}})
 if png_data is None:
     raise SystemExit(1)
 if not png_data.writeToFile_atomically_(str(path), True):
@@ -277,6 +285,14 @@ if not png_data.writeToFile_atomically_(str(path), True):
     return bool(png_data.writeToFile_atomically_(str(path), True))
 
 
+def _steam_fallback_delay_seconds() -> float:
+    raw = os.environ.get("STS2_STEAM_FALLBACK_DELAY", "5")
+    try:
+        return float(raw)
+    except ValueError:
+        return 5.0
+
+
 def _find_sln_or_csproj(project_path: Path) -> Path | None:
     """Find a .sln or .csproj file under *project_path*.
 
@@ -310,12 +326,22 @@ def _find_build_output(project_path: Path) -> Path | None:
     Skips directories that cannot be stat'd (permission errors).
     """
     _EXCLUDE_PARTS = {".git", ".claude", ".agent-runs", "obj", "node_modules"}
-    candidates: list[Path] = []
+    _GODOT_CACHE_PARTS = {"imported", "extension_api"}
+
+    def _is_excluded(p: Path) -> bool:
+        parts = p.relative_to(project_path).parts
+        if _EXCLUDE_PARTS & set(parts):
+            return True
+        if ".godot" in parts and (_GODOT_CACHE_PARTS & set(parts)):
+            return True
+        return False
+
+    candidates: list[tuple[Path, float]] = []
     for pattern in ["**/bin/Release", "**/bin/Debug"]:
         for d in project_path.glob(pattern):
             if not d.is_dir():
                 continue
-            if _EXCLUDE_PARTS & set(d.relative_to(project_path).parts):
+            if _is_excluded(d):
                 continue
             try:
                 mtime = d.stat().st_mtime
@@ -463,7 +489,14 @@ def _run_launch_command(name: str, cmd: list[str], log_path: Path) -> str:
     with log_path.open("a", encoding="utf-8") as f:
         f.write(f"# {name}\n")
         f.write(f"> {' '.join(cmd)}\n")
-    result = subprocess.run(cmd, capture_output=True, timeout=15.0)
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=15.0)
+    except subprocess.TimeoutExpired as exc:
+        msg = f"Timeout after {exc.timeout}s"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{msg}\n")
+            f.write("ExitCode: -1\n")
+        raise RuntimeError(msg) from exc
     output = (
         result.stdout.decode("utf-8", errors="replace")
         + result.stderr.decode("utf-8", errors="replace")
@@ -535,7 +568,7 @@ def _launch_game_via_desktop_open(app_id: str, launch_log: Path) -> None:
     """
     if _IS_MACOS:
         steam_exe = _start_steam_client_without_polling(launch_log)
-        time.sleep(float(os.environ.get("STS2_STEAM_FALLBACK_DELAY", "5")))
+        time.sleep(_steam_fallback_delay_seconds())
         try:
             _run_launch_command(
                 "Start game via Steam bundle",

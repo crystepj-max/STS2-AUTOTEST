@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import os
+import subprocess
 
 import pytest
 
@@ -15,6 +16,7 @@ from sts2_autotest.core.test_agent_runner import (
     TestAgentRunner,
     _find_build_output,
     _find_godot_path,
+    _capture_macos_window_png,
     _launch_game_via_desktop_open,
     _start_steam_client_without_polling,
 )
@@ -82,6 +84,24 @@ class TestSmokeCardValidation:
                 result = runner._capture_screenshot("test-card.png")
 
         assert result == ""
+
+    def test_macos_window_capture_fallback_uses_shared_selector(self, tmp_path):
+        """Fallback script should not carry a separate window matching implementation."""
+        captured: dict[str, str] = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["script"] = cmd[2]
+            return subprocess.CompletedProcess(cmd, 1, "", "")
+
+        with patch(
+            "sts2_autotest.core.test_agent_runner.subprocess.run",
+            side_effect=fake_run,
+        ):
+            result = _capture_macos_window_png(tmp_path / "screen.png", "Slay the Spire 2")
+
+        assert result is False
+        assert "def _select_macos_window" in captured["script"]
+        assert "def norm(" not in captured["script"]
 
     def test_verify_card_attack_ok(self, tmp_path):
         """Attack card should pass when HP delta matches expected damage."""
@@ -389,6 +409,15 @@ class TestSmokeCardValidation:
 
         assert _find_build_output(tmp_path) == release
 
+    def test_find_build_output_ignores_godot_cache_bins(self, tmp_path):
+        """Godot cache bins should not outrank the real mod build output."""
+        release = tmp_path / "src" / "bin" / "Release"
+        release.mkdir(parents=True)
+        cache = tmp_path / ".godot" / "imported" / "bin" / "Release"
+        cache.mkdir(parents=True)
+
+        assert _find_build_output(tmp_path) == release
+
     def test_find_godot_path_prefers_user_godot_app_before_global_mono(self):
         """Default Godot discovery should prefer the STS2-compatible 4.5 user app."""
         user_godot = Path.home() / "Applications/Godot.app/Contents/MacOS/Godot"
@@ -511,6 +540,43 @@ class TestSmokeCardValidation:
         )
         text = launch_log.read_text(encoding="utf-8")
         assert "Steam URL handler failed" in text
+
+    def test_desktop_fallback_invalid_delay_uses_default(self, tmp_path):
+        """Invalid STS2_STEAM_FALLBACK_DELAY should not crash the fallback path."""
+        launch_log = tmp_path / "launch.log"
+        steam_exe = tmp_path / "steam_osx"
+        steam_exe.write_text("", encoding="utf-8")
+
+        with patch.dict(os.environ, {"STS2_STEAM_FALLBACK_DELAY": "5s"}):
+            with patch(
+                "sts2_autotest.core.test_agent_runner._start_steam_client_without_polling",
+                return_value=steam_exe,
+            ):
+                with patch(
+                    "sts2_autotest.core.test_agent_runner._run_launch_command",
+                    return_value="",
+                ):
+                    with patch("sts2_autotest.core.test_agent_runner.time.sleep") as sleep:
+                        _launch_game_via_desktop_open("2868840", launch_log)
+
+        sleep.assert_called_once_with(5.0)
+
+    def test_run_launch_command_logs_timeout_exit_code(self, tmp_path):
+        """Timeouts should leave an ExitCode marker in launch.log."""
+        launch_log = tmp_path / "launch.log"
+
+        with patch(
+            "sts2_autotest.core.test_agent_runner.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["open"], timeout=15.0),
+        ):
+            with pytest.raises(RuntimeError):
+                from sts2_autotest.core.test_agent_runner import _run_launch_command
+
+                _run_launch_command("Start Steam", ["open", "steam://run/2868840"], launch_log)
+
+        text = launch_log.read_text(encoding="utf-8")
+        assert "Timeout after 15.0s" in text
+        assert "ExitCode: -1" in text
 
     def test_step_game_smoke_waits_until_actionable_before_navigation(self, tmp_path):
         """Health can pass before the main menu is ready; wait for actions first."""

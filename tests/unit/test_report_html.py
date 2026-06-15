@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import base64
+import json
 import shutil
 from pathlib import Path
 
-from sts2_autotest.report_html import build_report_html
+from sts2_autotest.report_html import build_report_html, write_html_report
 
 
 _PNG_1X1 = base64.b64decode(
@@ -265,3 +266,93 @@ def test_build_report_html_with_user_game_screenshot_fixture(tmp_path):
     assert "data:image/png;base64," in html
     assert "OCR 辅助分析：未发现 localization 风险" in html
     assert '<span class="badge badge-pass">通过</span>' in html
+
+
+def test_build_report_html_escapes_user_controlled_text(tmp_path):
+    malicious = '</code></ul></div><script>alert(1)</script>'
+    config = {
+        "test_run_id": malicious,
+        "metadata": {"navigation_path": malicious},
+        "test_cases": [
+            {
+                "id": malicious,
+                "name": malicious,
+                "scenario": malicious,
+                "assertions": [malicious],
+                "actual": malicious,
+                "result": "通过",
+                "steps": [
+                    {
+                        "name": malicious,
+                        "result": "通过",
+                        "detail": malicious,
+                    }
+                ],
+                "card_results": [
+                    {
+                        "card_id": malicious,
+                        "name": malicious,
+                        "result": "通过",
+                        "exp": {malicious: malicious},
+                        "screenshot_before": "",
+                        "screenshot_before_ocr": {
+                            "status": "warning",
+                            "provider": malicious,
+                            "findings": [
+                                {
+                                    "severity": malicious,
+                                    "message": malicious,
+                                    "text": malicious,
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        ],
+        "card_results": [],
+        "_config_dir": str(tmp_path),
+    }
+
+    html = build_report_html(config)
+
+    assert malicious not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+
+
+def test_write_html_report_writes_temp_file_before_replace(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "test-results.json"
+    output_path = tmp_path / "test-report.html"
+    config_path.write_text(
+        json.dumps({"test_run_id": "atomic", "test_cases": [], "card_results": []}),
+        encoding="utf-8",
+    )
+    original_write_text = Path.write_text
+    written_paths: list[Path] = []
+
+    def recording_write_text(
+        self: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        written_paths.append(self)
+        return original_write_text(
+            self,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(Path, "write_text", recording_write_text)
+
+    write_html_report(config_path, output_path)
+
+    assert written_paths
+    assert written_paths[0] != output_path
+    assert output_path.is_file()

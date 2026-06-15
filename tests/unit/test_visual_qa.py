@@ -88,6 +88,19 @@ def test_localization_detector_passes_normal_text() -> None:
     assert findings == []
 
 
+def test_localization_detector_ignores_common_ui_numbers() -> None:
+    detector = LocalizationTextDetector()
+    findings = detector.analyze(
+        [
+            OcrTextBlock(text="HP:45/50"),
+            OcrTextBlock(text="v1.2.3"),
+            OcrTextBlock(text="ability:chain:strike"),
+        ]
+    )
+
+    assert findings == []
+
+
 def test_visual_qa_engine_returns_warning_for_raw_key(tmp_path: Path) -> None:
     image = tmp_path / "gawain-card-before.png"
     image.write_bytes(b"fake png bytes")
