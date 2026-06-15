@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import shutil
+from pathlib import Path
 
 from sts2_autotest.report_html import build_report_html
 
@@ -220,3 +222,46 @@ def test_build_report_html_omits_ocr_block_when_field_missing(tmp_path):
 
     assert "OCR 辅助分析" not in html
     assert "CARD" in html
+
+
+def test_build_report_html_with_user_game_screenshot_fixture(tmp_path):
+    fixture = Path("tests/fixtures/visual_qa/gawain-card-before.png")
+    assert fixture.is_file()
+    screenshots = tmp_path / "screenshots"
+    screenshots.mkdir()
+    target = screenshots / "gawain-card-before.png"
+    shutil.copy2(fixture, target)
+
+    config = {
+        "test_run_id": "fixture-run",
+        "test_cases": [
+            {
+                "id": "Card Smoke Test",
+                "name": "Card Smoke Test",
+                "result": "通过",
+                "steps": [],
+                "card_results": [
+                    {
+                        "card_id": "GAWAINMOD-PORTABLE_MAGIC_TERMINAL",
+                        "name": "便携魔导终端",
+                        "result": "通过",
+                        "exp": {"储能": 1},
+                        "screenshot_before": "screenshots/gawain-card-before.png",
+                        "screenshot_before_ocr": {
+                            "status": "passed",
+                            "provider": "static",
+                            "findings": [],
+                        },
+                    }
+                ],
+            }
+        ],
+        "card_results": [],
+        "_config_dir": str(tmp_path),
+    }
+
+    html = build_report_html(config)
+
+    assert "data:image/png;base64," in html
+    assert "OCR 辅助分析：未发现 localization 风险" in html
+    assert '<span class="badge badge-pass">通过</span>' in html
