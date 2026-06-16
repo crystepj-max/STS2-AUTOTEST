@@ -19,6 +19,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+visual = [
+    "opencv-python-headless>=4.10.0",
+]
 dev = [
     "ruff>=0.1.0",
     "mypy>=1.0",

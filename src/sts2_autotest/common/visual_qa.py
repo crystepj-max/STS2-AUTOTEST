@@ -7,6 +7,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+DEFAULT_LOW_VARIANCE_THRESHOLD = 1.0
+
+
 class OcrTextBlock(BaseModel):
     """A single OCR text block extracted from a screenshot."""
 

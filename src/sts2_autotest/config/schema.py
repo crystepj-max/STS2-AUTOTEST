@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from sts2_autotest.common.visual_qa import DEFAULT_LOW_VARIANCE_THRESHOLD
+
 
 class CliAdapterConfig(BaseModel):
     """STS2-Cli-Mod adapter configuration."""
@@ -83,7 +85,10 @@ class FrameworkConfig(BaseModel):
     visual_qa_timeout_seconds: float = Field(default=10.0, gt=0)
     visual_qa_health_enabled: bool = True
     visual_qa_health_provider: Literal["disabled", "opencv"] = "disabled"
-    visual_qa_low_variance_threshold: float = Field(default=1.0, gt=0)
+    visual_qa_low_variance_threshold: float = Field(
+        default=DEFAULT_LOW_VARIANCE_THRESHOLD,
+        gt=0,
+    )
 
 
 class ExecutionConfig(BaseModel):

@@ -11,6 +11,7 @@ from sts2_autotest.config.schema import (
     FrameworkConfig,
     STS2Config,
 )
+from sts2_autotest.common.visual_qa import DEFAULT_LOW_VARIANCE_THRESHOLD
 
 
 class TestFrameworkConfig:
@@ -33,6 +34,7 @@ class TestFrameworkConfig:
         assert cfg.visual_qa_health_enabled is True
         assert cfg.visual_qa_health_provider == "disabled"
         assert cfg.visual_qa_low_variance_threshold == 1.0
+        assert cfg.visual_qa_low_variance_threshold == DEFAULT_LOW_VARIANCE_THRESHOLD
 
     def test_visual_qa_provider_rejects_unknown_value(self) -> None:
         with pytest.raises(ValidationError):

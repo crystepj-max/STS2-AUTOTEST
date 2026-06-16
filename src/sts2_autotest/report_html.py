@@ -87,10 +87,12 @@ def build_report_html(config: dict[str, Any]) -> str:
                 text = str(finding.get("text", ""))
                 finding_message = str(finding.get("message", ""))
                 meta_parts = []
-                if finding.get("confidence") is not None:
-                    meta_parts.append(f"confidence={finding.get('confidence')}")
-                if finding.get("bbox") is not None:
-                    meta_parts.append(f"bbox={finding.get('bbox')}")
+                confidence = finding.get("confidence")
+                bbox = finding.get("bbox")
+                if confidence is not None:
+                    meta_parts.append(f"confidence={confidence}")
+                if bbox is not None:
+                    meta_parts.append(f"bbox={bbox}")
                 meta_text = f" <span class=\"ocr-meta\">({_h(', '.join(meta_parts))})</span>" if meta_parts else ""
                 rows.append(
                     f"<li>[{_h(severity)}] {_h(finding_message)}: <code>{_h(text)}</code>{meta_text}</li>"

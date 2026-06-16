@@ -8,14 +8,16 @@ import time
 from csv import DictReader
 from io import StringIO
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol, cast
 
 from sts2_autotest.common.visual_qa import (
+    DEFAULT_LOW_VARIANCE_THRESHOLD as _DEFAULT_LOW_VARIANCE_THRESHOLD,
     OcrTextBlock,
     ScreenshotOcrAnalysis,
     VisualQaFinding,
 )
 
+DEFAULT_LOW_VARIANCE_THRESHOLD = _DEFAULT_LOW_VARIANCE_THRESHOLD
 
 _RAW_KEY_PATTERN = re.compile(
     r"\b(?=[A-Za-z0-9_./]*[A-Za-z_][A-Za-z0-9_./]*[./])"
@@ -30,7 +32,7 @@ _MISSING_MARKERS = (
     "missing localization",
 )
 _TOKEN_PATTERN = re.compile(r"(\{[0-9]+\}|\{\{[^}]+\}\}|%s)")
-_LOW_VARIANCE_THRESHOLD = 1.0
+_TESSERACT_TSV_HEADER_PREFIX = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num"
 
 
 class OcrProvider(Protocol):
@@ -105,7 +107,7 @@ class TesseractOcrProvider:
     @staticmethod
     def _parse_tsv(output: str) -> list[OcrTextBlock]:
         blocks: list[OcrTextBlock] = []
-        reader = DictReader(StringIO(output), delimiter="\t")
+        reader = DictReader(StringIO(_tesseract_tsv_payload(output)), delimiter="\t")
         for row in reader:
             text = (row.get("text") or "").strip()
             if not text:
@@ -118,6 +120,14 @@ class TesseractOcrProvider:
                 )
             )
         return blocks
+
+
+def _tesseract_tsv_payload(output: str) -> str:
+    lines = output.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith(_TESSERACT_TSV_HEADER_PREFIX):
+            return "\n".join(lines[index:]) + "\n"
+    return ""
 
 
 def _parse_tesseract_confidence(value: str | None) -> float | None:
@@ -136,10 +146,22 @@ def _parse_tesseract_bbox(row: dict[str, str | None]) -> list[int] | None:
     values: list[int] = []
     for key in ("left", "top", "width", "height"):
         try:
-            values.append(int(row.get(key) or ""))
+            values.append(int(float(row.get(key) or "")))
         except ValueError:
             return None
     return values
+
+
+class Cv2Image(Protocol):
+    def std(self) -> float:
+        ...
+
+
+class Cv2Module(Protocol):
+    IMREAD_GRAYSCALE: int
+
+    def imread(self, path: str, flags: int) -> Cv2Image | None:
+        ...
 
 
 class LocalizationTextDetector:
@@ -198,9 +220,11 @@ class ScreenshotHealthDetector:
     def __init__(
         self,
         *,
-        cv2_module: object | None = "auto",
-        low_variance_threshold: float = _LOW_VARIANCE_THRESHOLD,
+        cv2_module: Cv2Module | Literal["auto"] | None = "auto",
+        low_variance_threshold: float = DEFAULT_LOW_VARIANCE_THRESHOLD,
     ) -> None:
+        if isinstance(cv2_module, str) and cv2_module != "auto":
+            raise ValueError("cv2_module must be 'auto', a cv2-like module, or None")
         self._cv2_module = cv2_module
         self._low_variance_threshold = low_variance_threshold
 
@@ -211,12 +235,12 @@ class ScreenshotHealthDetector:
 
         try:
             image = cv2_module.imread(str(image_path), cv2_module.IMREAD_GRAYSCALE)
+            if image is None:
+                return []
+            variance = float(image.std())
         except Exception:
             return []
-        if image is None:
-            return []
 
-        variance = float(image.std())
         if variance >= self._low_variance_threshold:
             return []
 
@@ -225,20 +249,20 @@ class ScreenshotHealthDetector:
                 rule_id="visual_health.low_variance",
                 severity="warning",
                 message=f"Screenshot has low visual variance ({variance:.3f})",
-                text=str(image_path),
+                text=image_path.name,
                 confidence=None,
                 bbox=None,
             )
         ]
 
-    def _resolve_cv2(self) -> object | None:
+    def _resolve_cv2(self) -> Cv2Module | None:
         if self._cv2_module != "auto":
             return self._cv2_module
         try:
-            import cv2  # type: ignore[import-not-found]
+            import cv2
         except Exception:
             return None
-        return cv2
+        return cast(Cv2Module, cv2)
 
 
 class VisualQaEngine:

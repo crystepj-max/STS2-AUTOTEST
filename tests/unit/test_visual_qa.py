@@ -174,6 +174,7 @@ def test_screenshot_health_detector_flags_low_variance_image(tmp_path: Path) -> 
     assert findings[0].rule_id == "visual_health.low_variance"
     assert findings[0].severity == "warning"
     assert "low visual variance" in findings[0].message
+    assert findings[0].text == image.name
 
 
 def test_visual_qa_engine_skips_health_detector_when_cv2_missing(
@@ -218,6 +219,44 @@ def test_visual_qa_engine_keeps_ocr_when_health_detector_fails(
     assert analysis.extracted_text[0].text == "打击"
 
 
+def test_visual_qa_engine_keeps_ocr_when_health_variance_fails(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "normal.png"
+    image.write_bytes(b"fake png bytes")
+
+    class BrokenImage:
+        def std(self) -> float:
+            raise ValueError("invalid image shape")
+
+    class BrokenCv2:
+        IMREAD_GRAYSCALE = 0
+
+        @staticmethod
+        def imread(path: str, flags: int) -> BrokenImage:
+            return BrokenImage()
+
+    engine = VisualQaEngine(
+        StaticOcrProvider({"normal.png": ["gawain.card.strike.name"]}),
+        health_detector=ScreenshotHealthDetector(cv2_module=BrokenCv2),
+    )
+
+    analysis = engine.analyze_screenshot(image)
+
+    assert analysis.status == "warning"
+    assert analysis.findings[0].rule_id == "localization_text.raw_key"
+    assert analysis.extracted_text[0].text == "gawain.card.strike.name"
+
+
+def test_screenshot_health_detector_rejects_unknown_cv2_sentinel() -> None:
+    try:
+        ScreenshotHealthDetector(cv2_module="disabled")
+    except ValueError as exc:
+        assert "cv2_module" in str(exc)
+    else:
+        raise AssertionError("expected invalid cv2_module to raise")
+
+
 def test_tesseract_provider_extracts_tsv_blocks_with_bbox_and_confidence(
     tmp_path: Path,
 ) -> None:
@@ -259,6 +298,53 @@ def test_tesseract_provider_extracts_tsv_blocks_with_bbox_and_confidence(
         timeout=3.0,
         check=False,
     )
+
+
+def test_tesseract_provider_skips_stdout_lines_before_tsv_header(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+
+    completed = subprocess.CompletedProcess(
+        args=["tesseract"],
+        returncode=0,
+        stdout=(
+            "Warning, could not find file: chi_sim.traineddata\n"
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+            "5\t1\t1\t1\t1\t1\t34\t56\t88\t24\t91.250000\tgawain.card.strike.name\n"
+        ),
+        stderr="",
+    )
+    with patch("sts2_autotest.core.visual_qa.subprocess.run", return_value=completed):
+        blocks = TesseractOcrProvider().extract_text(image)
+
+    assert blocks == [
+        OcrTextBlock(
+            text="gawain.card.strike.name",
+            confidence=0.9125,
+            bbox=[34, 56, 88, 24],
+        )
+    ]
+
+
+def test_tesseract_provider_accepts_decimal_bbox_values(tmp_path: Path) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+
+    completed = subprocess.CompletedProcess(
+        args=["tesseract"],
+        returncode=0,
+        stdout=(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+            "5\t1\t1\t1\t1\t1\t34.0\t56.0\t88.0\t24.0\t91.250000\tLOCALIZE_ME\n"
+        ),
+        stderr="",
+    )
+    with patch("sts2_autotest.core.visual_qa.subprocess.run", return_value=completed):
+        blocks = TesseractOcrProvider().extract_text(image)
+
+    assert blocks[0].bbox == [34, 56, 88, 24]
 
 
 def test_tesseract_provider_ignores_invalid_tsv_metadata(tmp_path: Path) -> None:
