@@ -150,14 +150,23 @@ def test_visual_qa_engine_returns_skipped_for_missing_image(tmp_path: Path) -> N
     assert "screenshot not found" in str(analysis.message)
 
 
-def test_tesseract_provider_extracts_stdout_lines(tmp_path: Path) -> None:
+def test_tesseract_provider_extracts_tsv_blocks_with_bbox_and_confidence(
+    tmp_path: Path,
+) -> None:
     image = tmp_path / "screen.png"
     image.write_bytes(b"png")
 
+    stdout = (
+        "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        "1\t1\t0\t0\t0\t0\t0\t0\t640\t360\t-1\t\n"
+        "5\t1\t1\t1\t1\t1\t34\t56\t88\t24\t91.250000\tgawain.card.strike.name\n"
+        "5\t1\t1\t1\t1\t2\t140\t56\t20\t24\t-1\t\n"
+        "5\t1\t1\t1\t1\t3\t34\t92\t42\t20\t77\t消耗\n"
+    )
     completed = subprocess.CompletedProcess(
         args=["tesseract"],
         returncode=0,
-        stdout="便携魔导终端\n消耗 1 储能\n\n",
+        stdout=stdout,
         stderr="",
     )
     with patch(
@@ -170,14 +179,42 @@ def test_tesseract_provider_extracts_stdout_lines(tmp_path: Path) -> None:
             timeout_seconds=3.0,
         ).extract_text(image)
 
-    assert [block.text for block in blocks] == ["便携魔导终端", "消耗 1 储能"]
+    assert [block.text for block in blocks] == ["gawain.card.strike.name", "消耗"]
+    assert blocks[0].confidence == 0.9125
+    assert blocks[0].bbox == [34, 56, 88, 24]
+    assert blocks[1].confidence == 0.77
+    assert blocks[1].bbox == [34, 92, 42, 20]
     run.assert_called_once_with(
-        ["tesseract", str(image), "stdout", "-l", "chi_sim+eng"],
+        ["tesseract", str(image), "stdout", "-l", "chi_sim+eng", "tsv"],
         capture_output=True,
         text=True,
         timeout=3.0,
         check=False,
     )
+
+
+def test_tesseract_provider_ignores_invalid_tsv_metadata(tmp_path: Path) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+
+    completed = subprocess.CompletedProcess(
+        args=["tesseract"],
+        returncode=0,
+        stdout=(
+            "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+            "5\t1\t1\t1\t1\t1\tbad\t56\t88\t24\tunknown\tLOCALIZE_ME\n"
+        ),
+        stderr="",
+    )
+    with patch(
+        "sts2_autotest.core.visual_qa.subprocess.run",
+        return_value=completed,
+    ):
+        blocks = TesseractOcrProvider().extract_text(image)
+
+    assert blocks == [
+        OcrTextBlock(text="LOCALIZE_ME", confidence=None, bbox=None)
+    ]
 
 
 def test_tesseract_provider_missing_command_becomes_skipped(tmp_path: Path) -> None:

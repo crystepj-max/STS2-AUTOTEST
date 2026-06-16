@@ -105,6 +105,7 @@ def test_build_report_html_renders_ocr_warning_block(tmp_path):
                                     "message": "疑似 localization key 出现在截图文本中",
                                     "text": "gawain.card.strike.name",
                                     "confidence": 0.9,
+                                    "bbox": [34, 56, 88, 24],
                                 }
                             ],
                         },
@@ -121,6 +122,8 @@ def test_build_report_html_renders_ocr_warning_block(tmp_path):
 
     assert "OCR 辅助分析：发现 1 条可疑文案" in html
     assert "gawain.card.strike.name" in html
+    assert "confidence=0.9" in html
+    assert "bbox=[34, 56, 88, 24]" in html
     assert "Provider: static" in html
     assert '<span class="badge badge-pass">通过</span>' in html
 

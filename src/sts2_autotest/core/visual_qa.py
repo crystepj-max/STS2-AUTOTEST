@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import subprocess
 import time
+from csv import DictReader
+from io import StringIO
 from pathlib import Path
 from typing import Protocol
 
@@ -82,7 +84,7 @@ class TesseractOcrProvider:
     def extract_text(self, image_path: Path) -> list[OcrTextBlock]:
         try:
             completed = subprocess.run(
-                [self._command, str(image_path), "stdout", "-l", self._lang],
+                [self._command, str(image_path), "stdout", "-l", self._lang, "tsv"],
                 capture_output=True,
                 text=True,
                 timeout=self._timeout_seconds,
@@ -97,11 +99,46 @@ class TesseractOcrProvider:
         if completed.returncode != 0:
             message = completed.stderr.strip() or f"exit code {completed.returncode}"
             raise RuntimeError(f"tesseract failed: {message}")
-        return [
-            OcrTextBlock(text=line)
-            for line in (line.strip() for line in completed.stdout.splitlines())
-            if line
-        ]
+        return self._parse_tsv(completed.stdout)
+
+    @staticmethod
+    def _parse_tsv(output: str) -> list[OcrTextBlock]:
+        blocks: list[OcrTextBlock] = []
+        reader = DictReader(StringIO(output), delimiter="\t")
+        for row in reader:
+            text = (row.get("text") or "").strip()
+            if not text:
+                continue
+            blocks.append(
+                OcrTextBlock(
+                    text=text,
+                    confidence=_parse_tesseract_confidence(row.get("conf")),
+                    bbox=_parse_tesseract_bbox(row),
+                )
+            )
+        return blocks
+
+
+def _parse_tesseract_confidence(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        confidence = float(value)
+    except ValueError:
+        return None
+    if confidence < 0:
+        return None
+    return round(min(confidence, 100.0) / 100.0, 4)
+
+
+def _parse_tesseract_bbox(row: dict[str, str | None]) -> list[int] | None:
+    values: list[int] = []
+    for key in ("left", "top", "width", "height"):
+        try:
+            values.append(int(row.get(key) or ""))
+        except ValueError:
+            return None
+    return values
 
 
 class LocalizationTextDetector:

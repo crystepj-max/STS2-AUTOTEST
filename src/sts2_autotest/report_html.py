@@ -86,8 +86,14 @@ def build_report_html(config: dict[str, Any]) -> str:
                 severity = str(finding.get("severity", "warning"))
                 text = str(finding.get("text", ""))
                 finding_message = str(finding.get("message", ""))
+                meta_parts = []
+                if finding.get("confidence") is not None:
+                    meta_parts.append(f"confidence={finding.get('confidence')}")
+                if finding.get("bbox") is not None:
+                    meta_parts.append(f"bbox={finding.get('bbox')}")
+                meta_text = f" <span class=\"ocr-meta\">({_h(', '.join(meta_parts))})</span>" if meta_parts else ""
                 rows.append(
-                    f"<li>[{_h(severity)}] {_h(finding_message)}: <code>{_h(text)}</code></li>"
+                    f"<li>[{_h(severity)}] {_h(finding_message)}: <code>{_h(text)}</code>{meta_text}</li>"
                 )
             joined = "".join(rows)
             body = f"OCR 辅助分析：发现 {len(rows)} 条可疑文案<ul>{joined}</ul>"
@@ -221,6 +227,7 @@ pre.log{{background:#050510;color:#6ee;padding:8px;border-radius:4px;font-size:1
 .ocr-box{{margin-top:6px;padding:8px;border-radius:4px;background:#111827;border:1px solid #374151;font-size:12px;color:#cbd5e1}}
 .ocr-box ul{{margin:6px 0 0 18px}}
 .ocr-box code{{color:#facc15;font-family:"SF Mono",Menlo,monospace}}
+.ocr-meta{{color:#64748b;font-size:11px}}
 .ocr-provider{{margin-top:4px;color:#64748b;font-size:11px}}
 </style>
 </head><body>

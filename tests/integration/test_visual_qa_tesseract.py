@@ -22,3 +22,9 @@ def test_tesseract_provider_reads_game_screenshot_fixture() -> None:
     assert analysis.provider == "tesseract"
     assert analysis.status in {"passed", "warning"}
     assert analysis.extracted_text
+    assert any(block.bbox is not None for block in analysis.extracted_text)
+    assert any(
+        block.confidence is not None and block.confidence >= 0.9
+        for block in analysis.extracted_text
+    )
+    assert any("消耗" in block.text for block in analysis.extracted_text)
