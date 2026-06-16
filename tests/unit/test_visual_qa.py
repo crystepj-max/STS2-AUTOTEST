@@ -14,6 +14,7 @@ from sts2_autotest.common.visual_qa import (
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
     LocalizationTextDetector,
+    ScreenshotHealthDetector,
     StaticOcrProvider,
     TesseractOcrProvider,
     VisualQaEngine,
@@ -148,6 +149,73 @@ def test_visual_qa_engine_returns_skipped_for_missing_image(tmp_path: Path) -> N
     assert analysis.status == "skipped"
     assert analysis.provider == "static"
     assert "screenshot not found" in str(analysis.message)
+
+
+def test_screenshot_health_detector_flags_low_variance_image(tmp_path: Path) -> None:
+    image = tmp_path / "black.png"
+    image.write_bytes(b"png")
+
+    class FakeImage:
+        def std(self) -> float:
+            return 0.2
+
+    class FakeCv2:
+        IMREAD_GRAYSCALE = 0
+
+        @staticmethod
+        def imread(path: str, flags: int) -> FakeImage:
+            return FakeImage()
+
+    detector = ScreenshotHealthDetector(cv2_module=FakeCv2)
+
+    findings = detector.analyze(image)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "visual_health.low_variance"
+    assert findings[0].severity == "warning"
+    assert "low visual variance" in findings[0].message
+
+
+def test_visual_qa_engine_skips_health_detector_when_cv2_missing(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "normal.png"
+    image.write_bytes(b"fake png bytes")
+    engine = VisualQaEngine(
+        StaticOcrProvider({"normal.png": ["打击"]}),
+        health_detector=ScreenshotHealthDetector(cv2_module=None),
+    )
+
+    analysis = engine.analyze_screenshot(image)
+
+    assert analysis.status == "passed"
+    assert analysis.findings == []
+    assert analysis.extracted_text[0].text == "打击"
+
+
+def test_visual_qa_engine_keeps_ocr_when_health_detector_fails(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "normal.png"
+    image.write_bytes(b"fake png bytes")
+
+    class BrokenCv2:
+        IMREAD_GRAYSCALE = 0
+
+        @staticmethod
+        def imread(path: str, flags: int) -> object:
+            raise RuntimeError("cv2 failed")
+
+    engine = VisualQaEngine(
+        StaticOcrProvider({"normal.png": ["打击"]}),
+        health_detector=ScreenshotHealthDetector(cv2_module=BrokenCv2),
+    )
+
+    analysis = engine.analyze_screenshot(image)
+
+    assert analysis.status == "passed"
+    assert analysis.findings == []
+    assert analysis.extracted_text[0].text == "打击"
 
 
 def test_tesseract_provider_extracts_tsv_blocks_with_bbox_and_confidence(

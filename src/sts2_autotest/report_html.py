@@ -77,7 +77,7 @@ def build_report_html(config: dict[str, Any]) -> str:
             findings = []
 
         if status == "passed":
-            body = "OCR 辅助分析：未发现 localization 风险"
+            body = "视觉辅助分析：未发现风险"
         elif status == "warning":
             rows = []
             for finding in findings:
@@ -96,10 +96,10 @@ def build_report_html(config: dict[str, Any]) -> str:
                     f"<li>[{_h(severity)}] {_h(finding_message)}: <code>{_h(text)}</code>{meta_text}</li>"
                 )
             joined = "".join(rows)
-            body = f"OCR 辅助分析：发现 {len(rows)} 条可疑文案<ul>{joined}</ul>"
+            body = f"视觉辅助分析：发现 {len(rows)} 条可疑项<ul>{joined}</ul>"
         else:
             suffix = f" - {_h(message)}" if message else ""
-            body = f"OCR 辅助分析：未执行{suffix}"
+            body = f"视觉辅助分析：未执行{suffix}"
 
         return (
             '<div class="ocr-box">'

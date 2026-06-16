@@ -120,7 +120,7 @@ def test_build_report_html_renders_ocr_warning_block(tmp_path):
 
     html = build_report_html(config)
 
-    assert "OCR 辅助分析：发现 1 条可疑文案" in html
+    assert "视觉辅助分析：发现 1 条可疑项" in html
     assert "gawain.card.strike.name" in html
     assert "confidence=0.9" in html
     assert "bbox=[34, 56, 88, 24]" in html
@@ -163,7 +163,7 @@ def test_build_report_html_renders_ocr_passed_block(tmp_path):
 
     html = build_report_html(config)
 
-    assert "OCR 辅助分析：未发现 localization 风险" in html
+    assert "视觉辅助分析：未发现风险" in html
 
 
 def test_build_report_html_renders_ocr_skipped_block(tmp_path):
@@ -196,7 +196,7 @@ def test_build_report_html_renders_ocr_skipped_block(tmp_path):
 
     html = build_report_html(config)
 
-    assert "OCR 辅助分析：未执行 - RuntimeError: OCR provider is disabled" in html
+    assert "视觉辅助分析：未执行 - RuntimeError: OCR provider is disabled" in html
 
 
 def test_build_report_html_omits_ocr_block_when_field_missing(tmp_path):
@@ -224,7 +224,7 @@ def test_build_report_html_omits_ocr_block_when_field_missing(tmp_path):
 
     html = build_report_html(config)
 
-    assert "OCR 辅助分析" not in html
+    assert "视觉辅助分析" not in html
     assert "CARD" in html
 
 
@@ -267,7 +267,7 @@ def test_build_report_html_with_user_game_screenshot_fixture(tmp_path):
     html = build_report_html(config)
 
     assert "data:image/png;base64," in html
-    assert "OCR 辅助分析：未发现 localization 风险" in html
+    assert "视觉辅助分析：未发现风险" in html
     assert '<span class="badge badge-pass">通过</span>' in html
 
 

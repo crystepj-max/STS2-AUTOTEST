@@ -30,6 +30,7 @@ _MISSING_MARKERS = (
     "missing localization",
 )
 _TOKEN_PATTERN = re.compile(r"(\{[0-9]+\}|\{\{[^}]+\}\}|%s)")
+_LOW_VARIANCE_THRESHOLD = 1.0
 
 
 class OcrProvider(Protocol):
@@ -191,6 +192,55 @@ class LocalizationTextDetector:
         return findings
 
 
+class ScreenshotHealthDetector:
+    """Detect screenshot-level health issues without affecting test results."""
+
+    def __init__(
+        self,
+        *,
+        cv2_module: object | None = "auto",
+        low_variance_threshold: float = _LOW_VARIANCE_THRESHOLD,
+    ) -> None:
+        self._cv2_module = cv2_module
+        self._low_variance_threshold = low_variance_threshold
+
+    def analyze(self, image_path: Path) -> list[VisualQaFinding]:
+        cv2_module = self._resolve_cv2()
+        if cv2_module is None:
+            return []
+
+        try:
+            image = cv2_module.imread(str(image_path), cv2_module.IMREAD_GRAYSCALE)
+        except Exception:
+            return []
+        if image is None:
+            return []
+
+        variance = float(image.std())
+        if variance >= self._low_variance_threshold:
+            return []
+
+        return [
+            VisualQaFinding(
+                rule_id="visual_health.low_variance",
+                severity="warning",
+                message=f"Screenshot has low visual variance ({variance:.3f})",
+                text=str(image_path),
+                confidence=None,
+                bbox=None,
+            )
+        ]
+
+    def _resolve_cv2(self) -> object | None:
+        if self._cv2_module != "auto":
+            return self._cv2_module
+        try:
+            import cv2  # type: ignore[import-not-found]
+        except Exception:
+            return None
+        return cv2
+
+
 class VisualQaEngine:
     """Run OCR and localization detectors for one screenshot."""
 
@@ -198,9 +248,11 @@ class VisualQaEngine:
         self,
         provider: OcrProvider | None = None,
         detector: LocalizationTextDetector | None = None,
+        health_detector: ScreenshotHealthDetector | None = None,
     ) -> None:
         self._provider = provider or DisabledOcrProvider()
         self._detector = detector or LocalizationTextDetector()
+        self._health_detector = health_detector or ScreenshotHealthDetector()
 
     def analyze_screenshot(self, image_path: Path) -> ScreenshotOcrAnalysis:
         started = time.perf_counter()
@@ -216,7 +268,10 @@ class VisualQaEngine:
 
         try:
             blocks = self._provider.extract_text(image_path)
-            findings = self._detector.analyze(blocks)
+            findings = (
+                self._health_detector.analyze(image_path)
+                + self._detector.analyze(blocks)
+            )
         except Exception as exc:
             return ScreenshotOcrAnalysis(
                 status="skipped",
