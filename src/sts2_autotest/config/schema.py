@@ -81,6 +81,9 @@ class FrameworkConfig(BaseModel):
     visual_qa_tesseract_cmd: str = "tesseract"
     visual_qa_tesseract_lang: str = "chi_sim+eng"
     visual_qa_timeout_seconds: float = Field(default=10.0, gt=0)
+    visual_qa_health_enabled: bool = True
+    visual_qa_health_provider: Literal["disabled", "opencv"] = "disabled"
+    visual_qa_low_variance_threshold: float = Field(default=1.0, gt=0)
 
 
 class ExecutionConfig(BaseModel):

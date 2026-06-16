@@ -10,7 +10,6 @@ from sts2_autotest.config.schema import (
     ExecutionConfig,
     FrameworkConfig,
     STS2Config,
-    StateMachineConfig,
 )
 
 
@@ -31,10 +30,21 @@ class TestFrameworkConfig:
         assert cfg.visual_qa_tesseract_cmd == "tesseract"
         assert cfg.visual_qa_tesseract_lang == "chi_sim+eng"
         assert cfg.visual_qa_timeout_seconds == 10.0
+        assert cfg.visual_qa_health_enabled is True
+        assert cfg.visual_qa_health_provider == "disabled"
+        assert cfg.visual_qa_low_variance_threshold == 1.0
 
     def test_visual_qa_provider_rejects_unknown_value(self) -> None:
         with pytest.raises(ValidationError):
             FrameworkConfig(visual_qa_ocr_provider="easyocr")
+
+    def test_visual_qa_health_provider_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_health_provider="pil")
+
+    def test_visual_qa_low_variance_threshold_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_low_variance_threshold=0)
 
     def test_valid_log_levels(self) -> None:
         for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):

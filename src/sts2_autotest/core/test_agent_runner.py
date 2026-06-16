@@ -29,6 +29,7 @@ from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
 from sts2_autotest.core.steam import SteamController
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
+    ScreenshotHealthDetector,
     TesseractOcrProvider,
     VisualQaEngine,
 )
@@ -1671,7 +1672,18 @@ class TestAgentRunner:
         else:
             provider = DisabledOcrProvider()
 
-        engine = VisualQaEngine(provider)
+        health_enabled = getattr(framework_config, "visual_qa_health_enabled", True)
+        health_provider = getattr(framework_config, "visual_qa_health_provider", "disabled")
+        health_detector = ScreenshotHealthDetector(
+            cv2_module="auto" if health_enabled and health_provider == "opencv" else None,
+            low_variance_threshold=getattr(
+                framework_config,
+                "visual_qa_low_variance_threshold",
+                1.0,
+            ),
+        )
+
+        engine = VisualQaEngine(provider, health_detector=health_detector)
         self._visual_qa_engine = engine
         return engine
 

@@ -9,6 +9,7 @@ from sts2_autotest.config.schema import FrameworkConfig
 from sts2_autotest.core.test_agent_runner import TestAgentRunner
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
+    ScreenshotHealthDetector,
     StaticOcrProvider,
     TesseractOcrProvider,
     VisualQaEngine,
@@ -109,3 +110,31 @@ def test_get_visual_qa_engine_uses_tesseract_provider_from_config(
     engine = runner._get_visual_qa_engine()
 
     assert isinstance(engine._provider, TesseractOcrProvider)
+
+
+def test_get_visual_qa_engine_configures_health_detector(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path)
+    runner._framework_config = FrameworkConfig(
+        visual_qa_health_enabled=True,
+        visual_qa_health_provider="opencv",
+        visual_qa_low_variance_threshold=2.5,
+    )
+
+    engine = runner._get_visual_qa_engine()
+
+    assert isinstance(engine._health_detector, ScreenshotHealthDetector)
+    assert engine._health_detector._cv2_module == "auto"
+    assert engine._health_detector._low_variance_threshold == 2.5
+
+
+def test_get_visual_qa_engine_can_disable_health_detector(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path)
+    runner._framework_config = FrameworkConfig(
+        visual_qa_health_enabled=False,
+        visual_qa_health_provider="opencv",
+    )
+
+    engine = runner._get_visual_qa_engine()
+
+    assert isinstance(engine._health_detector, ScreenshotHealthDetector)
+    assert engine._health_detector._cv2_module is None
