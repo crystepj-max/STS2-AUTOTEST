@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -19,6 +18,13 @@ from typing import Any, Callable, Literal, Sequence, cast
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
 from sts2_autotest.cli import mcp_server
+from sts2_autotest.core.visual_qa import (
+    DisabledOcrProvider,
+    ScreenshotHealthDetector,
+    TesseractOcrProvider,
+    VisualQaEngine,
+    build_visual_qa_payload,
+)
 from sts2_autotest.report_html import write_html_report
 
 
@@ -132,6 +138,44 @@ def _create_parser() -> Any:
     gen_report_parser.add_argument("--config", help="Path to test-results JSON config file")
     gen_report_parser.add_argument("--output", help="Output HTML path (default: auto-detect)")
     gen_report_parser.set_defaults(func=gen_report_cmd)
+
+    visual_qa_parser = sub.add_parser("visual-qa", help="Analyze one screenshot and print structured Visual QA JSON")
+    visual_qa_parser.add_argument("--image", required=True, help="Path to screenshot image")
+    visual_qa_parser.add_argument(
+        "--ocr-provider",
+        choices=["disabled", "tesseract"],
+        default="disabled",
+        help="OCR provider",
+    )
+    visual_qa_parser.add_argument(
+        "--health-provider",
+        choices=["disabled", "opencv"],
+        default="disabled",
+        help="Screenshot health provider",
+    )
+    visual_qa_parser.add_argument(
+        "--tesseract-cmd",
+        default="tesseract",
+        help="Tesseract command path",
+    )
+    visual_qa_parser.add_argument(
+        "--lang",
+        default="chi_sim+eng",
+        help="Tesseract language pack string",
+    )
+    visual_qa_parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=10.0,
+        help="OCR timeout in seconds",
+    )
+    visual_qa_parser.add_argument(
+        "--low-variance-threshold",
+        type=float,
+        default=1.0,
+        help="Low variance threshold for OpenCV health checks",
+    )
+    visual_qa_parser.set_defaults(func=visual_qa_cmd)
 
     return p
 
@@ -450,7 +494,6 @@ def _ensure_output_dir_writable(output_dir: str) -> None:
 
 def review_cmd(args: Any) -> int:
     """Review natural language test specs and print report."""
-    from sts2_autotest.core.workspace import Workspace
     from sts2_autotest.core.markdown_parser import MarkdownParser
     from sts2_autotest.core.spec_reviewer import SpecReviewer
 
@@ -892,7 +935,7 @@ def _check_env() -> dict[str, dict[str, str]]:
         checks["python"] = {"status": "FAIL", "message": f"need >=3.11, got {pv}"}
 
     # Steam installed — check default paths + libraryfolders.vdf
-    from sts2_autotest.adapters.discovery import steam_roots, find_game_dir
+    from sts2_autotest.adapters.discovery import steam_roots
     roots = steam_roots()
     steam_exe = next(
         (r / "steam.exe" for r in roots if (r / "steam.exe").exists()),
@@ -1179,6 +1222,39 @@ def gen_report_cmd(args: Any) -> int:
         print(f"[autotest] Report generation failed: {exc}")
         return 1
 
+
+def _build_visual_qa_engine(args: Any) -> VisualQaEngine:
+    if args.ocr_provider == "tesseract":
+        provider = TesseractOcrProvider(
+            command=args.tesseract_cmd,
+            lang=args.lang,
+            timeout_seconds=args.timeout_seconds,
+        )
+    else:
+        provider = DisabledOcrProvider()
+
+    health_detector = ScreenshotHealthDetector(
+        cv2_module="auto" if args.health_provider == "opencv" else None,
+        low_variance_threshold=args.low_variance_threshold,
+    )
+    return VisualQaEngine(provider, health_detector=health_detector)
+
+
+def visual_qa_cmd(args: Any) -> int:
+    image_path = Path(args.image)
+    if not image_path.is_file():
+        print(f"[autotest] Image file not found: {image_path}")
+        return 1
+
+    engine = _build_visual_qa_engine(args)
+    analysis = engine.analyze_screenshot(image_path)
+    payload = build_visual_qa_payload(
+        test_run_id=image_path.name,
+        analyses_by_path={str(image_path): analysis},
+    )
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0
+
 def cli(argv: Sequence[str] | None = None) -> None:
     """Main CLI entry point. Used by pyproject.toml [project.scripts]."""
     # Ensure UTF-8 output in Windows terminal (fix GBK encoding issues)
@@ -1208,6 +1284,8 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(serve_cmd(args))
     elif args.command == "gen-report":
         sys.exit(gen_report_cmd(args))
+    elif args.command == "visual-qa":
+        sys.exit(visual_qa_cmd(args))
     elif args.command == "serve-mcp":
         sys.exit(serve_mcp_cmd(args))
     else:

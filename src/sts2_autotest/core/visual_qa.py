@@ -8,7 +8,7 @@ import time
 from csv import DictReader
 from io import StringIO
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 from sts2_autotest.common.visual_qa import (
     DEFAULT_LOW_VARIANCE_THRESHOLD as _DEFAULT_LOW_VARIANCE_THRESHOLD,
@@ -315,3 +315,81 @@ class VisualQaEngine:
     @staticmethod
     def _elapsed_ms(started: float) -> float:
         return round((time.perf_counter() - started) * 1000, 3)
+
+
+def build_visual_qa_payload(
+    *,
+    test_run_id: str,
+    analyses_by_path: dict[str, ScreenshotOcrAnalysis | dict[str, Any]],
+) -> dict[str, Any]:
+    screenshots: dict[str, Any] = {}
+    summary: dict[str, Any] = {
+        "total": 0,
+        "passed": 0,
+        "warning": 0,
+        "skipped": 0,
+        "findings_total": 0,
+        "screenshots_with_findings": 0,
+        "providers": {},
+        "status_by_provider": {},
+        "findings": {},
+        "findings_by_severity": {},
+    }
+
+    for screenshot_path in sorted(analyses_by_path):
+        payload = _analysis_payload(analyses_by_path[screenshot_path])
+        if payload is None:
+            continue
+
+        screenshots[screenshot_path] = payload
+        summary["total"] += 1
+
+        status = str(payload.get("status", "skipped"))
+        if status in ("passed", "warning", "skipped"):
+            summary[status] += 1
+
+        provider = str(payload.get("provider", "unknown"))
+        providers = cast(dict[str, int], summary["providers"])
+        providers[provider] = int(providers.get(provider, 0)) + 1
+
+        status_by_provider = cast(dict[str, dict[str, int]], summary["status_by_provider"])
+        provider_status = status_by_provider.setdefault(
+            provider,
+            {"passed": 0, "warning": 0, "skipped": 0},
+        )
+        if status in provider_status:
+            provider_status[status] += 1
+
+        findings = payload.get("findings", [])
+        if not isinstance(findings, list):
+            continue
+        if findings:
+            summary["screenshots_with_findings"] += 1
+
+        summary["findings_total"] += len(findings)
+        rule_counts = cast(dict[str, int], summary["findings"])
+        severity_counts = cast(dict[str, int], summary["findings_by_severity"])
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            rule_id = str(finding.get("rule_id", "unknown"))
+            rule_counts[rule_id] = int(rule_counts.get(rule_id, 0)) + 1
+
+            severity = str(finding.get("severity", "warning"))
+            severity_counts[severity] = int(severity_counts.get(severity, 0)) + 1
+
+    return {
+        "test_run_id": test_run_id,
+        "summary": summary,
+        "screenshots": screenshots,
+    }
+
+
+def _analysis_payload(
+    analysis: ScreenshotOcrAnalysis | dict[str, Any],
+) -> dict[str, Any] | None:
+    if isinstance(analysis, ScreenshotOcrAnalysis):
+        return analysis.model_dump(mode="json")
+    if isinstance(analysis, dict):
+        return analysis
+    return None

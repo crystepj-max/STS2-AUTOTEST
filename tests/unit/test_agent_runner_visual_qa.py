@@ -122,8 +122,14 @@ def test_build_visual_qa_report_payload_summarizes_cached_analysis(
         "passed": 1,
         "warning": 1,
         "skipped": 0,
+        "findings_total": 1,
+        "screenshots_with_findings": 1,
         "providers": {"tesseract": 2},
+        "status_by_provider": {
+            "tesseract": {"passed": 1, "warning": 1, "skipped": 0},
+        },
         "findings": {"localization_text.raw_key": 1},
+        "findings_by_severity": {"warning": 1},
     }
     assert payload["screenshots"]["screenshots/card-before.png"]["status"] == "warning"
     assert (

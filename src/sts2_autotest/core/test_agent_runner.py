@@ -32,6 +32,7 @@ from sts2_autotest.core.visual_qa import (
     ScreenshotHealthDetector,
     TesseractOcrProvider,
     VisualQaEngine,
+    build_visual_qa_payload,
 )
 from sts2_autotest.report_html import write_html_report
 
@@ -1735,47 +1736,11 @@ class TestAgentRunner:
 
     def _build_visual_qa_report_payload(self) -> dict[str, Any]:
         self._analyze_html_report_screenshots()
-        screenshots: dict[str, Any] = {}
-        summary: dict[str, Any] = {
-            "total": 0,
-            "passed": 0,
-            "warning": 0,
-            "skipped": 0,
-            "providers": {},
-            "findings": {},
-        }
-
         analysis_by_path = getattr(self, "_screenshot_ocr", {}) or {}
-        for screenshot_path in sorted(analysis_by_path):
-            payload = self._get_screenshot_ocr_payload(screenshot_path)
-            if payload is None:
-                continue
-
-            screenshots[screenshot_path] = payload
-            summary["total"] += 1
-
-            status = str(payload.get("status", "skipped"))
-            if status in ("passed", "warning", "skipped"):
-                summary[status] += 1
-
-            provider = str(payload.get("provider", "unknown"))
-            providers = summary["providers"]
-            providers[provider] = int(providers.get(provider, 0)) + 1
-
-            findings = payload.get("findings", [])
-            if isinstance(findings, list):
-                rule_counts = summary["findings"]
-                for finding in findings:
-                    if not isinstance(finding, dict):
-                        continue
-                    rule_id = str(finding.get("rule_id", "unknown"))
-                    rule_counts[rule_id] = int(rule_counts.get(rule_id, 0)) + 1
-
-        return {
-            "test_run_id": self._task_id,
-            "summary": summary,
-            "screenshots": screenshots,
-        }
+        return build_visual_qa_payload(
+            test_run_id=self._task_id,
+            analyses_by_path=analysis_by_path,
+        )
 
     def _write_json_artifact(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

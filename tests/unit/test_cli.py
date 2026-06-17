@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pytest
 
 from sts2_autotest.cli.main import (
-    DEFAULT_EVIDENCE_DIR,
     _check_env,
     _create_adapter,
     _create_parser,
@@ -16,6 +15,7 @@ from sts2_autotest.cli.main import (
     queue_cmd,
     report_cmd,
     run_cmd,
+    visual_qa_cmd,
 )
 
 
@@ -74,6 +74,15 @@ class TestCLIParser:
     def test_progress_command_parses(self) -> None:
         args = _create_parser().parse_args(["progress"])
         assert args.command == "progress"
+
+    def test_visual_qa_command_parses(self) -> None:
+        args = _create_parser().parse_args(
+            ["visual-qa", "--image", "/tmp/example.png", "--ocr-provider", "tesseract"]
+        )
+        assert args.command == "visual-qa"
+        assert args.image == "/tmp/example.png"
+        assert args.ocr_provider == "tesseract"
+        assert args.health_provider == "disabled"
 
 
 class TestCLICommands:
@@ -197,6 +206,48 @@ class TestCLICommands:
 
         args = _create_parser().parse_args(["progress"])
         assert progress_cmd(args) == 1
+
+    def test_visual_qa_cmd_outputs_json_for_single_image(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        image = tmp_path / "single.png"
+        image.write_bytes(b"png")
+        args = _create_parser().parse_args(["visual-qa", "--image", str(image)])
+
+        class FakeEngine:
+            def analyze_screenshot(self, image_path: Path) -> object:
+                from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
+
+                assert image_path == image
+                return ScreenshotOcrAnalysis(status="passed", provider="disabled")
+
+        with patch("sts2_autotest.cli.main._build_visual_qa_engine", return_value=FakeEngine()):
+            result = visual_qa_cmd(args)
+
+        assert result == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["summary"] == {
+            "total": 1,
+            "passed": 1,
+            "warning": 0,
+            "skipped": 0,
+            "findings_total": 0,
+            "screenshots_with_findings": 0,
+            "providers": {"disabled": 1},
+            "status_by_provider": {
+                "disabled": {"passed": 1, "warning": 0, "skipped": 0},
+            },
+            "findings": {},
+            "findings_by_severity": {},
+        }
+        assert payload["screenshots"][str(image)]["status"] == "passed"
+
+    def test_visual_qa_cmd_returns_one_when_image_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        image = tmp_path / "missing.png"
+        args = _create_parser().parse_args(["visual-qa", "--image", str(image)])
+
+        result = visual_qa_cmd(args)
+
+        assert result == 1
+        assert "Image file not found" in capsys.readouterr().out
 
 
 class TestCreateAdapter:
