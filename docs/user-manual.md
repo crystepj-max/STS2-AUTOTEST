@@ -289,6 +289,38 @@ autotest report
 
 如果找不到对应运行，命令会列出 evidence 目录下可用的运行目录。
 
+### 6.4 `autotest serve` / `serve-mcp`（B17 / B11）
+
+`autotest serve` 启动健康检查 HTTP 端点（默认 `127.0.0.1:8766`），提供 `/health`、`/health/live`、`/health/ready`，供监控或 CI 探活：
+
+```powershell
+autotest serve --host 0.0.0.0 --port 8766
+```
+
+`autotest serve-mcp` 启动 MCP 测试服务（默认 `127.0.0.1:8090`），供 Agent / 编排器以 MCP 协议调用测试能力：
+
+```powershell
+autotest serve-mcp --port 8090
+```
+
+### 6.5 `autotest agent-test`
+
+一键执行完整 Test Agent 工作流（构建 → 本地化检查 → 部署 → 启动游戏 → 冒烟 → 报告），用于对某个 MOD 项目做端到端验证：
+
+```powershell
+autotest agent-test --mod-project <MOD 目录> --task-id <任务标识> --infra-path <sts2-dev-infra 目录>
+```
+
+也可通过 `--test-plan <YAML>` 从测试计划文件读取参数。常用开关：`--skip-deploy`（跳过部署）、`--skip-launch-game`（跳过启动游戏）、`--skip-game-smoke`（跳过游戏内冒烟）。退出码：`0=PASSED`、`1=FAILED`、`2=BLOCKED`。
+
+### 6.6 `autotest gen-report`
+
+将测试运行结果生成 HTML 报告：
+
+```powershell
+autotest gen-report
+```
+
 ## 7. 进度保存与恢复
 
 框架默认会在每个 case 完成后写入：

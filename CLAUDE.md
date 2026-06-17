@@ -92,7 +92,10 @@ src/sts2_autotest/
 │   ├── lock_manager.py    # 进程级互斥锁
 │   ├── workspace.py       # 多 MOD 项目工作空间管理
 │   ├── evidence_hooks.py  # EvidenceHooks Protocol + Stub/Real 实现
-│   └── logs.py            # 日志收集
+│   ├── repair_advisor.py  # B10 修复建议：crash 证据 → 结构化修复建议（L1 规则 + L2 栈解析 + L3 异常分析）
+│   ├── notifier.py        # B13 桌面通知：Windows（ctypes）/ macOS（osascript）平台通知后端
+│   ├── case_registry.py   # 测试用例注册表（用例/套件登记与查找）
+│   └── test_agent_runner.py # 跨平台 Test Agent 工作流（build → 本地化检查 → 部署 → 冒烟 → 报告）
 ├── evidence/        # 证据与可观测性层
 │   ├── capture.py   # 截图采集（mss）+ RGB 纯色校验
 │   ├── logs.py      # 游戏日志收集
@@ -112,8 +115,13 @@ src/sts2_autotest/
 │   ├── schema.py    # STS2Config（四层继承：默认 → YAML → 环境变量 → CLI 参数）+ 互斥校验
 │   ├── loader.py    # 配置加载器（YAML + dotenv）
 │   └── errors.py    # ConfigValidationError
-└── cli/             # CLI 入口层
-    └── main.py      # autotest run/doctor/report/review/compile/queue/progress 七个子命令
+├── cli/             # CLI 入口层
+│   ├── main.py          # autotest run/review/compile/doctor/report/queue/progress/agent-test/serve/serve-mcp/gen-report 十一个子命令
+│   ├── health_server.py # B17 健康检查 HTTP 端点（stdlib asyncio：/health、/health/live、/health/ready）
+│   ├── mcp_server.py     # B11 MCP 测试服务（serve-mcp）
+│   ├── mcp_protocol.py   # MCP 协议处理
+│   └── mcp_tools.py      # MCP 工具定义
+└── report_html.py   # HTML 测试报告生成（gen-report 命令）
 ```
 
 ## 当前实现状态
@@ -129,8 +137,13 @@ src/sts2_autotest/
 - **B7 AgentAdapter**：HTTP + MCP 双传输、版本握手
 - **B19 集成测试**：分层 CLI-only + requires_game 测试
 - **Epic10 技术债**：hooks 泄漏修复、缓存竞态修复、start_session 补齐检查点
+- **B10 修复建议**：`repair_advisor.py`，crash 证据 → 结构化修复建议（L1 规则引擎 + L2 栈解析 + L3 异常分析），集成进 EvidencePackager
+- **B11 CI/CD**：GitHub Actions 工作流（pr / push-to-main / game-integration / nightly 四套）+ JUnit XML + `serve-mcp` MCP 测试服务 + 自托管 Mac Runner 脚本
+- **B13 桌面通知**：`notifier.py`，Windows / macOS 运行完成通知
+- **B17 Health Check HTTP**：`cli/health_server.py`，纯 stdlib asyncio，提供 `/health`、`/health/live`、`/health/ready`
+- **HTML 报告 + 观测性**：`report_html.py`（`gen-report` 生成 HTML 报告）、证据包记录 autotest 版本、平台兼容性阻断在报告中可见
 
-**测试覆盖：** 1067 个单元测试、24 个集成测试、端到端冒烟测试。共 ~10,500 行源代码。
+**测试覆盖：** ~1,279 个单元测试、~27 个集成测试、端到端冒烟测试。共 ~15,600 行源代码。
 
 **待实现（Beta 后续）：**
 
@@ -138,18 +151,14 @@ src/sts2_autotest/
 |--------|------|------|
 | P1 | 真实环境验收补跑 | B25 端到端 + Epic5 4h 长跑 |
 | P2 | B15 安全沙箱（Windows Job Objects + ACL） | Story 4.8 推迟 |
-| P2 | B17 Health Check HTTP 端点 | 扩展 doctor 为 HTTP 服务 |
-| P3 | B11 CI/CD（GitHub Actions / 自托管 Runner） | PR 注释 + JUnit XML |
-| P3 | B10 Level 2 修复建议（crash pack → patch.diff） | |
-| P3 | B13 桌面通知 | 运行完成后通知 |
-| P4 | B8 Visual QA Engine（OCR + OpenCV + VLM） | 视觉审查 |
+| P4 | B8 Visual QA Engine（OCR + OpenCV + VLM） | 视觉审查（设计稿已就绪） |
 | P4 | B9 多人冒烟测试 | 双 Runner 编排 |
 | P5 | B6 覆盖率报告 | 按游戏场景维度 |
 
 **权威路线图：** `docs/beta-roadmap.md`
-**架构文档：** `_bmad-output/planning-artifacts/architecture.md`
-**PRD：** `_bmad-output/planning-artifacts/prd.md`
-**实现计划：** `_bmad-output/planning-artifacts/epics.md`
+**用户手册：** `docs/user-manual.md`
+**Beta Epics/Story：** `_bmad-output/planning-artifacts/beta-epics.md`
+**Sprint 状态：** `_bmad-output/implementation-artifacts/sprint-status.yaml`
 
 ## 核心设计决策
 
