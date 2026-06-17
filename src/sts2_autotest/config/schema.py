@@ -89,6 +89,7 @@ class FrameworkConfig(BaseModel):
         default=DEFAULT_LOW_VARIANCE_THRESHOLD,
         gt=0,
     )
+    visual_qa_low_brightness_threshold: float = Field(default=5.0, gt=0)
 
 
 class ExecutionConfig(BaseModel):

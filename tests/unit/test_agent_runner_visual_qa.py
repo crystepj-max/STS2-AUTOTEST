@@ -203,6 +203,7 @@ def test_get_visual_qa_engine_configures_health_detector(tmp_path: Path) -> None
         visual_qa_health_enabled=True,
         visual_qa_health_provider="opencv",
         visual_qa_low_variance_threshold=2.5,
+        visual_qa_low_brightness_threshold=6.0,
     )
 
     engine = runner._get_visual_qa_engine()
@@ -210,6 +211,7 @@ def test_get_visual_qa_engine_configures_health_detector(tmp_path: Path) -> None
     assert isinstance(engine._health_detector, ScreenshotHealthDetector)
     assert engine._health_detector._cv2_module == "auto"
     assert engine._health_detector._low_variance_threshold == 2.5
+    assert engine._health_detector._low_brightness_threshold == 6.0
 
 
 def test_get_visual_qa_engine_can_disable_health_detector(tmp_path: Path) -> None:

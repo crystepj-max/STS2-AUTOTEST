@@ -35,6 +35,7 @@ class TestFrameworkConfig:
         assert cfg.visual_qa_health_provider == "disabled"
         assert cfg.visual_qa_low_variance_threshold == 1.0
         assert cfg.visual_qa_low_variance_threshold == DEFAULT_LOW_VARIANCE_THRESHOLD
+        assert cfg.visual_qa_low_brightness_threshold == 5.0
 
     def test_visual_qa_provider_rejects_unknown_value(self) -> None:
         with pytest.raises(ValidationError):
@@ -47,6 +48,10 @@ class TestFrameworkConfig:
     def test_visual_qa_low_variance_threshold_must_be_positive(self) -> None:
         with pytest.raises(ValidationError):
             FrameworkConfig(visual_qa_low_variance_threshold=0)
+
+    def test_visual_qa_low_brightness_threshold_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_low_brightness_threshold=0)
 
     def test_valid_log_levels(self) -> None:
         for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
