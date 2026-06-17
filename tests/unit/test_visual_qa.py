@@ -159,6 +159,9 @@ def test_screenshot_health_detector_flags_low_variance_image(tmp_path: Path) -> 
         def std(self) -> float:
             return 0.2
 
+        def mean(self) -> float:
+            return 10.0
+
     class FakeCv2:
         IMREAD_GRAYSCALE = 0
 
@@ -174,6 +177,39 @@ def test_screenshot_health_detector_flags_low_variance_image(tmp_path: Path) -> 
     assert findings[0].rule_id == "visual_health.low_variance"
     assert findings[0].severity == "warning"
     assert "low visual variance" in findings[0].message
+    assert findings[0].text == image.name
+
+
+def test_screenshot_health_detector_flags_dark_image(tmp_path: Path) -> None:
+    image = tmp_path / "dark.png"
+    image.write_bytes(b"png")
+
+    class FakeImage:
+        def std(self) -> float:
+            return 10.0
+
+        def mean(self) -> float:
+            return 2.5
+
+    class FakeCv2:
+        IMREAD_GRAYSCALE = 0
+
+        @staticmethod
+        def imread(path: str, flags: int) -> FakeImage:
+            return FakeImage()
+
+    detector = ScreenshotHealthDetector(
+        cv2_module=FakeCv2,
+        low_variance_threshold=1.0,
+        low_brightness_threshold=5.0,
+    )
+
+    findings = detector.analyze(image)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "visual_health.too_dark"
+    assert findings[0].severity == "warning"
+    assert "too dark" in findings[0].message
     assert findings[0].text == image.name
 
 

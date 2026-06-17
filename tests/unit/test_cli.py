@@ -77,12 +77,21 @@ class TestCLIParser:
 
     def test_visual_qa_command_parses(self) -> None:
         args = _create_parser().parse_args(
-            ["visual-qa", "--image", "/tmp/example.png", "--ocr-provider", "tesseract"]
+            [
+                "visual-qa",
+                "--image",
+                "/tmp/example.png",
+                "--ocr-provider",
+                "tesseract",
+                "--output",
+                "/tmp/visual-qa.json",
+            ]
         )
         assert args.command == "visual-qa"
         assert args.image == "/tmp/example.png"
         assert args.ocr_provider == "tesseract"
         assert args.health_provider == "disabled"
+        assert args.output == "/tmp/visual-qa.json"
 
 
 class TestCLICommands:
@@ -239,6 +248,29 @@ class TestCLICommands:
             "findings_by_severity": {},
         }
         assert payload["screenshots"][str(image)]["status"] == "passed"
+
+    def test_visual_qa_cmd_writes_output_file_when_requested(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        image = tmp_path / "single.png"
+        image.write_bytes(b"png")
+        output = tmp_path / "visual-qa.json"
+        args = _create_parser().parse_args(
+            ["visual-qa", "--image", str(image), "--output", str(output)]
+        )
+
+        class FakeEngine:
+            def analyze_screenshot(self, image_path: Path) -> object:
+                from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
+
+                assert image_path == image
+                return ScreenshotOcrAnalysis(status="passed", provider="disabled")
+
+        with patch("sts2_autotest.cli.main._build_visual_qa_engine", return_value=FakeEngine()):
+            result = visual_qa_cmd(args)
+
+        assert result == 0
+        stdout_payload = json.loads(capsys.readouterr().out)
+        file_payload = json.loads(output.read_text(encoding="utf-8"))
+        assert stdout_payload == file_payload
 
     def test_visual_qa_cmd_returns_one_when_image_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         image = tmp_path / "missing.png"

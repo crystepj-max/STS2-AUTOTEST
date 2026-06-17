@@ -175,6 +175,16 @@ def _create_parser() -> Any:
         default=1.0,
         help="Low variance threshold for OpenCV health checks",
     )
+    visual_qa_parser.add_argument(
+        "--low-brightness-threshold",
+        type=float,
+        default=5.0,
+        help="Low brightness threshold for OpenCV health checks",
+    )
+    visual_qa_parser.add_argument(
+        "--output",
+        help="Optional JSON output path",
+    )
     visual_qa_parser.set_defaults(func=visual_qa_cmd)
 
     return p
@@ -1236,8 +1246,19 @@ def _build_visual_qa_engine(args: Any) -> VisualQaEngine:
     health_detector = ScreenshotHealthDetector(
         cv2_module="auto" if args.health_provider == "opencv" else None,
         low_variance_threshold=args.low_variance_threshold,
+        low_brightness_threshold=args.low_brightness_threshold,
     )
     return VisualQaEngine(provider, health_detector=health_detector)
+
+
+def _write_json_output(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = path.with_suffix(path.suffix + ".tmp")
+    tmp_file.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    os.replace(str(tmp_file), str(path))
 
 
 def visual_qa_cmd(args: Any) -> int:
@@ -1252,6 +1273,8 @@ def visual_qa_cmd(args: Any) -> int:
         test_run_id=image_path.name,
         analyses_by_path={str(image_path): analysis},
     )
+    if args.output:
+        _write_json_output(Path(args.output), payload)
     print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 

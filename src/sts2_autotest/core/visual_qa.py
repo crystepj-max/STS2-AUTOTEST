@@ -156,6 +156,9 @@ class Cv2Image(Protocol):
     def std(self) -> float:
         ...
 
+    def mean(self) -> float:
+        ...
+
 
 class Cv2Module(Protocol):
     IMREAD_GRAYSCALE: int
@@ -222,11 +225,13 @@ class ScreenshotHealthDetector:
         *,
         cv2_module: Cv2Module | Literal["auto"] | None = "auto",
         low_variance_threshold: float = DEFAULT_LOW_VARIANCE_THRESHOLD,
+        low_brightness_threshold: float = 5.0,
     ) -> None:
         if isinstance(cv2_module, str) and cv2_module != "auto":
             raise ValueError("cv2_module must be 'auto', a cv2-like module, or None")
         self._cv2_module = cv2_module
         self._low_variance_threshold = low_variance_threshold
+        self._low_brightness_threshold = low_brightness_threshold
 
     def analyze(self, image_path: Path) -> list[VisualQaFinding]:
         cv2_module = self._resolve_cv2()
@@ -238,22 +243,37 @@ class ScreenshotHealthDetector:
             if image is None:
                 return []
             variance = float(image.std())
+            mean = float(image.mean())
         except Exception:
             return []
 
         if variance >= self._low_variance_threshold:
-            return []
+            pass
+        else:
+            return [
+                VisualQaFinding(
+                    rule_id="visual_health.low_variance",
+                    severity="warning",
+                    message=f"Screenshot has low visual variance ({variance:.3f})",
+                    text=image_path.name,
+                    confidence=None,
+                    bbox=None,
+                )
+            ]
 
-        return [
-            VisualQaFinding(
-                rule_id="visual_health.low_variance",
-                severity="warning",
-                message=f"Screenshot has low visual variance ({variance:.3f})",
-                text=image_path.name,
-                confidence=None,
-                bbox=None,
-            )
-        ]
+        if mean < self._low_brightness_threshold:
+            return [
+                VisualQaFinding(
+                    rule_id="visual_health.too_dark",
+                    severity="warning",
+                    message=f"Screenshot appears too dark (mean={mean:.3f})",
+                    text=image_path.name,
+                    confidence=None,
+                    bbox=None,
+                )
+            ]
+
+        return []
 
     def _resolve_cv2(self) -> Cv2Module | None:
         if self._cv2_module != "auto":
