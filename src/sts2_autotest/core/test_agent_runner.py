@@ -1733,6 +1733,59 @@ class TestAgentRunner:
             "_config_dir": str(self._artifact_dir),
         }
 
+    def _build_visual_qa_report_payload(self) -> dict[str, Any]:
+        self._analyze_html_report_screenshots()
+        screenshots: dict[str, Any] = {}
+        summary: dict[str, Any] = {
+            "total": 0,
+            "passed": 0,
+            "warning": 0,
+            "skipped": 0,
+            "providers": {},
+            "findings": {},
+        }
+
+        analysis_by_path = getattr(self, "_screenshot_ocr", {}) or {}
+        for screenshot_path in sorted(analysis_by_path):
+            payload = self._get_screenshot_ocr_payload(screenshot_path)
+            if payload is None:
+                continue
+
+            screenshots[screenshot_path] = payload
+            summary["total"] += 1
+
+            status = str(payload.get("status", "skipped"))
+            if status in ("passed", "warning", "skipped"):
+                summary[status] += 1
+
+            provider = str(payload.get("provider", "unknown"))
+            providers = summary["providers"]
+            providers[provider] = int(providers.get(provider, 0)) + 1
+
+            findings = payload.get("findings", [])
+            if isinstance(findings, list):
+                rule_counts = summary["findings"]
+                for finding in findings:
+                    if not isinstance(finding, dict):
+                        continue
+                    rule_id = str(finding.get("rule_id", "unknown"))
+                    rule_counts[rule_id] = int(rule_counts.get(rule_id, 0)) + 1
+
+        return {
+            "test_run_id": self._task_id,
+            "summary": summary,
+            "screenshots": screenshots,
+        }
+
+    def _write_json_artifact(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = path.with_suffix(path.suffix + ".tmp")
+        tmp_file.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(str(tmp_file), str(path))
+
 
 # ---------------------------------------------------------------------------
 # Internal exceptions
@@ -1745,7 +1798,9 @@ class TestAgentRunner:
         try:
             config = self._build_html_report_config()
             config_path = self._artifact_dir / "test-results.json"
-            config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+            self._write_json_artifact(config_path, config)
+            visual_qa_path = self._artifact_dir / "visual-qa.json"
+            self._write_json_artifact(visual_qa_path, self._build_visual_qa_report_payload())
             output_path = self._artifact_dir / "test-report.html"
             write_html_report(config_path, output_path)
         except Exception as exc:

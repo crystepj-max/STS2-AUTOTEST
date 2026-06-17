@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from unittest.mock import patch
 
 from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis, VisualQaFinding
 from sts2_autotest.config.schema import FrameworkConfig
@@ -86,6 +88,83 @@ def test_analyze_html_report_screenshots_populates_cache(tmp_path: Path) -> None
     analysis = runner._screenshot_ocr["screenshots/card-before.png"]
     assert analysis.status == "warning"
     assert analysis.findings[0].text == "gawain.card.strike.name"
+
+
+def test_build_visual_qa_report_payload_summarizes_cached_analysis(
+    tmp_path: Path,
+) -> None:
+    runner = _make_runner(tmp_path)
+    runner._screenshot_ocr = {
+        "screenshots/card-before.png": ScreenshotOcrAnalysis(
+            status="warning",
+            provider="tesseract",
+            findings=[
+                VisualQaFinding(
+                    rule_id="localization_text.raw_key",
+                    severity="warning",
+                    message="疑似 localization key 出现在截图文本中",
+                    text="gawain.card.strike.name",
+                    confidence=0.91,
+                    bbox=[12, 34, 56, 78],
+                )
+            ],
+        ),
+        "screenshots/card-after.png": ScreenshotOcrAnalysis(
+            status="passed",
+            provider="tesseract",
+        ),
+    }
+
+    payload = runner._build_visual_qa_report_payload()
+
+    assert payload["summary"] == {
+        "total": 2,
+        "passed": 1,
+        "warning": 1,
+        "skipped": 0,
+        "providers": {"tesseract": 2},
+        "findings": {"localization_text.raw_key": 1},
+    }
+    assert payload["screenshots"]["screenshots/card-before.png"]["status"] == "warning"
+    assert (
+        payload["screenshots"]["screenshots/card-before.png"]["findings"][0]["bbox"]
+        == [12, 34, 56, 78]
+    )
+    assert payload["screenshots"]["screenshots/card-after.png"]["status"] == "passed"
+
+
+def test_generate_html_report_also_writes_visual_qa_json(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path)
+    runner._screenshot_ocr = {
+        "screenshots/card-before.png": ScreenshotOcrAnalysis(
+            status="warning",
+            provider="static",
+            findings=[
+                VisualQaFinding(
+                    rule_id="localization_text.raw_key",
+                    severity="warning",
+                    message="疑似 localization key 出现在截图文本中",
+                    text="gawain.card.strike.name",
+                )
+            ],
+        )
+    }
+
+    with patch("sts2_autotest.core.test_agent_runner.write_html_report") as mock_write_html:
+        runner._generate_html_report()
+
+    mock_write_html.assert_called_once()
+    visual_qa_path = tmp_path / "visual-qa.json"
+    assert visual_qa_path.is_file()
+    payload = json.loads(visual_qa_path.read_text(encoding="utf-8"))
+    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["warning"] == 1
+    assert payload["summary"]["skipped"] == 1
+    assert (
+        payload["screenshots"]["screenshots/card-before.png"]["findings"][0]["rule_id"]
+        == "localization_text.raw_key"
+    )
+    assert payload["screenshots"]["screenshots/card-after.png"]["status"] == "skipped"
 
 
 def test_get_visual_qa_engine_defaults_to_disabled_provider(tmp_path: Path) -> None:
