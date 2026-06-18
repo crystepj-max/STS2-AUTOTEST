@@ -59,6 +59,14 @@
 - 修改：`docs/beta-roadmap.md`
   - 职责：B8 状态从 MVP 更新到 OCR + OpenCV 稳定版，VLM 标为后续扩展。
 
+实现过程中补充：
+
+- 新增：`tests/fixtures/visual_qa/gawain-card-user-screenshot.jpg`
+  - 职责：用户提供的真实游戏截图夹具，用于 Tesseract OCR 和单图 CLI 验收。
+- 修改：`docs/superpowers/plans/2026-06-17-b8-ocr-opencv-stabilization.md`
+  - 职责：记录实现计划、验收命令和实现偏差。
+- `src/sts2_autotest/cli/main.py` 的实际改动包含 parser、命令执行、JSON 输出和模块入口点，超过初始文件结构中“单图分析命令”的简写范围。
+
 ---
 
 ### 任务 1：统一 OpenCV 阈值默认值
