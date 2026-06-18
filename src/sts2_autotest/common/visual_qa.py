@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 DEFAULT_LOW_VARIANCE_THRESHOLD = 1.0
+DEFAULT_LOW_BRIGHTNESS_THRESHOLD = 5.0
+DEFAULT_HIGH_BRIGHTNESS_THRESHOLD = 250.0
 
 
 class OcrTextBlock(BaseModel):

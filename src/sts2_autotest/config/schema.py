@@ -8,7 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from sts2_autotest.common.visual_qa import DEFAULT_LOW_VARIANCE_THRESHOLD
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
 
 
 class CliAdapterConfig(BaseModel):
@@ -89,7 +93,14 @@ class FrameworkConfig(BaseModel):
         default=DEFAULT_LOW_VARIANCE_THRESHOLD,
         gt=0,
     )
-    visual_qa_low_brightness_threshold: float = Field(default=5.0, gt=0)
+    visual_qa_low_brightness_threshold: float = Field(
+        default=DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+        gt=0,
+    )
+    visual_qa_high_brightness_threshold: float = Field(
+        default=DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+        gt=0,
+    )
 
 
 class ExecutionConfig(BaseModel):

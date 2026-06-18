@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
 from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD as _DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD as _DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
     DEFAULT_LOW_VARIANCE_THRESHOLD as _DEFAULT_LOW_VARIANCE_THRESHOLD,
     OcrTextBlock,
     ScreenshotOcrAnalysis,
@@ -225,13 +227,15 @@ class ScreenshotHealthDetector:
         *,
         cv2_module: Cv2Module | Literal["auto"] | None = "auto",
         low_variance_threshold: float = DEFAULT_LOW_VARIANCE_THRESHOLD,
-        low_brightness_threshold: float = 5.0,
+        low_brightness_threshold: float = _DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+        high_brightness_threshold: float = _DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
     ) -> None:
         if isinstance(cv2_module, str) and cv2_module != "auto":
             raise ValueError("cv2_module must be 'auto', a cv2-like module, or None")
         self._cv2_module = cv2_module
         self._low_variance_threshold = low_variance_threshold
         self._low_brightness_threshold = low_brightness_threshold
+        self._high_brightness_threshold = high_brightness_threshold
 
     def analyze(self, image_path: Path) -> list[VisualQaFinding]:
         cv2_module = self._resolve_cv2()

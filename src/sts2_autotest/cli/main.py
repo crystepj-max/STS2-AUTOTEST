@@ -25,6 +25,11 @@ from sts2_autotest.core.visual_qa import (
     VisualQaEngine,
     build_visual_qa_payload,
 )
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
 from sts2_autotest.report_html import write_html_report
 
 
@@ -172,14 +177,20 @@ def _create_parser() -> Any:
     visual_qa_parser.add_argument(
         "--low-variance-threshold",
         type=float,
-        default=1.0,
+        default=DEFAULT_LOW_VARIANCE_THRESHOLD,
         help="Low variance threshold for OpenCV health checks",
     )
     visual_qa_parser.add_argument(
         "--low-brightness-threshold",
         type=float,
-        default=5.0,
+        default=DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
         help="Low brightness threshold for OpenCV health checks",
+    )
+    visual_qa_parser.add_argument(
+        "--high-brightness-threshold",
+        type=float,
+        default=DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+        help="High brightness threshold for OpenCV health checks",
     )
     visual_qa_parser.add_argument(
         "--output",
@@ -1247,6 +1258,7 @@ def _build_visual_qa_engine(args: Any) -> VisualQaEngine:
         cv2_module="auto" if args.health_provider == "opencv" else None,
         low_variance_threshold=args.low_variance_threshold,
         low_brightness_threshold=args.low_brightness_threshold,
+        high_brightness_threshold=args.high_brightness_threshold,
     )
     return VisualQaEngine(provider, health_detector=health_detector)
 

@@ -17,6 +17,11 @@ from sts2_autotest.cli.main import (
     run_cmd,
     visual_qa_cmd,
 )
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
 
 
 class TestCLIParser:
@@ -91,6 +96,9 @@ class TestCLIParser:
         assert args.image == "/tmp/example.png"
         assert args.ocr_provider == "tesseract"
         assert args.health_provider == "disabled"
+        assert args.low_variance_threshold == DEFAULT_LOW_VARIANCE_THRESHOLD
+        assert args.low_brightness_threshold == DEFAULT_LOW_BRIGHTNESS_THRESHOLD
+        assert args.high_brightness_threshold == DEFAULT_HIGH_BRIGHTNESS_THRESHOLD
         assert args.output == "/tmp/visual-qa.json"
 
 
