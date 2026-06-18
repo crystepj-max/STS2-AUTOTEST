@@ -1687,6 +1687,11 @@ class TestAgentRunner:
                 "visual_qa_low_brightness_threshold",
                 5.0,
             ),
+            high_brightness_threshold=getattr(
+                framework_config,
+                "visual_qa_high_brightness_threshold",
+                250.0,
+            ),
         )
 
         engine = VisualQaEngine(provider, health_detector=health_detector)

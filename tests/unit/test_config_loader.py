@@ -98,6 +98,7 @@ class TestEnvOverride:
         monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_HEALTH_PROVIDER", "opencv")
         monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_LOW_VARIANCE_THRESHOLD", "2.5")
         monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_LOW_BRIGHTNESS_THRESHOLD", "6.5")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_HIGH_BRIGHTNESS_THRESHOLD", "248.5")
 
         cfg = load_config(project_dir=config_dir)
 
@@ -108,6 +109,7 @@ class TestEnvOverride:
         assert cfg.framework.visual_qa_health_provider == "opencv"
         assert cfg.framework.visual_qa_low_variance_threshold == 2.5
         assert cfg.framework.visual_qa_low_brightness_threshold == 6.5
+        assert cfg.framework.visual_qa_high_brightness_threshold == 248.5
 
     def test_non_sts2_env_ignored(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OTHER_VAR", "ignored")

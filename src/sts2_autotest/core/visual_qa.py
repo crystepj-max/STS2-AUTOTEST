@@ -277,6 +277,18 @@ class ScreenshotHealthDetector:
                 )
             ]
 
+        if mean > self._high_brightness_threshold:
+            return [
+                VisualQaFinding(
+                    rule_id="visual_health.too_bright",
+                    severity="warning",
+                    message=f"Screenshot appears too bright (mean={mean:.3f})",
+                    text=image_path.name,
+                    confidence=None,
+                    bbox=None,
+                )
+            ]
+
         return []
 
     def _resolve_cv2(self) -> Cv2Module | None:
