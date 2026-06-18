@@ -73,7 +73,7 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 | ID | 功能 | 状态 | 说明 |
 |----|------|------|------|
 | B7 | AgentAdapter | 已合入 | 接入 STS2-Agent，HTTP + MCP 双传输 |
-| B8 | Visual QA Engine | 已实现（MVP） | HTML 报告截图 OCR 辅助分析；不影响测试结果；OpenCV/VLM 后续扩展 |
+| B8 | Visual QA Engine | 已实现（OCR + OpenCV 稳定版） | HTML 报告截图 OCR 辅助分析；`visual-qa.json` 独立产物；单图 CLI；OpenCV 低方差/过暗/过亮/不可读检查；不影响测试结果；VLM 后续扩展 |
 | B9 | 多人冒烟测试 | 待实现 | 双 Runner 编排 |
 | B10 | Level 2 修复建议 | 已实现 | RepairAdvisor（三层规则引擎：L1 分类匹配 + L2 堆栈解析 + L3 异常分析），集成到 EvidencePackager |
 | B11 | CI/CD 流水线 | 已实现 | 4 个 GitHub Actions 工作流（PR/push-to-main/game-integration/nightly）+ 自托管 Mac Runner 设置脚本 |
@@ -128,7 +128,7 @@ MVP 通过 BMad (ACP) 工作流完成 **4 个 Epic、26 个 Story**（Story 4.8 
 | 定调 | 核心功能跑通（验证环闭合） | 健壮性 + 自动化程度提升 |
 | 架构 | CLI 适配器（同步） | 双适配器（CLI + Agent HTTP/MCP） |
 | 崩溃处理 | 终止后续用例 | 三级恢复 + 断点续跑 |
-| 视觉 | 语法级截图校验（纯色检测） | OCR + OpenCV + VLM 语义审查（P4） |
+| 视觉 | 语法级截图校验（纯色检测） | OCR + OpenCV 截图辅助审查已稳定；VLM 语义审查保留为后续扩展 |
 | 弹窗 | 无处理 | 95% 自动处置（已实现） |
 | 编成 | 单人单机 | 双 Runner 多人冒烟（P4） |
 | CI/CD | 本地 CLI | GitHub Actions + PR 注释 + HTTP 端点 + 4 个工作流 |
