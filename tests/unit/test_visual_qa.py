@@ -106,7 +106,8 @@ def test_visual_qa_engine_returns_warning_for_raw_key(tmp_path: Path) -> None:
     image = tmp_path / "gawain-card-before.png"
     image.write_bytes(b"fake png bytes")
     engine = VisualQaEngine(
-        StaticOcrProvider({"gawain-card-before.png": ["gawain.card.strike.name"]})
+        StaticOcrProvider({"gawain-card-before.png": ["gawain.card.strike.name"]}),
+        health_detector=ScreenshotHealthDetector(cv2_module=None),
     )
 
     analysis = engine.analyze_screenshot(image)
@@ -119,7 +120,10 @@ def test_visual_qa_engine_returns_warning_for_raw_key(tmp_path: Path) -> None:
 def test_visual_qa_engine_returns_passed_for_normal_text(tmp_path: Path) -> None:
     image = tmp_path / "normal.png"
     image.write_bytes(b"fake png bytes")
-    engine = VisualQaEngine(StaticOcrProvider({"normal.png": ["打击 造成 6 点伤害"]}))
+    engine = VisualQaEngine(
+        StaticOcrProvider({"normal.png": ["打击 造成 6 点伤害"]}),
+        health_detector=ScreenshotHealthDetector(cv2_module=None),
+    )
 
     analysis = engine.analyze_screenshot(image)
 
@@ -244,6 +248,28 @@ def test_screenshot_health_detector_flags_bright_image(tmp_path: Path) -> None:
     assert findings[0].rule_id == "visual_health.too_bright"
     assert findings[0].severity == "warning"
     assert "too bright" in findings[0].message
+    assert findings[0].text == image.name
+
+
+def test_screenshot_health_detector_flags_unreadable_image(tmp_path: Path) -> None:
+    image = tmp_path / "corrupt.png"
+    image.write_bytes(b"not an image")
+
+    class FakeCv2:
+        IMREAD_GRAYSCALE = 0
+
+        @staticmethod
+        def imread(path: str, flags: int) -> None:
+            return None
+
+    detector = ScreenshotHealthDetector(cv2_module=FakeCv2)
+
+    findings = detector.analyze(image)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "visual_health.unreadable"
+    assert findings[0].severity == "warning"
+    assert "not readable" in findings[0].message
     assert findings[0].text == image.name
 
 

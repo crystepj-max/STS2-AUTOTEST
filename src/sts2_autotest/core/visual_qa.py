@@ -245,7 +245,16 @@ class ScreenshotHealthDetector:
         try:
             image = cv2_module.imread(str(image_path), cv2_module.IMREAD_GRAYSCALE)
             if image is None:
-                return []
+                return [
+                    VisualQaFinding(
+                        rule_id="visual_health.unreadable",
+                        severity="warning",
+                        message="Screenshot is not readable by OpenCV",
+                        text=image_path.name,
+                        confidence=None,
+                        bbox=None,
+                    )
+                ]
             variance = float(image.std())
             mean = float(image.mean())
         except Exception:
