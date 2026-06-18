@@ -1,6 +1,9 @@
 """Tests for cli/main.py — CLI entry points."""
 
+import os
 import json
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -437,6 +440,35 @@ class TestCLIEntryPoint:
     def test_cli_function_exists(self) -> None:
         from sts2_autotest.cli.main import cli
         assert callable(cli)
+
+    def test_module_entrypoint_dispatches_visual_qa(self, tmp_path: Path) -> None:
+        image = tmp_path / "single.png"
+        image.write_bytes(b"png")
+        output = tmp_path / "visual-qa.json"
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(Path.cwd() / "src"),
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "sts2_autotest.cli.main",
+                "visual-qa",
+                "--image",
+                str(image),
+                "--output",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+
+        assert result.returncode == 0
+        assert output.is_file()
 
 
 # ── resume / progress tests (Story 4.5, AC1-AC4) ────────────

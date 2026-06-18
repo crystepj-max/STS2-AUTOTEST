@@ -20,6 +20,7 @@ from sts2_autotest.adapters.base import GameAdapterProtocol
 from sts2_autotest.cli import mcp_server
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
+    OcrProvider,
     ScreenshotHealthDetector,
     TesseractOcrProvider,
     VisualQaEngine,
@@ -1245,6 +1246,7 @@ def gen_report_cmd(args: Any) -> int:
 
 
 def _build_visual_qa_engine(args: Any) -> VisualQaEngine:
+    provider: OcrProvider
     if args.ocr_provider == "tesseract":
         provider = TesseractOcrProvider(
             command=args.tesseract_cmd,
@@ -1326,3 +1328,7 @@ def cli(argv: Sequence[str] | None = None) -> None:
     else:
         parser.print_help()
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    cli()

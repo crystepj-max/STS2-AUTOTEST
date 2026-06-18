@@ -20,8 +20,7 @@ def test_opencv_health_detector_flags_solid_black_png(tmp_path) -> None:
         low_variance_threshold=1.0,
     ).analyze(image_path)
 
-    assert len(findings) == 1
-    assert findings[0].rule_id == "visual_health.low_variance"
+    assert "visual_health.low_variance" in {finding.rule_id for finding in findings}
 
 
 def test_opencv_health_detector_flags_too_dark_png(tmp_path) -> None:

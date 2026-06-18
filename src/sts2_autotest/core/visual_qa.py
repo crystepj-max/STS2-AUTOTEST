@@ -260,10 +260,9 @@ class ScreenshotHealthDetector:
         except Exception:
             return []
 
-        if variance >= self._low_variance_threshold:
-            pass
-        else:
-            return [
+        findings: list[VisualQaFinding] = []
+        if variance < self._low_variance_threshold:
+            findings.append(
                 VisualQaFinding(
                     rule_id="visual_health.low_variance",
                     severity="warning",
@@ -272,10 +271,10 @@ class ScreenshotHealthDetector:
                     confidence=None,
                     bbox=None,
                 )
-            ]
+            )
 
         if mean < self._low_brightness_threshold:
-            return [
+            findings.append(
                 VisualQaFinding(
                     rule_id="visual_health.too_dark",
                     severity="warning",
@@ -284,10 +283,10 @@ class ScreenshotHealthDetector:
                     confidence=None,
                     bbox=None,
                 )
-            ]
+            )
 
         if mean > self._high_brightness_threshold:
-            return [
+            findings.append(
                 VisualQaFinding(
                     rule_id="visual_health.too_bright",
                     severity="warning",
@@ -296,9 +295,9 @@ class ScreenshotHealthDetector:
                     confidence=None,
                     bbox=None,
                 )
-            ]
+            )
 
-        return []
+        return findings
 
     def _resolve_cv2(self) -> Cv2Module | None:
         if self._cv2_module != "auto":

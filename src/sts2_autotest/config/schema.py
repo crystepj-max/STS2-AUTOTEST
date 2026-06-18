@@ -102,6 +102,15 @@ class FrameworkConfig(BaseModel):
         gt=0,
     )
 
+    @model_validator(mode="after")
+    def _check_brightness_thresholds(self) -> "FrameworkConfig":
+        if self.visual_qa_low_brightness_threshold >= self.visual_qa_high_brightness_threshold:
+            raise ValueError(
+                "visual_qa_low_brightness_threshold must be less than "
+                "visual_qa_high_brightness_threshold"
+            )
+        return self
+
 
 class ExecutionConfig(BaseModel):
     """Test execution configuration."""

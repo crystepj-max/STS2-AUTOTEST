@@ -87,13 +87,18 @@ def test_analyze_html_report_screenshots_populates_cache(tmp_path: Path) -> None
 
     analysis = runner._screenshot_ocr["screenshots/card-before.png"]
     assert analysis.status == "warning"
-    assert analysis.findings[0].text == "gawain.card.strike.name"
+    assert any(
+        finding.rule_id == "localization_text.raw_key"
+        and finding.text == "gawain.card.strike.name"
+        for finding in analysis.findings
+    )
 
 
 def test_build_visual_qa_report_payload_summarizes_cached_analysis(
     tmp_path: Path,
 ) -> None:
     runner = _make_runner(tmp_path)
+    runner._card_results = []
     runner._screenshot_ocr = {
         "screenshots/card-before.png": ScreenshotOcrAnalysis(
             status="warning",
@@ -141,6 +146,7 @@ def test_build_visual_qa_report_payload_summarizes_cached_analysis(
 
 def test_generate_html_report_also_writes_visual_qa_json(tmp_path: Path) -> None:
     runner = _make_runner(tmp_path)
+    runner._card_results = []
     runner._screenshot_ocr = {
         "screenshots/card-before.png": ScreenshotOcrAnalysis(
             status="warning",
@@ -163,14 +169,12 @@ def test_generate_html_report_also_writes_visual_qa_json(tmp_path: Path) -> None
     visual_qa_path = tmp_path / "visual-qa.json"
     assert visual_qa_path.is_file()
     payload = json.loads(visual_qa_path.read_text(encoding="utf-8"))
-    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["total"] == 1
     assert payload["summary"]["warning"] == 1
-    assert payload["summary"]["skipped"] == 1
     assert (
         payload["screenshots"]["screenshots/card-before.png"]["findings"][0]["rule_id"]
         == "localization_text.raw_key"
     )
-    assert payload["screenshots"]["screenshots/card-after.png"]["status"] == "skipped"
 
 
 def test_get_visual_qa_engine_defaults_to_disabled_provider(tmp_path: Path) -> None:

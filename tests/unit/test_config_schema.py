@@ -57,6 +57,16 @@ class TestFrameworkConfig:
         with pytest.raises(ValidationError):
             FrameworkConfig(visual_qa_low_brightness_threshold=0)
 
+    def test_visual_qa_brightness_thresholds_must_be_ordered(self) -> None:
+        with pytest.raises(
+            ValidationError,
+            match="visual_qa_low_brightness_threshold must be less than",
+        ):
+            FrameworkConfig(
+                visual_qa_low_brightness_threshold=250.0,
+                visual_qa_high_brightness_threshold=5.0,
+            )
+
     def test_valid_log_levels(self) -> None:
         for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
             cfg = FrameworkConfig(log_level=level)
