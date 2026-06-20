@@ -4,6 +4,7 @@ from __future__ import annotations
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.dsl.assertions import (
     no_crash_detected, has_travelable_node,
+    player_block_increased_by,
 )
 
 
@@ -37,3 +38,15 @@ class TestHasTravelableNode:
         ok, msg = has_travelable_node()(state)
         assert not ok
         assert "travelable_nodes" in msg
+
+
+class TestPlayerBlockIncreasedBy:
+    def test_player_block_increased_by_detects_gain(self) -> None:
+        state = GameState(screen=GameScreen.COMBAT, block=8, previous_block=3)
+        ok, msg = player_block_increased_by(5)(state)
+        assert ok, msg
+
+    def test_player_block_increased_by_fails_without_previous(self) -> None:
+        state = GameState(screen=GameScreen.COMBAT, block=8)
+        ok, _ = player_block_increased_by(5)(state)
+        assert not ok

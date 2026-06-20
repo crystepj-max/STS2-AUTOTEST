@@ -102,6 +102,22 @@ def player_hp_changed_by(amount: int) -> AssertionFn:
     return check
 
 
+def player_block_increased_by(amount: int) -> AssertionFn:
+    """Assert player block increased by at least the given amount."""
+
+    def check(state: GameState) -> tuple[bool, str]:
+        current = getattr(state, "block", None)
+        previous = getattr(state, "previous_block", None)
+        if previous is None or current is None:
+            return False, "previous_block not in state, cannot verify increase"
+        actual = current - previous
+        ok = actual >= amount
+        msg = "" if ok else f"Expected block increase ≥ {amount}, got {actual}"
+        return ok, msg
+
+    return check
+
+
 # ── setup / execute action descriptors ──────────────────────
 
 

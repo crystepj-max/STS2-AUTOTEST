@@ -47,7 +47,12 @@ _SUPPORTED_ASSERTION_PATTERNS: list[re.Pattern[str]] = [
         r"crash",
         r"到达\s*MAP|位于\s*MAP|\bMAP\b|地图",
         r"到达\s*EVENT|位于\s*EVENT|\bEVENT\b|事件",
+        r"到达\s*REST|位于\s*REST|\bREST\b|营火|休息",
         r"到达\s*COMBAT|位于\s*COMBAT|\bCOMBAT\b|战斗|combat",
+        r"(?:敌人.*?(?:受到|承受)|enemy hp decreased by)\s*\d+",
+        r"(?:玩家.*?格挡.*?(?:增加|获得)|player block increased by)\s*\d+",
+        r"(?:玩家.*?能量.*?(?:减少|消耗)|player energy decreased by)\s*\d+",
+        r"(?:玩家.*?(?:回复|治疗|生命).*?[+-]?\d+|player hp changed by\s*[+-]?\d+)",
         r"造成\s*\d+\s*点伤害\s*\d+\s*次",
         r"节点|node",
     )

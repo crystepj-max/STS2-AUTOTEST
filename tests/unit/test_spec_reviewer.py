@@ -171,6 +171,28 @@ class TestSpecReviewer:
 
         assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
 
+    def test_review_accepts_effect_and_rest_assertions(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-EFFECT-REST",
+            title="Gawain effect and rest",
+            priority="P0",
+            start_state="COMBAT",
+            end_state="REST",
+            steps=["使用 gawain:defend", "选择地图节点 (1, 0)"],
+            assertions=[
+                "敌人受到 6 点伤害",
+                "玩家格挡增加 5",
+                "玩家能量减少 1",
+                "玩家回复 1 点生命",
+                "game reached state REST",
+                "不 crash",
+            ],
+        )
+
+        report = self.reviewer.review(spec)
+
+        assert not [i for i in report.issues if i.category == IssueCategory.CAPABILITY_GAP]
+
     def test_review_multiple_issues(self) -> None:
         spec = TestSpec(
             id="TC-MULTI",
