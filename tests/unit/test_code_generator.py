@@ -149,6 +149,40 @@ class TestCodeGenerator:
         assert "enemy_took_exact_hits" in code
         assert "enemy_took_exact_hits(5, 2)" in code
 
+    def test_generate_case_test_maps_effect_assertions(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-EFFECTS",
+            title="Gawain effects",
+            steps=["使用 gawain:defend"],
+            assertions=[
+                "敌人受到 6 点伤害",
+                "玩家格挡增加 5",
+                "玩家能量减少 1",
+                "玩家回复 1 点生命",
+            ],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "enemy_hp_decreased_by(6)" in code
+        assert "player_block_increased_by(5)" in code
+        assert "player_energy_decreased_by(1)" in code
+        assert "player_hp_changed_by(1)" in code
+        assert "# TODO: implement assertion" not in code
+
+    def test_generate_case_test_maps_rest_assertion(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-NAVIGATE-TO-REST",
+            title="Gawain rest navigation",
+            steps=["选择地图节点 (1, 0)"],
+            assertions=["game reached state REST", "进入营火界面"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "game_reached_state(GameScreen.REST)" in code
+        assert "# TODO: implement assertion" not in code
+
     def test_generate_case_test_empty_steps(self) -> None:
         spec = TestSpec(id="TC-EMPTY", title="Empty")
         code = self.generator.generate_case_test(spec)
@@ -173,6 +207,27 @@ class TestCodeGenerator:
         assert "TC-PREPARE-NEW-RUN" in code
         assert "TC-RESOLVE-NEOW" in code
         assert "TC-FINISH-FIRST-BATTLE" in code
+
+    def test_generate_suite_test_maps_effect_assertions(self) -> None:
+        suite = SuiteSpec(
+            id="SUITE-GAWAIN-EFFECTS",
+            title="Gawain effects",
+            includes=["TC-GAWAIN-EFFECTS"],
+        )
+        specs = {
+            "TC-GAWAIN-EFFECTS": TestSpec(
+                id="TC-GAWAIN-EFFECTS",
+                title="Gawain effects",
+                steps=["使用 gawain:defend"],
+                assertions=["敌人受到 6 点伤害", "玩家格挡增加 5"],
+            ),
+        }
+
+        code = self.generator.generate_suite_test(suite, specs)
+
+        assert "enemy_hp_decreased_by(6)" in code
+        assert "player_block_increased_by(5)" in code
+        assert "# TODO: implement assertion" not in code
 
     def test_generate_suite_test_keeps_sequential_failure_context(self) -> None:
         suite = SuiteSpec(
