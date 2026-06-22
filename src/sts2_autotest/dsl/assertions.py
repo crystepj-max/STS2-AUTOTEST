@@ -5,7 +5,7 @@ dispatches to the adapter. Assertion functions return callables
 that validate GameState snapshots.
 """
 
-from typing import Any, Callable
+from typing import Callable
 
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import ActionDescriptor
@@ -33,7 +33,7 @@ def enemy_hp_decreased_by(amount: int) -> AssertionFn:
         current = getattr(state, "enemy_hp", None)
         previous = getattr(state, "previous_enemy_hp", None)
         if previous is None:
-            return False, f"previous_enemy_hp not in state, cannot verify decrease"
+            return False, "previous_enemy_hp not in state, cannot verify decrease"
         actual = previous - current if current is not None else 0
         ok = actual >= amount  # >= because RNG can cause extra damage
         msg = "" if ok else f"Expected enemy HP decrease ≥ {amount}, got {actual}"
@@ -77,7 +77,7 @@ def player_energy_decreased_by(amount: int) -> AssertionFn:
         current = getattr(state, "energy", None)
         previous = getattr(state, "previous_energy", None)
         if previous is None:
-            return False, f"previous_energy not in state, cannot verify decrease"
+            return False, "previous_energy not in state, cannot verify decrease"
         actual = previous - current if current is not None else 0
         ok = actual == amount
         msg = "" if ok else f"Expected energy decrease {amount}, got {actual}"
@@ -93,7 +93,7 @@ def player_hp_changed_by(amount: int) -> AssertionFn:
         current = getattr(state, "hp", None)
         previous = getattr(state, "previous_hp", None)
         if previous is None:
-            return False, f"previous_hp not in state, cannot verify change"
+            return False, "previous_hp not in state, cannot verify change"
         actual = current - previous if current is not None else 0
         ok = actual == amount
         msg = "" if ok else f"Expected HP change {amount}, got {actual}"
@@ -226,7 +226,7 @@ def no_crash_detected() -> AssertionFn:
 
     def check(state: GameState) -> tuple[bool, str]:
         ok = state.screen != GameScreen.CRASHED
-        msg = "" if ok else f"Game is in CRASHED state"
+        msg = "" if ok else "Game is in CRASHED state"
         return ok, msg
 
     return check

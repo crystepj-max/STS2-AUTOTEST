@@ -143,7 +143,7 @@ class CodeGenerator:
                 [
                     f"def test_{func_name}():",
                     f'    """{spec.title}"""',
-                    f'    pytest.skip("No steps defined")',
+                    '    pytest.skip("No steps defined")',
                 ]
             )
 

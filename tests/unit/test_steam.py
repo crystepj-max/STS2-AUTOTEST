@@ -1,7 +1,5 @@
 """Tests for core/steam.py — SteamController process management."""
 
-import platform
-import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -9,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import psutil
 import pytest
 
-from sts2_autotest.core.steam import SteamController, _GAME_EXE, _IS_MACOS, _STEAM_EXE
+from sts2_autotest.core.steam import SteamController, _GAME_EXE, _IS_MACOS
 
 
 @pytest.fixture

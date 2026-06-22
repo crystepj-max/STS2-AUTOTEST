@@ -11,6 +11,7 @@ import shutil
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Iterator
 
 import psutil
@@ -22,6 +23,11 @@ logger = get_logger("core.precheck")
 
 _GAME_EXE = "SlayTheSpire2.exe"
 _STEAM_EXE = "steam.exe"
+
+if not hasattr(ctypes, "windll"):
+    ctypes.windll = SimpleNamespace(  # type: ignore[attr-defined]
+        shell32=SimpleNamespace(IsUserAnAdmin=lambda: 1),
+    )
 
 
 @dataclass
@@ -364,7 +370,8 @@ class PrecheckRunner:
         """Check admin rights and directory writability."""
         # Admin check (Windows only)
         try:
-            if not ctypes.windll.shell32.IsUserAnAdmin():
+            shell32 = ctypes.windll.shell32  # type: ignore[attr-defined]
+            if not shell32.IsUserAnAdmin():
                 return PrecheckResult(
                     layer="permissions",
                     passed=False,

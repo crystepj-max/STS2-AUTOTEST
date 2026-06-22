@@ -1,7 +1,6 @@
 """Tests for newly added DSL assertions needed by code generator."""
 from __future__ import annotations
 
-import pytest
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.dsl.assertions import (
     no_crash_detected, has_travelable_node,

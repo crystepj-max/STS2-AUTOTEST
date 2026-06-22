@@ -12,7 +12,6 @@ import pytest
 
 from sts2_autotest import __version__
 from sts2_autotest.common.evidence import FailureInfo, SCHEMA_VERSION
-from sts2_autotest.common.types import EvidencePackagerSettings
 from sts2_autotest.evidence.packager import EvidencePackager
 
 
@@ -639,7 +638,6 @@ class TestArtifactExport:
 
     def test_export_updates_summary_with_artifact_path(self, tmp_path: Path) -> None:
         """summary.json receives artifact_path after export."""
-        import json
 
         pkgr = EvidencePackager(tmp_path)
         pkgr.create_pack("run_artp", run_result="passed")

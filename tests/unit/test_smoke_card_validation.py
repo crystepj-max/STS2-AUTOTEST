@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import os
 
-import pytest
 
 from sts2_autotest.adapters.base import ActionResult, HealthStatus
 from sts2_autotest.common.state import GameScreen, GameState

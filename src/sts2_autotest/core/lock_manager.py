@@ -6,7 +6,6 @@ import os
 import time
 from io import IOBase
 from pathlib import Path
-from typing import Any
 
 import portalocker
 import psutil
@@ -154,4 +153,4 @@ class LockManager:
         """Check if a PID is alive (cross-platform)."""
         if pid <= 0:
             return False
-        return psutil.pid_exists(pid)
+        return bool(psutil.pid_exists(pid))

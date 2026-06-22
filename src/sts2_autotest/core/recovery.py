@@ -6,15 +6,12 @@ DefaultRecoveryStrategy: pure-function decide() + async execute().
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Callable, Protocol
 
-from sts2_autotest.adapters.base import HealthStatus
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
-from sts2_autotest.common.state import GameScreen
 from sts2_autotest.core.popup_disposal import PopupDisposition
 
 if TYPE_CHECKING:

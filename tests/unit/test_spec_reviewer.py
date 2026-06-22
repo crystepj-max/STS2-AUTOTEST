@@ -1,8 +1,7 @@
 """Tests for spec_reviewer.py — ReviewReport + RevisedDraft generation."""
-import pytest
 from sts2_autotest.common.spec_models import (
-    TestSpec, SuiteSpec, ReviewReport, RevisedDraft,
-    ReviewIssue, IssueCategory,
+    TestSpec, SuiteSpec, RevisedDraft,
+    IssueCategory,
 )
 from sts2_autotest.core.spec_reviewer import SpecReviewer
 
@@ -213,7 +212,6 @@ class TestSpecReviewer:
         assert draft.changes_summary == ["No issues found — spec is already clean"]
 
     def test_review_suite_missing_includes(self) -> None:
-        from sts2_autotest.common.spec_models import SuiteSpec
         suite = SuiteSpec(id="SUITE-NO-INC", title="No includes")
         report = self.reviewer.review_suite(suite)
         assert not report.passed
@@ -221,7 +219,6 @@ class TestSpecReviewer:
         assert any("includes" in i.location.lower() for i in missing)
 
     def test_review_suite_missing_goal(self) -> None:
-        from sts2_autotest.common.spec_models import SuiteSpec
         suite = SuiteSpec(id="SUITE-NO-GOAL", title="No goal", includes=["TC-001"])
         report = self.reviewer.review_suite(suite)
         assert not report.passed

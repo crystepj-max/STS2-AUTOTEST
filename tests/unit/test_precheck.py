@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import psutil
-import pytest
 
 from sts2_autotest.core.precheck import PrecheckReport, PrecheckResult, PrecheckRunner
 

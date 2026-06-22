@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
-from sts2_autotest.adapters.base import ActionResult, HealthStatus
+from sts2_autotest.adapters.base import ActionResult
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
 

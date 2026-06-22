@@ -196,7 +196,7 @@ class Watchdog:
         """Check if a process with the given PID is alive."""
         try:
             proc = psutil.Process(pid)
-            return proc.is_running()
+            return bool(proc.is_running())
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return False
 

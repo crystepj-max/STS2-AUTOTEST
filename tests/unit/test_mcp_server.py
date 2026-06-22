@@ -2,11 +2,9 @@
 
 import json
 import os
-from unittest.mock import MagicMock, patch
 
-import pytest
 
-from sts2_autotest.cli.mcp_protocol import MCP_PROTOCOL_VERSION, McpError, INVALID_REQUEST
+from sts2_autotest.cli.mcp_protocol import MCP_PROTOCOL_VERSION
 from sts2_autotest.cli.mcp_server import McpServer
 
 
@@ -113,7 +111,6 @@ class TestTokenAuth:
         assert result is False
 
     def test_mcp_unauthorized_returns_401(self):
-        import os
         os.environ["STS2_MCP_TOKEN"] = "secret123"
         try:
             server = McpServer(host="127.0.0.1", port=9999)

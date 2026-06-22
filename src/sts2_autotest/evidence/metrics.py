@@ -5,7 +5,6 @@ from __future__ import annotations
 __test__ = False
 
 import json
-import os
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone

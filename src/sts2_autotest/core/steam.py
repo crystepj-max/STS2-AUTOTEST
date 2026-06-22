@@ -8,10 +8,11 @@ FR44 (security sandbox) reserved via _create_job_object /
 _assign_to_job stubs — full implementation in Epic 4 Beta.
 """
 
+import ctypes
 import platform
 import subprocess
 import time
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, cast
 
 import psutil
@@ -110,12 +111,12 @@ class SteamController:
         # Wait for game process to appear.
         start = time.monotonic()
         while time.monotonic() - start < self.startup_timeout:
-            pid = self._find_game_pid(exclude_pids=existing_pids)
-            if pid is not None:
-                self._game_pid = pid
-                self._assign_to_job(pid)
-                logger.info("Game started (PID %s)", pid)
-                return pid
+            found_pid = self._find_game_pid(exclude_pids=existing_pids)
+            if found_pid is not None:
+                self._game_pid = found_pid
+                self._assign_to_job(found_pid)
+                logger.info("Game started (PID %s)", found_pid)
+                return found_pid
             time.sleep(0.5)
         if allow_direct_fallback:
             logger.warning(
@@ -177,9 +178,8 @@ class SteamController:
         # Close the Job Object handle to trigger KILL_ON_JOB_CLOSE as
         # a safety net for any orphaned child processes (B15).
         if self._job_handle is not None:
-            import ctypes
             try:
-                kernel32 = ctypes.windll.kernel32
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
                 kernel32.CloseHandle(self._job_handle)
             except (AttributeError, OSError):
                 pass
@@ -197,10 +197,9 @@ class SteamController:
         """
         if not self._IS_WINDOWS:
             return None
-        import ctypes
         from ctypes import wintypes
         try:
-            kernel32 = ctypes.windll.kernel32
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
 
             # Declare Win32 API signatures. HANDLE is void* (8 bytes on
             # x64); default c_int (4 bytes) truncates the handle.
@@ -265,10 +264,9 @@ class SteamController:
         """Assign a process to the job object for sandboxing."""
         if self._job_handle is None:
             return
-        import ctypes
         from ctypes import wintypes
         try:
-            kernel32 = ctypes.windll.kernel32
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
 
             kernel32.OpenProcess.argtypes = [
                 ctypes.c_ulong,

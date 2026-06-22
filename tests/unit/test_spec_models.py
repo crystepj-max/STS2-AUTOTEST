@@ -1,10 +1,8 @@
 """Tests for spec_models.py — TestSpec, SuiteSpec, ReviewReport, ProjectConfig."""
 from __future__ import annotations
 
-import pytest
 from sts2_autotest.common.spec_models import (
-    TestSpec, SuiteSpec, ReviewReport, RevisedDraft,
-    ReviewIssue, IssueCategory, ProjectConfig, WorkspaceConfig,
+    TestSpec, SuiteSpec, ReviewReport, ReviewIssue, IssueCategory, ProjectConfig, WorkspaceConfig,
 )
 
 

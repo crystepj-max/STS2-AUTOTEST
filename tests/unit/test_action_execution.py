@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, HealthStatus
-from sts2_autotest.common.errors import ErrorCategory, STS2Error
+from sts2_autotest.common.errors import STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import ActionDescriptor
 from sts2_autotest.core.orchestrator import TestOrchestrator

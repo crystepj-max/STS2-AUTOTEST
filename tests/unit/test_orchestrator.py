@@ -16,10 +16,8 @@ from sts2_autotest.core.progress import load_progress
 from sts2_autotest.core.recovery import (
     DefaultRecoveryStrategy,
     FailureRecord,
-    RecoveryAction,
     StubRecoveryStrategy,
 )
-from sts2_autotest.core.state_engine import StateEngine
 
 
 def _run(coro: Any) -> Any:
@@ -246,7 +244,7 @@ class TestCrashHandling:
         (GAME_RESTART -> FULL_RESTART -> TERMINATE) instead of
         immediately terminating the session.
         """
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock
 
         mock_adapter = MagicMock(spec=GameAdapterProtocol)
         mock_adapter.get_available_actions = AsyncMock(return_value=["probe"])
@@ -457,7 +455,7 @@ class TestHandleFailure:
             category=ErrorCategory.ADAPTER_ERROR,
             message="Connection lost",
         )
-        result = _run(orch._handle_failure("TC-001", exc))
+        _run(orch._handle_failure("TC-001", exc))
         # After RECREATE, the orchestrator should use the new adapter
         assert orch.adapter is new_mock
         # State should be reset to MAIN_MENU

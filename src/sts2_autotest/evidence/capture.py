@@ -34,7 +34,7 @@ def _restore_window(title: str) -> bool:
     On False, caller should log WARNING and return SKIPPED.
     """
     try:
-        user32 = ctypes.windll.user32
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
         hwnd = user32.FindWindowW(None, title)
         if not hwnd:
             return False

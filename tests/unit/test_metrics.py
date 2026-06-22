@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
-from sts2_autotest.common.types import MetricsCollectorSettings
 from sts2_autotest.evidence.metrics import MetricEvent, MetricsCollector
 
 
@@ -200,7 +198,6 @@ class TestFlush:
         mc.flush()
 
         # Simulate existing large file by writing 1000 lines directly
-        lines_before = mc.file_path.read_text(encoding="utf-8").strip().splitlines()
         for i in range(1000):
             mc.file_path.open("a", encoding="utf-8").write(
                 json.dumps({"event_type": "bulk", "data": {"i": i}}) + "\n"

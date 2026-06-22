@@ -1,31 +1,11 @@
 import json
-from pathlib import Path
 
-import pytest
 
 from sts2_autotest.dsl.fluent import define
 from sts2_autotest.dsl.assertions import (
-    advance_dialogue,
-    choose_event,
-    choose_game_mode,
-    choose_map_node,
-    combat_basic_policy,
-    embark,
-    end_turn,
-    enemy_took_exact_hits,
-    enter_combat,
-    game_reached_state,
-    give_card,
     no_crash_detected,
-    has_travelable_node,
     play_card,
-    return_to_menu,
-    select_character,
-    skip_card_reward,
-    start_new_run,
 )
-from sts2_autotest.common.state import GameScreen
-from sts2_autotest.core.action_model import ActionDescriptor
 
 # Given: 处于战斗状态
 def test_tc_gawain_magic_draw(autotest, _session_loop):

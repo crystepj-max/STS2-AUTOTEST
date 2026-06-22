@@ -16,7 +16,7 @@ from typing import Optional
 import yaml
 
 from sts2_autotest.common.spec_models import ProjectConfig, SuiteSpec, TestSpec
-from sts2_autotest.core.markdown_parser import MarkdownParser, ParsingError
+from sts2_autotest.core.markdown_parser import MarkdownParser
 
 
 class WorkspaceError(Exception):

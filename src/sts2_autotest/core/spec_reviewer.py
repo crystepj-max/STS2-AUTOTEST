@@ -207,7 +207,7 @@ class SpecReviewer:
         lines = [f"# {spec.id} {spec.title}", ""]
         lines.append("## Metadata")
         lines.append(f"- id: {spec.id}")
-        lines.append(f"- level: case")
+        lines.append("- level: case")
         if spec.tags:
             lines.append(f"- tags: {', '.join(spec.tags)}")
         lines.append(f"- priority: {spec.priority}")

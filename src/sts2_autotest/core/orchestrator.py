@@ -4,9 +4,9 @@ import asyncio
 import signal
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
-from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, HealthStatus
+from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
@@ -15,12 +15,11 @@ from sts2_autotest.core.data_validator import validate_game_state
 from sts2_autotest.core.lock_manager import LockManager
 from sts2_autotest.core.progress import ProgressRecord, clear_progress, save_progress
 from sts2_autotest.core.evidence_hooks import EvidenceHooks, StubEvidenceHooks
-from sts2_autotest.common.types import DataValidationSettings, SessionStatus
+from sts2_autotest.common.types import SessionStatus
 from sts2_autotest.core.recovery import (
     DefaultRecoveryStrategy,
     FailureRecord,
     RecoveryAction,
-    RecoveryDecision,
     RecoveryStrategy,
     crash_signature,
     is_p0_exception,
@@ -564,9 +563,9 @@ class TestOrchestrator:
                     "Case %s: dispatching to programmatic runner",
                     case_id,
                 )
-                result = await definition.runner(self)
-                self.evidence.on_case_end(result)
-                return result
+                runner_result = await definition.runner(self)
+                self.evidence.on_case_end(runner_result)
+                return runner_result
 
             # ActionDescriptor sequence (simple linear flow)
             if definition.actions:
@@ -614,9 +613,9 @@ class TestOrchestrator:
 
         except StateTransitionError as exc:
             logger.warning("Case %s: illegal transition — %s", case_id, exc)
-            result: TestResult = TestResult(case_id, "fail", str(exc))
-            self.evidence.on_case_end(result)
-            return result
+            transition_result = TestResult(case_id, "fail", str(exc))
+            self.evidence.on_case_end(transition_result)
+            return transition_result
 
         except STS2Error as exc:
             return await self._handle_failure(case_id, exc)

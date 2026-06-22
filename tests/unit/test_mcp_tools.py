@@ -1,14 +1,12 @@
 """Unit tests for MCP tool implementations."""
 
-import json
-import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 import pytest
 
-from sts2_autotest.cli.mcp_protocol import McpError, McpTool
+from sts2_autotest.cli.mcp_protocol import McpError
 from sts2_autotest.cli.mcp_tools import (
     ToolRegistry,
     handle_health_check,

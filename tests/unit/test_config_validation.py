@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from sts2_autotest.config.errors import ConfigValidationError
 from sts2_autotest.config.loader import load_config
-from sts2_autotest.config.schema import ExecutionConfig, STS2Config
+from sts2_autotest.config.schema import ExecutionConfig
 
 
 class TestConfigValidationError:

@@ -12,7 +12,7 @@ import asyncio
 from dataclasses import dataclass
 import inspect
 import re
-from typing import Any, Callable
+from typing import Callable
 
 from sts2_autotest.common.state import GameScreen
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult

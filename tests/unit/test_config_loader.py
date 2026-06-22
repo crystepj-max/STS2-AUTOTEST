@@ -1,7 +1,6 @@
 """Tests for config/loader.py — four-layer inheritance, env vars, YAML."""
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 

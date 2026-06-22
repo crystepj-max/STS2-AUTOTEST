@@ -107,10 +107,10 @@ async def test_level3_terminate_after_three_crashes() -> None:
     orch = TestOrchestrator(adapter=_make_adapter(), recovery=strategy)
     assert not orch._crashed
 
-    r1 = await orch._handle_failure("TC-001", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 1"))
+    await orch._handle_failure("TC-001", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 1"))
     assert not orch._crashed
 
-    r2 = await orch._handle_failure("TC-002", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 2"))
+    await orch._handle_failure("TC-002", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 2"))
     assert not orch._crashed
 
     r3 = await orch._handle_failure("TC-003", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 3"))

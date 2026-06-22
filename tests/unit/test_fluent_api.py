@@ -11,7 +11,7 @@ from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, Healt
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import TestResult
 from sts2_autotest.core.orchestrator import TestOrchestrator
-from sts2_autotest.dsl import FluentBuilder, define
+from sts2_autotest.dsl import define
 from sts2_autotest.dsl.assertions import (
     end_turn,
     enemy_hp_decreased_by,

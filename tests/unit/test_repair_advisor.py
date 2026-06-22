@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 
 from sts2_autotest.common.evidence import (
     FailureInfo,
-    RepairReport,
     RepairSuggestion,
     SummaryJson,
     RunInfo,

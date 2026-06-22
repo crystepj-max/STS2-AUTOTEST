@@ -401,12 +401,12 @@ class AgentAdapter:
                     state_changed=False,
                     detail="give_card requires card_id",
                 )
-            payload = {
+            console_payload = {
                 "action": "run_console_command",
                 "command": f"card {card_id} hand",
             }
             try:
-                data = await self._request("POST", self._act_path, payload)
+                data = await self._request("POST", self._act_path, console_payload)
             except STS2Error as exc:
                 if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
                     return ActionResult(status="timeout", state_changed=False, detail=exc.message)

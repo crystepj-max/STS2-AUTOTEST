@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from sts2_autotest.common.evidence import FailureInfo
 from sts2_autotest.common.logging import get_logger
-from sts2_autotest.common.types import CaptureResult, ScreenCaptureProtocol
+from sts2_autotest.common.types import ScreenCaptureProtocol
 from sts2_autotest.core.action_model import TestResult
 
 logger = get_logger("core.evidence_hooks")
@@ -188,10 +188,13 @@ class RealEvidenceHooks:
             failed = summary.get("failed", 0)
             crashed = summary.get("crashed", 0)
             run_result = "failed" if (failed + crashed) > 0 else "passed"
-            pack_result = self._packager.create_pack(
-                run_result=run_result,
-                failure=self._last_failure,
-            )
+            if self._last_failure is None:
+                pack_result = self._packager.create_pack(run_result=run_result)
+            else:
+                pack_result = self._packager.create_pack(
+                    run_result=run_result,
+                    failure=self._last_failure,
+                )
             self._last_failure = None  # Reset for next session
             # Export artifact (Story 4.7, FR54) — non-blocking
             try:

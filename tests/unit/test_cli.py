@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pytest
 
 from sts2_autotest.cli.main import (
-    DEFAULT_EVIDENCE_DIR,
     _check_env,
     _create_adapter,
     _create_parser,

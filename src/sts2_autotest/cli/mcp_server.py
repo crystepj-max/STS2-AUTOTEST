@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, cast
 
 from sts2_autotest.cli.health_server import (
     _HttpServer,
@@ -23,11 +23,8 @@ from sts2_autotest.cli.health_server import (
     _HTML_500,
 )
 from sts2_autotest.cli.mcp_protocol import (
-    MCP_PROTOCOL_VERSION,
     INTERNAL_ERROR,
-    INVALID_REQUEST,
     METHOD_NOT_FOUND,
-    PARSE_ERROR,
     McpError,
     McpResponse,
     McpServerInfo,
@@ -106,7 +103,7 @@ class McpServer(_HttpServer):
             req = decode_request(body)
         except McpError as exc:
             err_resp = make_error_response(None, exc.code, exc.message, exc.data)
-            return json.loads(encode_response(err_resp))
+            return cast(dict[str, Any], json.loads(encode_response(err_resp)))
 
         method = req.method
         try:
@@ -134,7 +131,7 @@ class McpServer(_HttpServer):
         except Exception as exc:
             resp = make_error_response(req.id, INTERNAL_ERROR, f"Internal error: {exc}")
 
-        return json.loads(encode_response(resp))
+        return cast(dict[str, Any], json.loads(encode_response(resp)))
 
     # -- Public HTTP interface used by _HttpServer --
 

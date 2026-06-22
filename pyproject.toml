@@ -24,11 +24,13 @@ dev = [
     "mypy>=1.0",
     "import-linter>=2.0",
     "pytest-mock>=3.0",
+    "types-psutil>=5.9",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
 autotest = "sts2_autotest.cli.main:cli"
-lint-imports = "importlinter.cli:main"
+lint-imports = "importlinter.cli:lint_imports_command"
 
 [project.entry-points.pytest11]
 sts2_autotest = "sts2_autotest.pytest_plugin.plugin"

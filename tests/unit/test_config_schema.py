@@ -10,7 +10,6 @@ from sts2_autotest.config.schema import (
     ExecutionConfig,
     FrameworkConfig,
     STS2Config,
-    StateMachineConfig,
 )
 
 

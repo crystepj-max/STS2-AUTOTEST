@@ -18,17 +18,19 @@ import shutil
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
 import asyncio
 import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import ModuleType
+from typing import Any
 from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.core.steam import SteamController
 from sts2_autotest.report_html import write_html_report
 
+yaml: ModuleType | None
 try:
-    import yaml  # type: ignore
+    import yaml
 except Exception:  # pragma: no cover
     yaml = None
 
@@ -113,7 +115,7 @@ def _normalize_window_token(value: Any) -> str:
 def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
     """Return the best matching macOS on-screen window id and size."""
     try:
-        import Quartz
+        import Quartz  # type: ignore[import-not-found]
     except Exception:
         return None
 
@@ -165,7 +167,7 @@ def _capture_macos_window_png(path: Path, window_title: str) -> bool:
     """Capture a specific macOS window directly into a PNG file."""
     try:
         import Quartz
-        from AppKit import NSBitmapImageRep, NSPNGFileType
+        from AppKit import NSBitmapImageRep, NSPNGFileType  # type: ignore[import-not-found]
     except Exception:
         script = r"""
 from pathlib import Path
@@ -304,7 +306,7 @@ def _find_build_output(project_path: Path) -> Path | None:
     Skips directories that cannot be stat'd (permission errors).
     """
     _EXCLUDE_PARTS = {".git", ".claude", ".agent-runs", "obj", "node_modules"}
-    candidates: list[Path] = []
+    candidates: list[tuple[Path, float]] = []
     for pattern in ["**/bin/Release", "**/bin/Debug"]:
         for d in project_path.glob(pattern):
             if not d.is_dir():
@@ -647,7 +649,7 @@ def _detect_os() -> str:
         return f"Windows {platform.win32_ver()[0]}"
     if _IS_LINUX:
         try:
-            import distro
+            import distro  # type: ignore[import-not-found]
             return f"{distro.name()} {distro.version()}"
         except Exception:
             return f"Linux {platform.release()}"
@@ -788,7 +790,7 @@ class TestAgentRunner:
             print(f'[agent-test] WARNING: Screenshot failed ({name}): {exc}', file=sys.__stdout__)
             return ''
 
-    def _save_state_snapshot(self, step_name: str, state_dict: dict) -> str:
+    def _save_state_snapshot(self, step_name: str, state_dict: dict[str, Any]) -> str:
         """Save a state JSON snapshot to state dir.
 
         Returns the relative evidence path (for the report).
@@ -1172,7 +1174,7 @@ class TestAgentRunner:
                 asyncio.run(agent.wait_until_actionable(timeout=15))
                 if self._is_character_select_ready(agent):
                     return
-            last_detail = result.detail
+            last_detail = result.detail or ""
             time.sleep(2)
         raise _Failed(f"Navigation failed at 'open_character_select': {last_detail}")
 
@@ -1194,7 +1196,7 @@ class TestAgentRunner:
         option_index = self._resolve_gawain_character_option_index(character_select_state)
         self._act_and_wait(agent, "select_character", {"option_index": option_index})
 
-    def _advance_to_first_combat(self, agent: AgentAdapter, state_dict: dict[str, Any]) -> dict:
+    def _advance_to_first_combat(self, agent: AgentAdapter, state_dict: dict[str, Any]) -> dict[str, Any]:
         """Advance through deterministic pre-combat screens until combat starts."""
         for _ in range(12):
             screen = str(state_dict.get("screen", "")).upper()
@@ -1215,7 +1217,7 @@ class TestAgentRunner:
             raise _Failed(f"Expected COMBAT, EVENT, or MAP screen, got {state_dict.get('screen')}")
         raise _Failed(f"Expected COMBAT screen, got {state_dict.get('screen')}")
 
-    def _navigate_to_first_combat(self, agent: AgentAdapter) -> dict:
+    def _navigate_to_first_combat(self, agent: AgentAdapter) -> dict[str, Any]:
         """Navigate from MAIN_MENU to first combat. Raises _Failed on failure."""
         state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
         if not self._is_existing_gawain_run_state(state_dict):
@@ -1226,8 +1228,8 @@ class TestAgentRunner:
         return self._advance_to_first_combat(agent, state_dict)
 
     def _verify_card_and_screenshot(
-        self, agent: AgentAdapter, card: dict, card_index: int, target_index: int,
-    ) -> dict:
+        self, agent: AgentAdapter, card: dict[str, Any], card_index: int, target_index: int,
+    ) -> dict[str, Any]:
         """Play one card: screenshot before, play, verify, screenshot after.
 
         card is a dict from combat.hand[] with card_id, name, index, energy_cost,
@@ -1310,7 +1312,7 @@ class TestAgentRunner:
             result["error"] = "; ".join(errors)
         return result
 
-    def _build_text_only_card_result(self, card: dict, card_index: int, state_dict: dict[str, Any]) -> dict[str, Any]:
+    def _build_text_only_card_result(self, card: dict[str, Any], card_index: int, state_dict: dict[str, Any]) -> dict[str, Any]:
         """Capture text evidence for a card that is visible but not currently playable."""
         card_id = card.get("card_id", f"card_{card_index}")
         card_name = card.get("name", card_id)
@@ -1333,7 +1335,7 @@ class TestAgentRunner:
         self._save_state_snapshot(f"card-{card_id}-before", state_dict)
         return result
 
-    def _resolve_current_hand_card(self, state_dict: dict[str, Any], target_card: dict) -> dict[str, Any] | None:
+    def _resolve_current_hand_card(self, state_dict: dict[str, Any], target_card: dict[str, Any]) -> dict[str, Any] | None:
         """Resolve the current copy of a hand card by id, preferring exact index when still valid."""
         combat = state_dict.get("combat", {}) or {}
         hand = combat.get("hand", []) if isinstance(combat, dict) else []

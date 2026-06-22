@@ -1,9 +1,7 @@
 """Tests for core/notifier.py — platform notifier implementations and factory."""
 
-import platform
 from unittest import mock
 
-import pytest
 
 from sts2_autotest.common.types import DesktopNotifier
 

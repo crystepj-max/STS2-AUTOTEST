@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from unittest import mock
 
-import pytest
 
 
 class TestPytestSessionfinish:
@@ -222,7 +221,7 @@ class TestNotificationMessageHelpers:
         The lazy-notifier pattern in _register_notification_callback
         must not propagate exceptions from create_desktop_notifier().
         """
-        from sts2_autotest.pytest_plugin.hooks import _default_registry, register
+        from sts2_autotest.pytest_plugin.hooks import _default_registry
         from sts2_autotest.pytest_plugin.plugin import (
             _register_notification_callback,
         )

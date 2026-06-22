@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 import yaml
 from pathlib import Path
-from sts2_autotest.common.spec_models import ProjectConfig, WorkspaceConfig
 from sts2_autotest.core.workspace import Workspace, WorkspaceError
 
 

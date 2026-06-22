@@ -8,7 +8,8 @@ for each test.
 import asyncio
 import os
 import platform
-from typing import Any, Generator
+from collections.abc import Callable
+from typing import Generator, Literal
 
 import pytest
 
@@ -79,7 +80,7 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
         transport_raw = os.environ.get("STS2_ADAPTER__AGENT__TRANSPORT", "http")
         if transport_raw not in ("http", "mcp"):
             raise ValueError("STS2_ADAPTER__AGENT__TRANSPORT must be 'http' or 'mcp'")
-        transport: str = transport_raw  # type: ignore[assignment]
+        transport: Literal["http", "mcp"] = "mcp" if transport_raw == "mcp" else "http"
         endpoint = os.environ.get("STS2_ADAPTER__AGENT__ENDPOINT", "http://localhost:8080")
         mcp_client = (
             FastMcpAgentClient(
@@ -95,12 +96,12 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
             debug_actions=os.environ.get("STS2_ADAPTER__AGENT__DEBUG_ACTIONS", "false").lower()
             in ("true", "1", "yes"),
             mcp_client=mcp_client,
-            transport=transport,  # type: ignore[arg-type]
+            transport=transport,
         )
     return CliModAdapter()
 
 
-def _create_adapter_factory():
+def _create_adapter_factory() -> Callable[[], GameAdapterProtocol]:
     """Return a callable that creates fresh adapter instances (for recovery)."""
     if _is_agent_enabled():
         return _create_adapter_from_env

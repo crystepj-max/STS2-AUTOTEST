@@ -1,10 +1,8 @@
 """Tests for adapters/discovery.py — STS2-Cli-Mod CLI discovery."""
 
 import os
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from sts2_autotest.adapters.discovery import discover_sts2_cli
 

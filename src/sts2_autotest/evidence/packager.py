@@ -18,7 +18,6 @@ from sts2_autotest.common.evidence import (
     SCHEMA_VERSION,
     ArtifactsInfo,
     EnvironmentInfo,
-    EvidencePack,
     FailureInfo,
     RunInfo,
     SummaryJson,
@@ -294,7 +293,7 @@ class EvidencePackager:
             "passed": "PASS",
             "failed": "FAIL",
         }.get(run.result, run.result.upper())
-        lines.append(f"## Test Run")
+        lines.append("## Test Run")
         lines.append("")
         lines.append(f"- **Result:** {result_marker}")
         lines.append(f"- **Duration:** {run.duration_ms} ms")

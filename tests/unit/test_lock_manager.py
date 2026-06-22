@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from sts2_autotest.core.lock_manager import LockManager
 
@@ -23,7 +22,7 @@ class TestLockManagerAcquire:
         lock_path = tmp_path / "test.lock"
         lm = LockManager(str(lock_path))
 
-        with patch("portalocker.lock") as mock_lock:
+        with patch("portalocker.lock"):
             result = lm.acquire_lock(timeout=0)
 
         assert result is True

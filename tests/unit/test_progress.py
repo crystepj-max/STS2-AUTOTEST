@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import zlib
 from pathlib import Path
 
@@ -216,8 +215,6 @@ class TestAtomicWrite:
         path = tmp_path / "atomic.json"
         record1 = _make_record(session_id="first")
         assert save_progress(record1, path) is True
-        first_content = path.read_bytes()
-
         record2 = _make_record(session_id="second")
         assert save_progress(record2, path) is True
 

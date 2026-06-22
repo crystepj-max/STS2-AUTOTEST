@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -450,7 +449,6 @@ def _ensure_output_dir_writable(output_dir: str) -> None:
 
 def review_cmd(args: Any) -> int:
     """Review natural language test specs and print report."""
-    from sts2_autotest.core.workspace import Workspace
     from sts2_autotest.core.markdown_parser import MarkdownParser
     from sts2_autotest.core.spec_reviewer import SpecReviewer
 
@@ -892,7 +890,7 @@ def _check_env() -> dict[str, dict[str, str]]:
         checks["python"] = {"status": "FAIL", "message": f"need >=3.11, got {pv}"}
 
     # Steam installed — check default paths + libraryfolders.vdf
-    from sts2_autotest.adapters.discovery import steam_roots, find_game_dir
+    from sts2_autotest.adapters.discovery import steam_roots
     roots = steam_roots()
     steam_exe = next(
         (r / "steam.exe" for r in roots if (r / "steam.exe").exists()),

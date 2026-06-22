@@ -4,14 +4,12 @@ import json
 import pytest
 
 from sts2_autotest.cli.mcp_protocol import (
-    McpRequest,
     McpResponse,
     McpError,
     McpTool,
     decode_request,
     encode_response,
     make_error_response,
-    MCP_PROTOCOL_VERSION,
 )
 
 
