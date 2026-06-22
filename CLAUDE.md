@@ -151,7 +151,6 @@ src/sts2_autotest/
 |--------|------|------|
 | P1 | 真实环境验收补跑 | B25 端到端 + Epic5 4h 长跑 |
 | P2 | B15 安全沙箱（Windows Job Objects + ACL） | Story 4.8 推迟 |
-| P4 | B8 Visual QA Engine（OCR + OpenCV + VLM） | 视觉审查（设计稿已就绪） |
 | P4 | B9 多人冒烟测试 | 双 Runner 编排 |
 | P5 | B6 覆盖率报告 | 按游戏场景维度 |
 

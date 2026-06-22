@@ -1,6 +1,9 @@
 """Tests for cli/main.py — CLI entry points."""
 
+import os
 import json
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +18,12 @@ from sts2_autotest.cli.main import (
     queue_cmd,
     report_cmd,
     run_cmd,
+    visual_qa_cmd,
+)
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
 )
 
 
@@ -73,6 +82,27 @@ class TestCLIParser:
     def test_progress_command_parses(self) -> None:
         args = _create_parser().parse_args(["progress"])
         assert args.command == "progress"
+
+    def test_visual_qa_command_parses(self) -> None:
+        args = _create_parser().parse_args(
+            [
+                "visual-qa",
+                "--image",
+                "/tmp/example.png",
+                "--ocr-provider",
+                "tesseract",
+                "--output",
+                "/tmp/visual-qa.json",
+            ]
+        )
+        assert args.command == "visual-qa"
+        assert args.image == "/tmp/example.png"
+        assert args.ocr_provider == "tesseract"
+        assert args.health_provider == "disabled"
+        assert args.low_variance_threshold == DEFAULT_LOW_VARIANCE_THRESHOLD
+        assert args.low_brightness_threshold == DEFAULT_LOW_BRIGHTNESS_THRESHOLD
+        assert args.high_brightness_threshold == DEFAULT_HIGH_BRIGHTNESS_THRESHOLD
+        assert args.output == "/tmp/visual-qa.json"
 
 
 class TestCLICommands:
@@ -196,6 +226,71 @@ class TestCLICommands:
 
         args = _create_parser().parse_args(["progress"])
         assert progress_cmd(args) == 1
+
+    def test_visual_qa_cmd_outputs_json_for_single_image(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        image = tmp_path / "single.png"
+        image.write_bytes(b"png")
+        args = _create_parser().parse_args(["visual-qa", "--image", str(image)])
+
+        class FakeEngine:
+            def analyze_screenshot(self, image_path: Path) -> object:
+                from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
+
+                assert image_path == image
+                return ScreenshotOcrAnalysis(status="passed", provider="disabled")
+
+        with patch("sts2_autotest.cli.main._build_visual_qa_engine", return_value=FakeEngine()):
+            result = visual_qa_cmd(args)
+
+        assert result == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["summary"] == {
+            "total": 1,
+            "passed": 1,
+            "warning": 0,
+            "skipped": 0,
+            "findings_total": 0,
+            "screenshots_with_findings": 0,
+            "providers": {"disabled": 1},
+            "status_by_provider": {
+                "disabled": {"passed": 1, "warning": 0, "skipped": 0},
+            },
+            "findings": {},
+            "findings_by_severity": {},
+        }
+        assert payload["screenshots"][str(image)]["status"] == "passed"
+
+    def test_visual_qa_cmd_writes_output_file_when_requested(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        image = tmp_path / "single.png"
+        image.write_bytes(b"png")
+        output = tmp_path / "visual-qa.json"
+        args = _create_parser().parse_args(
+            ["visual-qa", "--image", str(image), "--output", str(output)]
+        )
+
+        class FakeEngine:
+            def analyze_screenshot(self, image_path: Path) -> object:
+                from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
+
+                assert image_path == image
+                return ScreenshotOcrAnalysis(status="passed", provider="disabled")
+
+        with patch("sts2_autotest.cli.main._build_visual_qa_engine", return_value=FakeEngine()):
+            result = visual_qa_cmd(args)
+
+        assert result == 0
+        stdout_payload = json.loads(capsys.readouterr().out)
+        file_payload = json.loads(output.read_text(encoding="utf-8"))
+        assert stdout_payload == file_payload
+
+    def test_visual_qa_cmd_returns_one_when_image_missing(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        image = tmp_path / "missing.png"
+        args = _create_parser().parse_args(["visual-qa", "--image", str(image)])
+
+        result = visual_qa_cmd(args)
+
+        assert result == 1
+        assert "Image file not found" in capsys.readouterr().out
 
 
 class TestCreateAdapter:
@@ -345,6 +440,35 @@ class TestCLIEntryPoint:
     def test_cli_function_exists(self) -> None:
         from sts2_autotest.cli.main import cli
         assert callable(cli)
+
+    def test_module_entrypoint_dispatches_visual_qa(self, tmp_path: Path) -> None:
+        image = tmp_path / "single.png"
+        image.write_bytes(b"png")
+        output = tmp_path / "visual-qa.json"
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(Path.cwd() / "src"),
+        }
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "sts2_autotest.cli.main",
+                "visual-qa",
+                "--image",
+                str(image),
+                "--output",
+                str(output),
+            ],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+
+        assert result.returncode == 0
+        assert output.is_file()
 
 
 # ── resume / progress tests (Story 4.5, AC1-AC4) ────────────

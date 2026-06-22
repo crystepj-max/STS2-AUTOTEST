@@ -640,6 +640,53 @@ STS2_FRAMEWORK__LOG_BACKUP_DIR=C:\path\backup
 
 导出 artifact 时会生成 `reports/junit.xml`，便于 CI 系统消费。
 
+HTML 测试报告会在截图旁展示 Visual QA 截图辅助分析。该分析用于提示截图文本风险和截图健康风险，不改变测试结果。
+
+当前稳定版包含：
+
+- Tesseract OCR：提取截图文本，并提示 localization 裸 key、missing localization 占位和未替换 token。
+- OpenCV 健康检查：提示低方差、过暗、过亮、不可读截图。
+
+Visual QA 的 warning 不改变测试结论。报告仍以测试步骤、断言和游戏状态为准。
+
+当 OCR provider 未配置或不可用时，报告会显示未执行或跳过，不影响 `test-report.html` 生成。
+
+可通过配置启用本机 Tesseract OCR：
+
+```dotenv
+STS2_FRAMEWORK__VISUAL_QA_OCR_PROVIDER=tesseract
+STS2_FRAMEWORK__VISUAL_QA_TESSERACT_CMD=tesseract
+STS2_FRAMEWORK__VISUAL_QA_TESSERACT_LANG=chi_sim+eng
+STS2_FRAMEWORK__VISUAL_QA_TIMEOUT_SECONDS=10
+```
+
+Tesseract 和语言包不是 STS2-AUTOTEST 的硬依赖。未安装命令、缺少语言包或执行超时时，OCR 分析会显示为未执行，不改变测试结果。
+
+单张截图也可以单独分析：
+
+```bash
+PYTHONPATH=src .venv/bin/python -m sts2_autotest.cli.main visual-qa \
+  --image tests/fixtures/visual_qa/gawain-card-user-screenshot.jpg \
+  --ocr-provider tesseract \
+  --health-provider opencv \
+  --output /tmp/visual-qa.json
+```
+
+相关配置字段：
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `framework.visual_qa_enabled` | `true` | 是否在 runner 报告阶段执行 Visual QA。 |
+| `framework.visual_qa_ocr_provider` | `disabled` | OCR provider，可选 `disabled` / `tesseract`。 |
+| `framework.visual_qa_tesseract_cmd` | `tesseract` | Tesseract 命令路径。 |
+| `framework.visual_qa_tesseract_lang` | `chi_sim+eng` | OCR 语言包。 |
+| `framework.visual_qa_timeout_seconds` | `10.0` | OCR 超时时间。 |
+| `framework.visual_qa_health_enabled` | `true` | 是否启用截图健康检查。 |
+| `framework.visual_qa_health_provider` | `disabled` | 健康检查 provider，可选 `disabled` / `opencv`。 |
+| `framework.visual_qa_low_variance_threshold` | `1.0` | 低方差阈值。 |
+| `framework.visual_qa_low_brightness_threshold` | `5.0` | 过暗阈值。 |
+| `framework.visual_qa_high_brightness_threshold` | `250.0` | 过亮阈值。 |
+
 ### 13.4 版本可观测性
 
 STS2-AUTOTEST 采用统一滚动升级策略：工作区内只维护一个当前生效版本，所有接入的 MOD 项目直接跟随。为保证升级问题可追溯，所有核心测试产物都会记录当前 `autotest version`（来源为 `src/sts2_autotest/__init__.py` 中的 `__version__`）：

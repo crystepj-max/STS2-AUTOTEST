@@ -33,9 +33,9 @@ STS2-AUTOTEST 是面向《杀戮尖塔 2》（Slay the Spire 2）Mod 的端到�
 - Epic 3（Evidence & Observability）：`done`
 - Epic 4（Resilience & Operational Safety）：`done`
 - Epic 5（Runtime Control）：`done`
-- Beta 扩展（B7 AgentAdapter、B10 修复建议、B11 CI/CD、B13 桌面通知、B17 Health Check HTTP、B25 NL 流水线）：`done`
+- Beta 扩展（B7 AgentAdapter、B8 Visual QA 稳定版、B10 修复建议、B11 CI/CD、B13 桌面通知、B17 Health Check HTTP、B25 NL 流水线）：`done`
 
-剩余事项以 `docs/beta-roadmap.md` 为准（主要为：真实环境验收补跑、B15 安全沙箱、B8 Visual QA、B9 多人冒烟、B6 覆盖率报告）。
+剩余事项以 `docs/beta-roadmap.md` 为准（主要为：真实环境验收补跑、B15 安全沙箱、B9 多人冒烟、B6 覆盖率报告）。
 
 ## 必须暂停并请求决策的情况
 

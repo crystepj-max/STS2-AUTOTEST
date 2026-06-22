@@ -11,6 +11,11 @@ from sts2_autotest.config.schema import (
     FrameworkConfig,
     STS2Config,
 )
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
 
 
 class TestFrameworkConfig:
@@ -22,6 +27,45 @@ class TestFrameworkConfig:
         assert cfg.screenshot_dir == "tests/output/screenshots"
         assert cfg.evidence_dir == "tests/output"
         assert cfg.evidence_retention == 20
+
+    def test_visual_qa_defaults(self) -> None:
+        cfg = FrameworkConfig()
+        assert cfg.visual_qa_enabled is True
+        assert cfg.visual_qa_ocr_provider == "disabled"
+        assert cfg.visual_qa_tesseract_cmd == "tesseract"
+        assert cfg.visual_qa_tesseract_lang == "chi_sim+eng"
+        assert cfg.visual_qa_timeout_seconds == 10.0
+        assert cfg.visual_qa_health_enabled is True
+        assert cfg.visual_qa_health_provider == "disabled"
+        assert cfg.visual_qa_low_variance_threshold == DEFAULT_LOW_VARIANCE_THRESHOLD
+        assert cfg.visual_qa_low_brightness_threshold == DEFAULT_LOW_BRIGHTNESS_THRESHOLD
+        assert cfg.visual_qa_high_brightness_threshold == DEFAULT_HIGH_BRIGHTNESS_THRESHOLD
+
+    def test_visual_qa_provider_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_ocr_provider="easyocr")
+
+    def test_visual_qa_health_provider_rejects_unknown_value(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_health_provider="pil")
+
+    def test_visual_qa_low_variance_threshold_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_low_variance_threshold=0)
+
+    def test_visual_qa_low_brightness_threshold_must_be_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            FrameworkConfig(visual_qa_low_brightness_threshold=0)
+
+    def test_visual_qa_brightness_thresholds_must_be_ordered(self) -> None:
+        with pytest.raises(
+            ValidationError,
+            match="visual_qa_low_brightness_threshold must be less than",
+        ):
+            FrameworkConfig(
+                visual_qa_low_brightness_threshold=250.0,
+                visual_qa_high_brightness_threshold=5.0,
+            )
 
     def test_valid_log_levels(self) -> None:
         for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):

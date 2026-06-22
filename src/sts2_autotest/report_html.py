@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
+import os
 from pathlib import Path
 from typing import Any
+
+from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
+
+
+def _h(value: Any) -> str:
+    return html.escape(str(value), quote=True)
 
 
 def _badge_kind(result: str) -> str:
@@ -48,13 +56,59 @@ def build_report_html(config: dict[str, Any]) -> str:
         badge = _badge_kind(result)
         detail = str(step.get("detail", ""))
         return f"""<div class="step"><div class="step-header" onclick="toggle(this)">
-  <span class="step-name">{index + 1}. {step.get('name', 'Execute')}</span>
-  <span class="badge badge-{badge}">{result}</span>
+  <span class="step-name">{index + 1}. {_h(step.get('name', 'Execute'))}</span>
+  <span class="badge badge-{badge}">{_h(result)}</span>
 </div>
 <div class="step-evidence">
-  <p>{detail}</p>
-  <pre class="log"># {test_case.get('name', '')} - 步骤 {index + 1}\n# 结果: {result}\n# {detail}</pre>
+  <p>{_h(detail)}</p>
+  <pre class="log"># {_h(test_case.get('name', ''))} - 步骤 {index + 1}\n# 结果: {_h(result)}\n# {_h(detail)}</pre>
 </div></div>"""
+
+    def ocr_html(analysis: Any) -> str:
+        if isinstance(analysis, ScreenshotOcrAnalysis):
+            analysis = analysis.model_dump(mode="json")
+        if not isinstance(analysis, dict):
+            return ""
+        status = str(analysis.get("status", "skipped"))
+        provider = str(analysis.get("provider", "unknown"))
+        message = str(analysis.get("message") or "")
+        findings = analysis.get("findings", [])
+        if not isinstance(findings, list):
+            findings = []
+
+        if status == "passed":
+            body = "视觉辅助分析：未发现风险"
+        elif status == "warning":
+            rows = []
+            for finding in findings:
+                if not isinstance(finding, dict):
+                    continue
+                severity = str(finding.get("severity", "warning"))
+                text = str(finding.get("text", ""))
+                finding_message = str(finding.get("message", ""))
+                meta_parts = []
+                confidence = finding.get("confidence")
+                bbox = finding.get("bbox")
+                if confidence is not None:
+                    meta_parts.append(f"confidence={confidence}")
+                if bbox is not None:
+                    meta_parts.append(f"bbox={bbox}")
+                meta_text = f" <span class=\"ocr-meta\">({_h(', '.join(meta_parts))})</span>" if meta_parts else ""
+                rows.append(
+                    f"<li>[{_h(severity)}] {_h(finding_message)}: <code>{_h(text)}</code>{meta_text}</li>"
+                )
+            joined = "".join(rows)
+            body = f"视觉辅助分析：发现 {len(rows)} 条可疑项<ul>{joined}</ul>"
+        else:
+            suffix = f" - {_h(message)}" if message else ""
+            body = f"视觉辅助分析：未执行{suffix}"
+
+        return (
+            '<div class="ocr-box">'
+            f"<div>{body}</div>"
+            f'<div class="ocr-provider">Provider: {_h(provider)}</div>'
+            "</div>"
+        )
 
     def card_html(card: dict[str, Any]) -> str:
         before_img = str(card.get("screenshot_before", ""))
@@ -62,18 +116,20 @@ def build_report_html(config: dict[str, Any]) -> str:
         before_src = _b64img(cfg_dir / before_img) if before_img else ""
         after_src = _b64img(cfg_dir / after_img) if after_img else ""
         exp_items = card.get("exp", {})
-        exp_str = "、".join(f"{key}={value}" for key, value in exp_items.items()) or "无直接数值校验"
+        exp_str = "、".join(f"{_h(key)}={_h(value)}" for key, value in exp_items.items()) or "无直接数值校验"
         result = str(card.get("result", "跳过"))
         badge = _badge_kind(result)
+        before_ocr = ocr_html(card.get("screenshot_before_ocr"))
+        after_ocr = ocr_html(card.get("screenshot_after_ocr"))
         return f"""<div class="step"><div class="step-header" onclick="toggle(this)">
-  <span class="step-name">{card.get('name', '')} ({card.get('card_id', '')})</span>
-  <span class="badge badge-{badge}">{result}</span>
+  <span class="step-name">{_h(card.get('name', ''))} ({_h(card.get('card_id', ''))})</span>
+  <span class="badge badge-{badge}">{_h(result)}</span>
 </div>
 <div class="step-evidence">
   <p>期望: {exp_str}</p>
   <div class="img-row">
-    <div class="img-box"><div class="img-label">打出前</div>{f'<img src="{before_src}">' if before_src else '<i>无截图</i>'}</div>
-    <div class="img-box"><div class="img-label">打出后</div>{f'<img src="{after_src}">' if after_src else '<i>无截图</i>'}</div>
+    <div class="img-box"><div class="img-label">打出前</div>{f'<img src="{before_src}">' if before_src else '<i>无截图</i>'}{before_ocr}</div>
+    <div class="img-box"><div class="img-label">打出后</div>{f'<img src="{after_src}">' if after_src else '<i>无截图</i>'}{after_ocr}</div>
   </div>
 </div></div>"""
 
@@ -84,25 +140,25 @@ def build_report_html(config: dict[str, Any]) -> str:
 {''.join(card_html(card) for card in card_entries)}</div>"""
 
     def case_html(test_case: dict[str, Any]) -> str:
-        assertions = "".join(f"<li>{assertion}</li>" for assertion in test_case.get("assertions", []))
+        assertions = "".join(f"<li>{_h(assertion)}</li>" for assertion in test_case.get("assertions", []))
         steps = "".join(step_html(test_case, step, index) for index, step in enumerate(test_case.get("steps", [])))
         result = str(test_case.get("result", "跳过"))
         badge = _badge_kind(result)
         return f"""<div class="case-card">
   <div class="case-header" onclick="toggleCase(this)">
-    <div class="case-title"><span class="case-id">{test_case.get('id', '')}</span><span class="case-name">{test_case.get('name', '')}</span></div>
-    <span class="badge badge-{badge}">{result}</span>
+    <div class="case-title"><span class="case-id">{_h(test_case.get('id', ''))}</span><span class="case-name">{_h(test_case.get('name', ''))}</span></div>
+    <span class="badge badge-{badge}">{_h(result)}</span>
   </div>
   <div class="case-body">
-    <div class="case-section"><div class="case-section-title">测试场景</div><p>{test_case.get('scenario', '')}</p></div>
+    <div class="case-section"><div class="case-section-title">测试场景</div><p>{_h(test_case.get('scenario', ''))}</p></div>
     <div class="case-section"><div class="case-section-title">断言条件</div><ul>{assertions}</ul></div>
-    <div class="case-section"><div class="case-section-title">实际结果</div><p>{test_case.get('actual', '')}</p></div>
+    <div class="case-section"><div class="case-section-title">实际结果</div><p>{_h(test_case.get('actual', ''))}</p></div>
     <div class="case-section"><div class="case-section-title">测试步骤（共 {len(test_case.get('steps', []))} 步）</div>{steps}</div>
     {card_section(test_case.get("card_results", []))}
   </div></div>"""
 
     badge_row = "".join(
-        f'<span class="badge badge-{_badge_kind(str(case.get("result", "跳过")))}">{case.get("id", "")}: {case.get("result", "")}</span>'
+        f'<span class="badge badge-{_badge_kind(str(case.get("result", "跳过")))}">{_h(case.get("id", ""))}: {_h(case.get("result", ""))}</span>'
         for case in cases
     )
     all_cases = "".join(case_html(case) for case in cases)
@@ -121,7 +177,7 @@ def build_report_html(config: dict[str, Any]) -> str:
 <div class="case-card"><div class="case-header" onclick="toggleCase(this)">
   <div class="case-title"><span class="case-id">流程</span><span class="case-name">测试导航路径</span></div>
   <span class="badge badge-pass">通过</span>
-</div><div class="case-body"><pre class="log" style="margin-top:8px">{nav_path}</pre></div></div>"""
+</div><div class="case-body"><pre class="log" style="margin-top:8px">{_h(nav_path)}</pre></div></div>"""
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -170,11 +226,16 @@ pre.log{{background:#050510;color:#6ee;padding:8px;border-radius:4px;font-size:1
 .img-row img{{max-width:100%;height:auto;border-radius:4px;border:1px solid #22222a}}
 .img-box{{flex:1;min-width:150px}}
 .img-label{{font-size:11px;color:#666;margin-bottom:4px}}
+.ocr-box{{margin-top:6px;padding:8px;border-radius:4px;background:#111827;border:1px solid #374151;font-size:12px;color:#cbd5e1}}
+.ocr-box ul{{margin:6px 0 0 18px}}
+.ocr-box code{{color:#facc15;font-family:"SF Mono",Menlo,monospace}}
+.ocr-meta{{color:#64748b;font-size:11px}}
+.ocr-provider{{margin-top:4px;color:#64748b;font-size:11px}}
 </style>
 </head><body>
 <div class="container">
 <h1>STS2 测试报告</h1>
-<div class="subtitle">{run_id} — 由 STS2-AUTOTEST 自动化执行</div>
+<div class="subtitle">{_h(run_id)} — 由 STS2-AUTOTEST 自动化执行</div>
 <div class="summary">
   <div class="summary-card pass"><div class="num">{counts['passed']}</div>通过</div>
   <div class="summary-card fail"><div class="num">{counts['failed']}</div>失败</div>
@@ -199,4 +260,7 @@ def write_html_report(config_path: str | Path, output_path: str | Path) -> None:
     output_file = Path(output_path)
     config = json.loads(config_file.read_text(encoding="utf-8"))
     config["_config_dir"] = str(config_file.resolve().parent)
-    output_file.write_text(build_report_html(config), encoding="utf-8")
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    tmp_file = output_file.with_name(f".{output_file.name}.tmp")
+    tmp_file.write_text(build_report_html(config), encoding="utf-8")
+    os.replace(tmp_file, output_file)

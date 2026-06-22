@@ -86,6 +86,31 @@ class TestEnvOverride:
         cfg = load_config(project_dir=config_dir)
         assert cfg.adapter.cli.timeout == 15.0
 
+    def test_env_overrides_visual_qa_settings(
+        self,
+        config_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_OCR_PROVIDER", "tesseract")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_TESSERACT_LANG", "eng")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_TIMEOUT_SECONDS", "3.5")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_HEALTH_ENABLED", "false")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_HEALTH_PROVIDER", "opencv")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_LOW_VARIANCE_THRESHOLD", "2.5")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_LOW_BRIGHTNESS_THRESHOLD", "6.5")
+        monkeypatch.setenv("STS2_FRAMEWORK__VISUAL_QA_HIGH_BRIGHTNESS_THRESHOLD", "248.5")
+
+        cfg = load_config(project_dir=config_dir)
+
+        assert cfg.framework.visual_qa_ocr_provider == "tesseract"
+        assert cfg.framework.visual_qa_tesseract_lang == "eng"
+        assert cfg.framework.visual_qa_timeout_seconds == 3.5
+        assert cfg.framework.visual_qa_health_enabled is False
+        assert cfg.framework.visual_qa_health_provider == "opencv"
+        assert cfg.framework.visual_qa_low_variance_threshold == 2.5
+        assert cfg.framework.visual_qa_low_brightness_threshold == 6.5
+        assert cfg.framework.visual_qa_high_brightness_threshold == 248.5
+
     def test_non_sts2_env_ignored(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OTHER_VAR", "ignored")
         cfg = load_config(project_dir=config_dir)

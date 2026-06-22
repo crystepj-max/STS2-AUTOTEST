@@ -8,6 +8,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
+
 
 class CliAdapterConfig(BaseModel):
     """STS2-Cli-Mod adapter configuration."""
@@ -76,6 +82,34 @@ class FrameworkConfig(BaseModel):
     artifact_dir: str = "tests/output/artifacts"
     disk_threshold_mb: int = Field(default=100, ge=1)
     lock_file: str = "tests/output/.sts2-autotest.lock"
+    visual_qa_enabled: bool = True
+    visual_qa_ocr_provider: Literal["disabled", "tesseract"] = "disabled"
+    visual_qa_tesseract_cmd: str = "tesseract"
+    visual_qa_tesseract_lang: str = "chi_sim+eng"
+    visual_qa_timeout_seconds: float = Field(default=10.0, gt=0)
+    visual_qa_health_enabled: bool = True
+    visual_qa_health_provider: Literal["disabled", "opencv"] = "disabled"
+    visual_qa_low_variance_threshold: float = Field(
+        default=DEFAULT_LOW_VARIANCE_THRESHOLD,
+        gt=0,
+    )
+    visual_qa_low_brightness_threshold: float = Field(
+        default=DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+        gt=0,
+    )
+    visual_qa_high_brightness_threshold: float = Field(
+        default=DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+        gt=0,
+    )
+
+    @model_validator(mode="after")
+    def _check_brightness_thresholds(self) -> "FrameworkConfig":
+        if self.visual_qa_low_brightness_threshold >= self.visual_qa_high_brightness_threshold:
+            raise ValueError(
+                "visual_qa_low_brightness_threshold must be less than "
+                "visual_qa_high_brightness_threshold"
+            )
+        return self
 
 
 class ExecutionConfig(BaseModel):

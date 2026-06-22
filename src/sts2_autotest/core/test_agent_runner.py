@@ -19,13 +19,23 @@ import subprocess
 import sys
 import time
 import asyncio
+import inspect
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 from sts2_autotest.adapters.agent import AgentAdapter
+from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
 from sts2_autotest.core.steam import SteamController
+from sts2_autotest.core.visual_qa import (
+    DisabledOcrProvider,
+    OcrProvider,
+    ScreenshotHealthDetector,
+    TesseractOcrProvider,
+    VisualQaEngine,
+    build_visual_qa_payload,
+)
 from sts2_autotest.report_html import write_html_report
 
 yaml: ModuleType | None
@@ -112,29 +122,22 @@ def _normalize_window_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
 
 
-def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
-    """Return the best matching macOS on-screen window id and size."""
-    try:
-        import Quartz  # type: ignore[import-not-found]
-    except Exception:
-        return None
-
+def _select_macos_window(
+    windows: list[dict[str, Any]],
+    window_title: str,
+) -> tuple[int, tuple[int, int]] | None:
     target = _normalize_window_token(window_title)
     if not target:
         return None
 
-    windows = Quartz.CGWindowListCopyWindowInfo(
-        Quartz.kCGWindowListOptionAll,
-        Quartz.kCGNullWindowID,
-    ) or []
     candidates: list[tuple[int, int, int, int, int]] = []
     for window in windows:
-        layer = int(window.get(Quartz.kCGWindowLayer, 0) or 0)
+        layer = int(window.get("layer", 0) or 0)
         if layer != 0:
             continue
 
-        owner = _normalize_window_token(window.get(Quartz.kCGWindowOwnerName, ""))
-        name = _normalize_window_token(window.get(Quartz.kCGWindowName, ""))
+        owner = _normalize_window_token(window.get("owner_name", ""))
+        name = _normalize_window_token(window.get("window_name", ""))
         if not owner and not name:
             continue
         if not (
@@ -145,10 +148,9 @@ def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
         ):
             continue
 
-        bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
-        width = int(round(float(bounds.get("Width", 0) or 0)))
-        height = int(round(float(bounds.get("Height", 0) or 0)))
-        window_id = int(window.get(Quartz.kCGWindowNumber, 0) or 0)
+        width = int(round(float(window.get("width", 0) or 0)))
+        height = int(round(float(window.get("height", 0) or 0)))
+        window_id = int(window.get("window_id", 0) or 0)
         if window_id <= 0 or width <= 0 or height <= 0:
             continue
 
@@ -163,13 +165,43 @@ def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
     return window_id, (width, height)
 
 
+def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
+    """Return the best matching macOS on-screen window id and size."""
+    try:
+        import Quartz  # type: ignore[import-not-found]
+    except Exception:
+        return None
+
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionAll,
+        Quartz.kCGNullWindowID,
+    ) or []
+    normalized_windows = []
+    for window in windows:
+        bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
+        normalized_windows.append(
+            {
+                "layer": window.get(Quartz.kCGWindowLayer, 0),
+                "owner_name": window.get(Quartz.kCGWindowOwnerName, ""),
+                "window_name": window.get(Quartz.kCGWindowName, ""),
+                "width": bounds.get("Width", 0),
+                "height": bounds.get("Height", 0),
+                "window_id": window.get(Quartz.kCGWindowNumber, 0),
+            }
+        )
+    return _select_macos_window(normalized_windows, window_title)
+
+
 def _capture_macos_window_png(path: Path, window_title: str) -> bool:
     """Capture a specific macOS window directly into a PNG file."""
     try:
         import Quartz
         from AppKit import NSBitmapImageRep, NSPNGFileType  # type: ignore[import-not-found]
     except Exception:
-        script = r"""
+        selector_source = inspect.getsource(_normalize_window_token) + "\n\n" + inspect.getsource(_select_macos_window)
+        script = f"""
+from __future__ import annotations
+
 from pathlib import Path
 import re
 import sys
@@ -178,47 +210,32 @@ import Quartz
 from AppKit import NSBitmapImageRep, NSPNGFileType
 
 
-def norm(value):
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+{selector_source}
 
 
 path = Path(sys.argv[1])
 window_title = sys.argv[2]
-target = norm(window_title)
-windows = Quartz.CGWindowListCopyWindowInfo(
+quartz_windows = Quartz.CGWindowListCopyWindowInfo(
     Quartz.kCGWindowListOptionAll,
     Quartz.kCGNullWindowID,
 ) or []
-candidates = []
-for window in windows:
-    layer = int(window.get(Quartz.kCGWindowLayer, 0) or 0)
-    if layer != 0:
-        continue
-    owner = norm(window.get(Quartz.kCGWindowOwnerName, ""))
-    name = norm(window.get(Quartz.kCGWindowName, ""))
-    if not owner and not name:
-        continue
-    if not (
-        target in owner
-        or owner in target
-        or target in name
-        or name in target
-    ):
-        continue
-    bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
-    width = int(round(float(bounds.get("Width", 0) or 0)))
-    height = int(round(float(bounds.get("Height", 0) or 0)))
-    window_id = int(window.get(Quartz.kCGWindowNumber, 0) or 0)
-    if window_id <= 0 or width <= 0 or height <= 0:
-        continue
-    exact_match = int(target == owner or target == name)
-    candidates.append((exact_match, width * height, window_id))
+windows = []
+for window in quartz_windows:
+    bounds = window.get(Quartz.kCGWindowBounds, {{}}) or {{}}
+    windows.append({{
+        "layer": window.get(Quartz.kCGWindowLayer, 0),
+        "owner_name": window.get(Quartz.kCGWindowOwnerName, ""),
+        "window_name": window.get(Quartz.kCGWindowName, ""),
+        "width": bounds.get("Width", 0),
+        "height": bounds.get("Height", 0),
+        "window_id": window.get(Quartz.kCGWindowNumber, 0),
+    }})
 
-if not candidates:
+match = _select_macos_window(windows, window_title)
+if match is None:
     raise SystemExit(1)
 
-candidates.sort(reverse=True)
-window_id = candidates[0][2]
+window_id, _ = match
 image = Quartz.CGWindowListCreateImage(
     Quartz.CGRectNull,
     Quartz.kCGWindowListOptionIncludingWindow,
@@ -232,7 +249,7 @@ path.parent.mkdir(parents=True, exist_ok=True)
 bitmap = NSBitmapImageRep.alloc().initWithCGImage_(image)
 if bitmap is None:
     raise SystemExit(1)
-png_data = bitmap.representationUsingType_properties_(NSPNGFileType, {})
+png_data = bitmap.representationUsingType_properties_(NSPNGFileType, {{}})
 if png_data is None:
     raise SystemExit(1)
 if not png_data.writeToFile_atomically_(str(path), True):
@@ -273,6 +290,14 @@ if not png_data.writeToFile_atomically_(str(path), True):
     return bool(png_data.writeToFile_atomically_(str(path), True))
 
 
+def _steam_fallback_delay_seconds() -> float:
+    raw = os.environ.get("STS2_STEAM_FALLBACK_DELAY", "5")
+    try:
+        return float(raw)
+    except ValueError:
+        return 5.0
+
+
 def _find_sln_or_csproj(project_path: Path) -> Path | None:
     """Find a .sln or .csproj file under *project_path*.
 
@@ -306,12 +331,22 @@ def _find_build_output(project_path: Path) -> Path | None:
     Skips directories that cannot be stat'd (permission errors).
     """
     _EXCLUDE_PARTS = {".git", ".claude", ".agent-runs", "obj", "node_modules"}
+    _GODOT_CACHE_PARTS = {"imported", "extension_api"}
+
+    def _is_excluded(p: Path) -> bool:
+        parts = p.relative_to(project_path).parts
+        if _EXCLUDE_PARTS & set(parts):
+            return True
+        if ".godot" in parts and (_GODOT_CACHE_PARTS & set(parts)):
+            return True
+        return False
+
     candidates: list[tuple[Path, float]] = []
     for pattern in ["**/bin/Release", "**/bin/Debug"]:
         for d in project_path.glob(pattern):
             if not d.is_dir():
                 continue
-            if _EXCLUDE_PARTS & set(d.relative_to(project_path).parts):
+            if _is_excluded(d):
                 continue
             try:
                 mtime = d.stat().st_mtime
@@ -459,7 +494,14 @@ def _run_launch_command(name: str, cmd: list[str], log_path: Path) -> str:
     with log_path.open("a", encoding="utf-8") as f:
         f.write(f"# {name}\n")
         f.write(f"> {' '.join(cmd)}\n")
-    result = subprocess.run(cmd, capture_output=True, timeout=15.0)
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=15.0)
+    except subprocess.TimeoutExpired as exc:
+        msg = f"Timeout after {exc.timeout}s"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{msg}\n")
+            f.write("ExitCode: -1\n")
+        raise RuntimeError(msg) from exc
     output = (
         result.stdout.decode("utf-8", errors="replace")
         + result.stderr.decode("utf-8", errors="replace")
@@ -531,7 +573,7 @@ def _launch_game_via_desktop_open(app_id: str, launch_log: Path) -> None:
     """
     if _IS_MACOS:
         steam_exe = _start_steam_client_without_polling(launch_log)
-        time.sleep(float(os.environ.get("STS2_STEAM_FALLBACK_DELAY", "5")))
+        time.sleep(_steam_fallback_delay_seconds())
         try:
             _run_launch_command(
                 "Start game via Steam bundle",
@@ -1564,20 +1606,34 @@ class TestAgentRunner:
             }.get(status, "跳过")
             before_path = self._normalize_html_artifact_path(result.get("screenshot_before", ""))
             after_path = self._normalize_html_artifact_path(result.get("screenshot_after", ""))
-            entries.append(
-                {
-                    "card_id": result.get("card_id", ""),
-                    "name": result.get("name", ""),
-                    "cost": result.get("energy_cost"),
-                    "exp": exp,
-                    "result": report_result,
-                    "screenshot_before": before_path,
-                    "screenshot_after": after_path,
-                    "state_before": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-before.json"),
-                    "state_after": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-after.json") if after_path else "",
-                }
-            )
+            entry: dict[str, Any] = {
+                "card_id": result.get("card_id", ""),
+                "name": result.get("name", ""),
+                "cost": result.get("energy_cost"),
+                "exp": exp,
+                "result": report_result,
+                "screenshot_before": before_path,
+                "screenshot_after": after_path,
+                "state_before": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-before.json"),
+                "state_after": self._normalize_html_artifact_path(f"state/card-{result.get('card_id', '')}-after.json") if after_path else "",
+            }
+            before_ocr = self._get_screenshot_ocr_payload(before_path)
+            if before_ocr is not None:
+                entry["screenshot_before_ocr"] = before_ocr
+            after_ocr = self._get_screenshot_ocr_payload(after_path)
+            if after_ocr is not None:
+                entry["screenshot_after_ocr"] = after_ocr
+            entries.append(entry)
         return entries
+
+    def _get_screenshot_ocr_payload(self, screenshot_path: str) -> dict[str, Any] | None:
+        analysis_by_path = getattr(self, "_screenshot_ocr", {}) or {}
+        analysis = analysis_by_path.get(screenshot_path)
+        if isinstance(analysis, ScreenshotOcrAnalysis):
+            return analysis.model_dump(mode="json")
+        if isinstance(analysis, dict):
+            return analysis
+        return None
 
     def _normalize_html_artifact_path(self, value: Any) -> str:
         text = str(value or "").strip()
@@ -1598,7 +1654,67 @@ class TestAgentRunner:
                 return str(Path(*parts[parts.index(anchor):]))
         return text
 
+    def _get_visual_qa_engine(self) -> VisualQaEngine:
+        engine = getattr(self, "_visual_qa_engine", None)
+        if isinstance(engine, VisualQaEngine):
+            return engine
+
+        framework_config = getattr(self, "_framework_config", None)
+        provider_name = getattr(framework_config, "visual_qa_ocr_provider", "disabled")
+        provider: OcrProvider
+        if not getattr(framework_config, "visual_qa_enabled", True):
+            provider = DisabledOcrProvider()
+        elif provider_name == "tesseract":
+            provider = TesseractOcrProvider(
+                command=getattr(framework_config, "visual_qa_tesseract_cmd", "tesseract"),
+                lang=getattr(framework_config, "visual_qa_tesseract_lang", "chi_sim+eng"),
+                timeout_seconds=getattr(
+                    framework_config,
+                    "visual_qa_timeout_seconds",
+                    10.0,
+                ),
+            )
+        else:
+            provider = DisabledOcrProvider()
+
+        health_enabled = getattr(framework_config, "visual_qa_health_enabled", True)
+        health_provider = getattr(framework_config, "visual_qa_health_provider", "disabled")
+        health_detector = ScreenshotHealthDetector(
+            cv2_module="auto" if health_enabled and health_provider == "opencv" else None,
+            low_variance_threshold=getattr(
+                framework_config,
+                "visual_qa_low_variance_threshold",
+                1.0,
+            ),
+            low_brightness_threshold=getattr(
+                framework_config,
+                "visual_qa_low_brightness_threshold",
+                5.0,
+            ),
+            high_brightness_threshold=getattr(
+                framework_config,
+                "visual_qa_high_brightness_threshold",
+                250.0,
+            ),
+        )
+
+        engine = VisualQaEngine(provider, health_detector=health_detector)
+        self._visual_qa_engine = engine
+        return engine
+
+    def _analyze_html_report_screenshots(self) -> None:
+        engine = self._get_visual_qa_engine()
+        cache: dict[str, ScreenshotOcrAnalysis] = getattr(self, "_screenshot_ocr", {}) or {}
+        for result in getattr(self, "_card_results", []) or []:
+            for key in ("screenshot_before", "screenshot_after"):
+                normalized = self._normalize_html_artifact_path(result.get(key, ""))
+                if not normalized or normalized in cache:
+                    continue
+                cache[normalized] = engine.analyze_screenshot(self._artifact_dir / normalized)
+        self._screenshot_ocr = cache
+
     def _build_html_report_config(self) -> dict[str, Any]:
+        self._analyze_html_report_screenshots()
         card_results = self._build_html_report_card_results()
         test_cases: list[dict[str, Any]] = []
         for result in self.results:
@@ -1632,6 +1748,23 @@ class TestAgentRunner:
             "_config_dir": str(self._artifact_dir),
         }
 
+    def _build_visual_qa_report_payload(self) -> dict[str, Any]:
+        self._analyze_html_report_screenshots()
+        analysis_by_path = getattr(self, "_screenshot_ocr", {}) or {}
+        return build_visual_qa_payload(
+            test_run_id=self._task_id,
+            analyses_by_path=analysis_by_path,
+        )
+
+    def _write_json_artifact(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = path.with_suffix(path.suffix + ".tmp")
+        tmp_file.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(str(tmp_file), str(path))
+
 
 # ---------------------------------------------------------------------------
 # Internal exceptions
@@ -1644,7 +1777,9 @@ class TestAgentRunner:
         try:
             config = self._build_html_report_config()
             config_path = self._artifact_dir / "test-results.json"
-            config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+            self._write_json_artifact(config_path, config)
+            visual_qa_path = self._artifact_dir / "visual-qa.json"
+            self._write_json_artifact(visual_qa_path, self._build_visual_qa_report_payload())
             output_path = self._artifact_dir / "test-report.html"
             write_html_report(config_path, output_path)
         except Exception as exc:
