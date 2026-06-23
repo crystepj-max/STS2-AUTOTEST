@@ -12,36 +12,52 @@ from pathlib import Path
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
 
-_IMPORT_BLOCK = """\
-import json
-from pathlib import Path
-
-import pytest
-
-from sts2_autotest.dsl.fluent import define
-from sts2_autotest.dsl.assertions import (
-    advance_dialogue,
-    choose_event,
-    choose_game_mode,
-    choose_map_node,
-    combat_basic_policy,
-    embark,
-    end_turn,
-    enemy_took_exact_hits,
-    enter_combat,
-    game_reached_state,
-    give_card,
-    no_crash_detected,
-    has_travelable_node,
-    play_card,
-    return_to_menu,
-    select_character,
-    skip_card_reward,
-    start_new_run,
+_ASSERTION_IMPORTS = (
+    "advance_dialogue",
+    "choose_event",
+    "choose_game_mode",
+    "choose_map_node",
+    "combat_basic_policy",
+    "embark",
+    "end_turn",
+    "enemy_took_exact_hits",
+    "enter_combat",
+    "game_reached_state",
+    "give_card",
+    "no_crash_detected",
+    "has_travelable_node",
+    "play_card",
+    "return_to_menu",
+    "select_character",
+    "skip_card_reward",
+    "start_new_run",
 )
-from sts2_autotest.common.state import GameScreen
-from sts2_autotest.core.action_model import ActionDescriptor
-"""
+
+
+def _build_import_block(body: str) -> str:
+    imports: list[str] = []
+    if "json." in body:
+        imports.append("import json")
+    if "Path(" in body:
+        imports.append("from pathlib import Path")
+    if "pytest." in body:
+        imports.append("import pytest")
+
+    imports.append("from sts2_autotest.dsl.fluent import define")
+
+    used_assertions = [name for name in _ASSERTION_IMPORTS if f"{name}(" in body]
+    if used_assertions:
+        imports.append(
+            "from sts2_autotest.dsl.assertions import (\n"
+            + "\n".join(f"    {name}," for name in used_assertions)
+            + "\n)"
+        )
+    if "GameScreen." in body:
+        imports.append("from sts2_autotest.common.state import GameScreen")
+    if "ActionDescriptor(" in body:
+        imports.append("from sts2_autotest.core.action_model import ActionDescriptor")
+
+    return "\n".join(imports)
 
 
 _STEP_TO_ACTION: dict[str, str] = {
@@ -238,7 +254,7 @@ class CodeGenerator:
     def generate_case_test(self, spec: TestSpec) -> str:
         """Generate a complete pytest test file for a single case."""
         body = self._generate_case_body(spec)
-        return _IMPORT_BLOCK.rstrip("\n") + "\n\n" + body
+        return _build_import_block(body) + "\n\n" + body
 
     def generate_suite_test(
         self, suite: SuiteSpec, specs: dict[str, TestSpec]
@@ -275,7 +291,7 @@ class CodeGenerator:
         if not included_specs:
             lines.append('    pytest.skip("No included case specs resolved")')
             body = "\n".join(lines)
-            return _IMPORT_BLOCK.rstrip("\n") + "\n\n" + body
+            return _build_import_block(body) + "\n\n" + body
 
         for spec in included_specs:
             result_var = f"result_{_case_id_to_function_name(spec.id)}"
@@ -341,7 +357,7 @@ class CodeGenerator:
             )
 
         body = "\n".join(lines)
-        return _IMPORT_BLOCK.rstrip("\n") + "\n\n" + body
+        return _build_import_block(body) + "\n\n" + body
 
     def generate_to_file(self, spec: TestSpec, output_dir: str) -> str:
         """Generate a test file on disk. Returns the output file path."""

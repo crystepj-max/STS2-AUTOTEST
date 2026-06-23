@@ -29,6 +29,31 @@ class TestCodeGenerator:
         assert "_session_loop" in code
         assert "define(" in code or "from sts2_autotest.dsl.fluent import define" in code
 
+    def test_generate_case_test_imports_only_used_helpers(self) -> None:
+        spec = TestSpec(
+            id="TC-PREPARE-NEW-RUN",
+            title="进入新局地图",
+            steps=["开始新 run"],
+            assertions=["不 crash"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "import pytest" not in code
+        assert "from pathlib import Path" not in code
+        assert "start_new_run," in code
+        assert "no_crash_detected," in code
+        assert "choose_game_mode," not in code
+        assert "ActionDescriptor" not in code
+
+    def test_generate_empty_case_keeps_pytest_import(self) -> None:
+        spec = TestSpec(id="TC-EMPTY", title="Empty")
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "import pytest" in code
+        assert 'pytest.skip("No steps defined")' in code
+
     def test_generate_case_test_with_givens(self) -> None:
         spec = TestSpec(
             id="TC-SETUP",
