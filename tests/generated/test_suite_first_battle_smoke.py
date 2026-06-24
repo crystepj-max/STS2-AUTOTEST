@@ -10,6 +10,7 @@ from sts2_autotest.dsl.assertions import (
     enter_combat,
     game_reached_state,
     no_crash_detected,
+    has_travelable_node,
     return_to_menu,
     select_character,
     skip_card_reward,
@@ -58,8 +59,8 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
         )
         .assert_that(
             no_crash_detected(),
-            # TODO: implement assertion for '最终应位于地图界面'
-            # TODO: implement assertion for '应能识别至少一个可达节点'
+            game_reached_state(GameScreen.MAP),
+            has_travelable_node(),
         )
     )
     case_summary = {
@@ -89,8 +90,8 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
         )
         .assert_that(
             no_crash_detected(),
-            # TODO: implement assertion for '最终应位于地图界面'
-            # TODO: implement assertion for '应能识别至少一个可达节点'
+            game_reached_state(GameScreen.MAP),
+            has_travelable_node(),
         )
     )
     case_summary = {
@@ -123,7 +124,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
         )
         .assert_that(
             no_crash_detected(),
-            game_reached_state(GameScreen.COMBAT),
+            game_reached_state(GameScreen.MAP),
         )
     )
     case_summary = {
