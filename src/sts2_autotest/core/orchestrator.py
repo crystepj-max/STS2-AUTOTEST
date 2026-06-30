@@ -427,7 +427,16 @@ class TestOrchestrator:
                 logger.info("Saved run detected — clearing via abandon_run")
                 abandon = await self.adapter.act("abandon_run")
                 if abandon.status == "success":
-                    # Re-read state after abandon
+                    # After abandon_run there may be a confirmation modal
+                    try:
+                        post_abandon_actions = await self.adapter.get_available_actions()
+                        if "confirm_modal" in post_abandon_actions or "dismiss_modal" in post_abandon_actions:
+                            modal_action = "confirm_modal" if "confirm_modal" in post_abandon_actions else "dismiss_modal"
+                            logger.info("Modal detected after abandon_run — dismissing via %s", modal_action)
+                            await self.adapter.act(modal_action)
+                    except Exception:
+                        logger.debug("No modal actions available or modal dismiss failed")
+                    # Re-read state after abandon + modal dismiss
                     post_abandon = await self._get_state_validated()
                     if post_abandon.screen == GameScreen.MAIN_MENU:
                         state = post_abandon

@@ -35,6 +35,7 @@ logger = get_logger("adapters.agent")
 _SCREEN_MAP: dict[str, GameScreen] = {
     "MENU": GameScreen.MAIN_MENU,
     "MAIN_MENU": GameScreen.MAIN_MENU,
+    "MODAL": GameScreen.MAIN_MENU,
     "CHARACTER_SELECT": GameScreen.CHARACTER_SELECT,
     "MAP": GameScreen.MAP,
     "COMBAT": GameScreen.COMBAT,
@@ -376,6 +377,8 @@ class AgentAdapter:
         """
         data = _unwrap_data_envelope(await self._request("GET", self._actions_path))
         actions_result = _normalize_actions(data.get("actions", []))
+        if ("open_character_select" in actions_result or "abandon_run" in actions_result) and "start_new_run" not in actions_result:
+        	actions_result.append("start_new_run")
         if self.debug_actions and "give_card" not in actions_result:
             actions_result.append("give_card")
         return actions_result
@@ -388,6 +391,8 @@ class AgentAdapter:
           timeout → ActionResult(status="timeout")
           other   → ActionResult(status="failure")
         """
+        if action == "start_new_run":
+            return await self._start_new_run()
         if action == "give_card":
             if not self.debug_actions:
                 return ActionResult(
@@ -440,8 +445,61 @@ class AgentAdapter:
             detail=data.get("error", "Unknown error"),
         )
 
+    
+    async def _start_new_run(self) -> ActionResult:
+        """Open character select, clearing an existing saved run when necessary."""
+        try:
+            available = await self.get_available_actions()
+        except STS2Error as exc:
+            if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
+            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+
+        if "open_character_select" in available:
+            return await self.act("open_character_select")
+
+        if "abandon_run" not in available:
+            return ActionResult(
+                status="failure",
+                state_changed=False,
+                detail="start_new_run requires open_character_select or abandon_run",
+            )
+
+        abandon_result = await self.act("abandon_run")
+        if abandon_result.status != "success":
+            return abandon_result
+
+        try:
+            available = await self.get_available_actions()
+        except STS2Error as exc:
+            if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                return ActionResult(status="timeout", state_changed=True, detail=exc.message)
+            return ActionResult(status="failure", state_changed=True, detail=exc.message)
+
+        if "confirm_modal" in available:
+            confirm_result = await self.act("confirm_modal")
+            if confirm_result.status != "success":
+                return confirm_result
+            try:
+                available = await self.get_available_actions()
+            except STS2Error as exc:
+                if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                    return ActionResult(status="timeout", state_changed=True, detail=exc.message)
+                return ActionResult(status="failure", state_changed=True, detail=exc.message)
+
+        if "open_character_select" in available:
+            return await self.act("open_character_select")
+
+        return ActionResult(
+            status="failure",
+            state_changed=True,
+            detail="start_new_run could not reach open_character_select",
+        )
+
     async def _resolve_agent_action_args(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
         """Translate AUTOTEST action args to STS2-Agent HTTP action fields."""
+        if action == "select_character":
+            return await self._resolve_select_character_args(args)
         if action != "play_card":
             return args
         if "card_index" in args or "card_id" not in args:
@@ -464,6 +522,66 @@ class AgentAdapter:
                 resolved = dict(args)
                 resolved["card_index"] = index
                 return resolved
+        return args
+
+    async def _resolve_select_character_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Resolve select_character args: character_id → option_index.
+
+        STS2-Agent v0.7.2+ returns CHARACTER_SELECT options with character_id
+        that may omit the MOD prefix (e.g. 'GAWAIN' instead of 'GAWAINMOD-GAWAIN').
+        We match by:
+        1. Exact character_id match (case-insensitive)
+        2. Fuzzy match: if the requested ID contains a mod prefix, try matching
+           the suffix only (e.g. 'GAWAINMOD-GAWAIN' → match 'GAWAIN')
+        3. Name-based fallback using the 'name' field
+        """
+        if "option_index" in args:
+            return args  # Already resolved, pass through
+
+        character_id = str(args.get("character_id", "")).strip()
+        if not character_id:
+            return args
+
+        state = await self.get_state()
+        if state.screen != GameScreen.CHARACTER_SELECT:
+            return args
+
+        cs = getattr(state, "character_select", None) or {}
+        characters = cs.get("characters", []) if isinstance(cs, dict) else []
+        if not isinstance(characters, list):
+            return args
+
+        target_upper = character_id.upper()
+        # Extract the part after the last '-' or '/' — handles "GAWAINMOD-GAWAIN" → "GAWAIN"
+        suffix = target_upper.split("-")[-1] if "-" in target_upper else target_upper
+
+        for char in characters:
+            if not isinstance(char, dict):
+                continue
+            char_id = str(char.get("character_id") or char.get("id") or "").upper()
+            char_name = str(char.get("name") or "").upper()
+
+            if char_id == target_upper:
+                index = char.get("index")
+                if isinstance(index, int):
+                    return {"option_index": index}
+                return args
+
+            # Fuzzy match: suffix matches (e.g. "GAWAINMOD-GAWAIN" → "GAWAIN" matches "GAWAIN")
+            if suffix and suffix in char_id:
+                index = char.get("index")
+                if isinstance(index, int):
+                    return {"option_index": index}
+                return args
+
+            # Name-based fuzzy match (e.g. "gawain" matches "GAWAIN") — skip empty names
+            if char_name and (character_id.upper() in char_name or char_name in target_upper):
+                index = char.get("index")
+                if isinstance(index, int):
+                    return {"option_index": index}
+                return args
+
+        # No match found — let the agent try with the raw character_id
         return args
 
     async def wait_until_actionable(self, timeout: float) -> bool:
