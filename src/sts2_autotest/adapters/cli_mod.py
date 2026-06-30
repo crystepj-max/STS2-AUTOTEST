@@ -26,7 +26,10 @@ from typing import Any
 from sts2_autotest.adapters.base import ActionResult, HealthStatus
 from sts2_autotest.adapters.discovery import discover_sts2_cli
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
+from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
+
+logger = get_logger("adapters.cli_mod")
 
 # CLI 命令返回的 screen 值 → GameScreen 枚举映射
 _SCREEN_MAP: dict[str, GameScreen] = {
@@ -285,7 +288,30 @@ class CliModAdapter:
             return self._cached_state
 
         raw = self._run_cli("state")
-        data = self._parse_response(raw)
+        try:
+            data = self._parse_response(raw)
+        except STS2Error as exc:
+            # Game v0.107.1 removed CombatManager.get_IsPlayPhase(), causing
+            # "Method not found" when CLI queries combat state.
+            # Degrade gracefully: return COMBAT with whatever fields we have.
+            error_msg = str(exc.message or "")
+            if "get_IsPlayPhase" in error_msg or "Method not found" in error_msg:
+                combat_hint = {}
+                if isinstance(raw, dict):
+                    raw_data = raw.get("data", {})
+                    if isinstance(raw_data, dict):
+                        combat_hint = {k: v for k, v in raw_data.items() if k != "error"}
+                logger.warning(
+                    "CombatManager method not found (game v0.107.1+) — "
+                    "returning degraded COMBAT state",
+                )
+                state = GameState(screen=GameScreen.COMBAT, **combat_hint)
+                if state.screen != GameScreen.UNKNOWN:
+                    self._cached_state = state
+                    self._cache_stale = False
+                    self._available_actions_cache = None
+                return state
+            raise  # Re-raise other errors
 
         # Map CLI screen name to GameScreen enum
         screen_raw = data.get("screen", "UNKNOWN")
@@ -293,9 +319,12 @@ class CliModAdapter:
 
         # Build GameState with screen + extra fields from CLI
         state = GameState(screen=screen, **_filter_state_extra(data))
-        self._cached_state = state
-        self._cache_stale = False
-        self._available_actions_cache = None  # screen changed, invalidate actions
+        # Don't cache UNKNOWN — the settle loop needs fresh state on every poll
+        # during loading transitions (e.g. embark → EVENT).
+        if screen != GameScreen.UNKNOWN:
+            self._cached_state = state
+            self._cache_stale = False
+            self._available_actions_cache = None  # screen changed, invalidate actions
         return state
 
     def _get_available_actions_sync(self) -> list[str]:

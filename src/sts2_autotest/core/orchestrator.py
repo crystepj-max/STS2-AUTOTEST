@@ -1,6 +1,7 @@
 """Test Orchestrator — manages test session lifecycle (FR1, FR2, FR4, FR10-12, FR17)."""
 
 import asyncio
+import json
 import signal
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +30,14 @@ from sts2_autotest.core.state_engine import StateEngine, StateTransitionError
 from sts2_autotest.core.watchdog import Watchdog
 
 logger = get_logger("core.orchestrator")
+
+
+def _is_transient_validation_violation(violations: list[str]) -> bool:
+    transient = {
+        "combat.hand is empty during COMBAT",
+        "combat.deck is empty during COMBAT",
+    }
+    return bool(violations) and all(item in transient for item in violations)
 
 
 @dataclass
@@ -117,6 +126,16 @@ class TestOrchestrator:
         self._lock_manager: LockManager | None = (
             LockManager(lock_path) if lock_path else None
         )
+        self._action_trace_hook: Callable[
+            [ActionDescriptor, GameState, GameState, ActionResult], None
+        ] | None = None
+
+    def set_action_trace_hook(
+        self,
+        hook: Callable[[ActionDescriptor, GameState, GameState, ActionResult], None] | None,
+    ) -> None:
+        """Register a per-action trace hook for the current execution window."""
+        self._action_trace_hook = hook
 
     def _release_lock_if_held(self) -> None:
         """Release the process lock if it was acquired."""
@@ -134,6 +153,17 @@ class TestOrchestrator:
         """
         state = await self.adapter.get_state()
         violations = validate_game_state(state)
+
+        if violations and _is_transient_validation_violation(violations):
+            for _ in range(20):
+                await asyncio.sleep(0.5)
+                candidate = await self.adapter.get_state()
+                candidate_violations = validate_game_state(candidate)
+                if not candidate_violations:
+                    self._last_valid_state = candidate
+                    return candidate
+                state = candidate
+                violations = candidate_violations
 
         if not violations:
             self._last_valid_state = state
@@ -167,14 +197,10 @@ class TestOrchestrator:
             try:
                 state = await self.adapter.get_state()
             except STS2Error:
-                return
+                break
 
             screen = state.screen
             if screen == GameScreen.MAIN_MENU:
-                try:
-                    await self.adapter.act("abandon_run")
-                except Exception:
-                    pass
                 return
 
             # MAP during an active run cannot soft-navigate to MAIN_MENU;
@@ -245,12 +271,9 @@ class TestOrchestrator:
         try:
             state = await self.adapter.get_state()
         except STS2Error:
-            return
-        if state.screen == GameScreen.MAIN_MENU:
-            try:
-                await self.adapter.act("abandon_run")
-            except Exception:
-                pass
+            state = None
+        if state is not None and state.screen == GameScreen.MAIN_MENU:
+            await self.wait_until_actionable(timeout=5.0)
             return
 
         logger.info("Soft navigation failed — restarting game process")
@@ -272,11 +295,7 @@ class TestOrchestrator:
                     await asyncio.sleep(2)
                     try:
                         state = await self.adapter.get_state()
-                        if state.screen == GameScreen.MAIN_MENU:
-                            try:
-                                await self.adapter.act("abandon_run")
-                            except Exception:
-                                pass
+                        if state.screen == GameScreen.MAIN_MENU and await self.wait_until_actionable(timeout=5.0):
                             return
                     except STS2Error:
                         continue
@@ -394,7 +413,36 @@ class TestOrchestrator:
                 return False
 
         # Checkpoint 4: game is actionable
-        await self.wait_until_actionable(timeout=self._game_startup_timeout)
+        if not await self.wait_until_actionable(timeout=self._game_startup_timeout):
+            logger.error("Game did not become actionable before timeout")
+            self._release_lock_if_held()
+            return False
+
+        # Checkpoint 5: ensure a fresh start is possible (clear saved runs)
+        # If the game has a saved run, start_new_run won't be available;
+        # we need to call abandon_run first to clear it.
+        fresh_actions = await self.adapter.get_available_actions()
+        if state.screen == GameScreen.MAIN_MENU and "start_new_run" not in fresh_actions:
+            if "abandon_run" in fresh_actions:
+                logger.info("Saved run detected — clearing via abandon_run")
+                abandon = await self.adapter.act("abandon_run")
+                if abandon.status == "success":
+                    # Re-read state after abandon
+                    post_abandon = await self._get_state_validated()
+                    if post_abandon.screen == GameScreen.MAIN_MENU:
+                        state = post_abandon
+                        if not await self.wait_until_actionable(timeout=self._game_startup_timeout):
+                            logger.error("Game not actionable after abandon_run")
+                            self._release_lock_if_held()
+                            return False
+                        logger.info("Saved run cleared — start_new_run should now be available")
+                else:
+                    logger.warning("abandon_run failed: %s", abandon.detail)
+            else:
+                logger.warning(
+                    "start_new_run not available and abandon_run not in actions either — "
+                    "actions: %s", fresh_actions,
+                )
 
         self._current_screen = state.screen
         self._session_active = True
@@ -788,18 +836,63 @@ class TestOrchestrator:
             logger.info("No actions available yet, delegating to adapter wait...")
         return await self.adapter.wait_until_actionable(timeout)
 
+    async def _wait_until_action_available(self, action_type: str, timeout: float) -> bool:
+        """Wait until the specific action appears in available_actions."""
+        import time
+
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+
+            if action_type == "choose_neow_blessing":
+                try:
+                    available = await self.adapter.get_available_actions()
+                except STS2Error:
+                    available = []
+
+                if action_type in available:
+                    return True
+
+            if not await self.adapter.wait_until_actionable(min(remaining, 5.0)):
+                await asyncio.sleep(min(0.5, remaining))
+                continue
+
+            try:
+                available = await self.adapter.get_available_actions()
+            except STS2Error:
+                available = []
+
+            if action_type in available:
+                return True
+
+            await asyncio.sleep(min(0.5, remaining))
+
     # ── action execution (single public path, FR10-FR11) ────
 
-    async def execute_action(self, action: ActionDescriptor) -> ActionResult:
+    async def execute_action(
+        self,
+        action: ActionDescriptor,
+        on_pre_state: Callable[[GameState], None] | None = None,
+    ) -> ActionResult:
         """Execute an action with full validation and state tracking.
 
         Read state → check available_actions → execute → check result
         → re-read state → validate transition → check expected_state.
         This is the ONLY action execution path — all code paths use it.
+
+        on_pre_state, if given, receives the pre-action state snapshot —
+        lets callers capture a "before" baseline without an extra get_state call.
         """
+        if action.action_type == "choose_neow_blessing":
+            return await self._execute_choose_neow_blessing(action, on_pre_state)
+
         # 1. Pre-read state (with validation)
         pre_state = await self._get_state_validated()
         self._current_screen = pre_state.screen
+        if on_pre_state is not None:
+            on_pre_state(pre_state)
 
         # 2. Validate action in available set (empty = nothing available)
         available = await self.adapter.get_available_actions()
@@ -816,6 +909,7 @@ class TestOrchestrator:
         result = await self.adapter.act(action.action_type, action.params)
 
         # 4. Check ActionResult
+        new_state: GameState | None = None
         if result.status == "timeout":
             await self._record_adapter_result(False)
             raise STS2Error(
@@ -824,24 +918,34 @@ class TestOrchestrator:
                 detail={"action": action.action_type, "result_detail": result.detail},
             )
         if result.status == "failure":
-            await self._record_adapter_result(False)
-            raise STS2Error(
-                category=ErrorCategory.GAME_ERROR,
-                message=f"Action '{action.action_type}' failed: {result.detail}",
-                detail={"action": action.action_type, "result_detail": result.detail},
+            new_state = await self._recover_from_known_action_false_negative(
+                action,
+                pre_state,
+                result,
             )
+            if new_state is None:
+                await self._record_adapter_result(False)
+                raise STS2Error(
+                    category=ErrorCategory.GAME_ERROR,
+                    message=f"Action '{action.action_type}' failed: {result.detail}",
+                    detail={"action": action.action_type, "result_detail": result.detail},
+                )
+            result = ActionResult(status="success", state_changed=True, detail=result.detail)
 
         # Record heartbeat on successful adapter call
         if self._watchdog is not None:
             self._watchdog.record_heartbeat()
 
         # 5. Re-read state and validate transition (with validation)
-        new_state = await self._get_state_validated()
+        if new_state is None:
+            new_state = await self._get_post_action_state(action, pre_state)
         self._current_screen = self.state_engine.update_state(
             self._current_screen,
             new_state.screen.value,
             event=action.action_type,
         )
+        if self._action_trace_hook is not None:
+            self._action_trace_hook(action, pre_state, new_state, result)
 
         # 6. Verify expected_state if specified
         if action.expected_state is not None and self._current_screen != action.expected_state:
@@ -861,21 +965,266 @@ class TestOrchestrator:
 
         return result
 
+    async def _execute_choose_neow_blessing(
+        self,
+        action: ActionDescriptor,
+        on_pre_state: Callable[[GameState], None] | None = None,
+    ) -> ActionResult:
+        pre_state = await self._get_state_validated()
+        self._current_screen = pre_state.screen
+        if on_pre_state is not None:
+            on_pre_state(pre_state)
+
+        run_state = getattr(pre_state, "run", None) or {}
+        character_id = (
+            run_state.get("character_id")
+            if isinstance(run_state, dict)
+            else None
+        ) or "GAWAINMOD-GAWAIN"
+
+        max_attempts = int((action.params or {}).get("max_attempts", 5))
+        current_state = pre_state
+        for attempt in range(max_attempts):
+            option_index = self._find_stable_neow_option(current_state)
+            if option_index is not None:
+                result = await self.execute_action(
+                    ActionDescriptor(
+                        action_type="choose_event",
+                        params={"index": option_index},
+                        timeout=action.timeout,
+                    ),
+                )
+                current_state = await self._get_state_validated()
+                if current_state.screen == GameScreen.MAP:
+                    return result
+
+            if attempt == max_attempts - 1:
+                options = []
+                event = getattr(current_state, "event", None) or {}
+                if isinstance(event, dict):
+                    options = [opt.get("title") for opt in event.get("options", []) if isinstance(opt, dict)]
+                raise STS2Error(
+                    category=ErrorCategory.GAME_ERROR,
+                    message="No stable Neow blessing option available",
+                    detail={"options": options, "attempts": max_attempts},
+                )
+
+            await self._auto_reset_to_main_menu()
+            if not await self.wait_until_actionable(timeout=self._game_startup_timeout):
+                raise STS2Error(
+                    category=ErrorCategory.TIMEOUT_ERROR,
+                    message="Game did not become actionable after reset while retrying Neow blessing",
+                    detail={"attempt": attempt + 1, "action": "choose_neow_blessing"},
+                )
+            if not await self._wait_until_action_available("start_new_run", self._game_startup_timeout):
+                raise STS2Error(
+                    category=ErrorCategory.TIMEOUT_ERROR,
+                    message="start_new_run not available after reset while retrying Neow blessing",
+                    detail={"attempt": attempt + 1, "action": "start_new_run"},
+                )
+            await self.execute_action_sequence(
+                [
+                    ActionDescriptor(action_type="start_new_run"),
+                    ActionDescriptor(
+                        action_type="select_character",
+                        params={"character_id": character_id},
+                    ),
+                    ActionDescriptor(action_type="embark"),
+                ]
+            )
+            current_state = await self._get_state_validated()
+
+        raise STS2Error(
+            category=ErrorCategory.GAME_ERROR,
+            message="Failed to prepare stable Neow blessing run",
+        )
+
+    def _find_stable_neow_option(self, state: GameState) -> int | None:
+        if state.screen != GameScreen.EVENT:
+            return None
+
+        event = getattr(state, "event", None) or {}
+        if not isinstance(event, dict):
+            return None
+
+        event_id = str(event.get("event_id") or event.get("id") or "").upper()
+        if event_id != "NEOW":
+            return None
+
+        options = event.get("options")
+        if not isinstance(options, list):
+            return None
+
+        scored_options: list[tuple[int, int]] = []
+        for fallback_index, option in enumerate(options):
+            if not isinstance(option, dict) or option.get("is_locked"):
+                continue
+
+            option_index = option.get("index", fallback_index)
+            if not isinstance(option_index, int):
+                continue
+
+            text_key = str(option.get("text_key") or "").upper()
+            title = str(option.get("title") or "")
+            description = str(option.get("description") or "")
+            combined = f"{text_key} {title} {description}"
+
+            score = 0
+            if "LEAD_PAPERWEIGHT" in text_key:
+                score += 200
+            if "选择" in combined and "1张" in combined:
+                score += 150
+            if "无色牌" in combined:
+                score += 40
+            if "NEW_LEAF" in text_key:
+                score -= 120
+            if "ARCANE_SCROLL" in text_key:
+                score -= 100
+            if "NEOWS_BONES" in text_key:
+                score -= 100
+            if "随机" in combined and "稀有牌" in combined:
+                score -= 80
+            if "涅奥遗物" in combined:
+                score -= 80
+            if "变化" in combined and "1张" in combined and "选择" not in combined:
+                score -= 60
+
+            scored_options.append((score, option_index))
+
+        if not scored_options:
+            return None
+
+        scored_options.sort(key=lambda item: (-item[0], item[1]))
+        _, best_index = scored_options[0]
+        return best_index
+
+    async def _recover_from_known_action_false_negative(
+        self,
+        action: ActionDescriptor,
+        pre_state: GameState,
+        result: ActionResult,
+    ) -> GameState | None:
+        detail = str(result.detail or "")
+        if action.action_type != "choose_map_node" or "get_IsPlayPhase" not in detail:
+            return None
+
+        try:
+            candidate = await self._get_state_validated()
+        except STS2Error:
+            return None
+
+        if pre_state.screen == GameScreen.MAP and candidate.screen != GameScreen.MAP:
+            return candidate
+        return None
+
+    async def _get_post_action_state(
+        self,
+        action: ActionDescriptor,
+        pre_state: GameState,
+        timeout: float = 5.0,
+    ) -> GameState:
+        import time
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return await self._get_state_validated()
+            except STS2Error as exc:
+                detail = str(exc)
+                is_known_map_transition_glitch = (
+                    action.action_type == "choose_map_node"
+                    and pre_state.screen == GameScreen.MAP
+                    and "get_IsPlayPhase" in detail
+                )
+                if not is_known_map_transition_glitch or time.monotonic() >= deadline:
+                    raise
+                await asyncio.sleep(0.5)
+
     async def execute_action_sequence(
-        self, actions: list[ActionDescriptor]
+        self,
+        actions: list[ActionDescriptor],
+        on_first_pre_state: Callable[[GameState], None] | None = None,
     ) -> list[ActionResult]:
-        """Execute a sequence of actions with wait + re-read between each."""
+        """Execute a sequence of actions with wait + re-read between each.
+
+        on_first_pre_state, if given, receives the pre-action state snapshot
+        captured for the first action in the sequence (no extra get_state call).
+        """
         results: list[ActionResult] = []
         for i, action in enumerate(actions):
-            actionable = await self.adapter.wait_until_actionable(action.timeout)
+            actionable = await self._wait_until_action_available(
+                action.action_type,
+                action.timeout,
+            )
             if not actionable:
                 raise STS2Error(
                     category=ErrorCategory.TIMEOUT_ERROR,
                     message=f"Game not actionable before action {i}: {action.action_type}",
                     detail={"action_index": i, "action": action.action_type},
                 )
-            results.append(await self.execute_action(action))
+            results.append(
+                await self.execute_action(
+                    action, on_pre_state=on_first_pre_state if i == 0 else None
+                )
+            )
+            if i < len(actions) - 1:
+                await self._wait_for_intermediate_settle(action.action_type)
         return results
+
+    async def _wait_for_intermediate_settle(self, action_type: str, timeout: float = 5.0) -> None:
+        """Wait past transient turn-transition frames before the next action.
+
+        Setup chains such as "end_turn -> add card -> play card" should not continue
+        while the new turn is still materializing, otherwise the next action's
+        baseline can accidentally include stale pre-trigger state.
+        """
+        if action_type != "end_turn":
+            return
+
+        import time
+
+        deadline = time.monotonic() + timeout
+        last_signature: str | None = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+
+            try:
+                state = await self.adapter.get_state()
+            except STS2Error:
+                await asyncio.sleep(min(0.5, remaining))
+                continue
+
+            if self._is_turn_transition_settled(state):
+                signature = json.dumps(
+                    state.model_dump(mode="python"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+                if signature == last_signature:
+                    return
+                last_signature = signature
+            else:
+                last_signature = None
+
+            await asyncio.sleep(min(0.5, remaining))
+
+    def _is_turn_transition_settled(self, state: GameState) -> bool:
+        if state.screen != GameScreen.COMBAT:
+            return False
+
+        available = getattr(state, "available_actions", None)
+        if not isinstance(available, list) or len(available) == 0:
+            return False
+
+        combat = getattr(state, "combat", None)
+        if not isinstance(combat, dict):
+            return False
+
+        hand = combat.get("hand")
+        return isinstance(hand, list) and len(hand) > 0
 
     def _build_summary(self, results: list[TestResult]) -> SessionSummary:
         return SessionSummary(

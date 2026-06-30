@@ -34,6 +34,7 @@ logger = get_logger("adapters.agent")
 # STS2-Agent screen name → GameScreen enum mapping (same semantics as cli_mod.py)
 _SCREEN_MAP: dict[str, GameScreen] = {
     "MENU": GameScreen.MAIN_MENU,
+    "MAIN_MENU": GameScreen.MAIN_MENU,
     "CHARACTER_SELECT": GameScreen.CHARACTER_SELECT,
     "MAP": GameScreen.MAP,
     "COMBAT": GameScreen.COMBAT,
@@ -472,26 +473,44 @@ class AgentAdapter:
         - Health is ready and at least one action is available → returns True
         - The timeout is reached → returns False
         Transient STS2Errors during polling are swallowed.
-        Each request is capped to the remaining time so that
-        callers get a timely response even when self.timeout is large.
+
+        Each iteration directly calls health_check() and get_available_actions()
+        without an additional asyncio.wait_for wrapper — the httpx.AsyncClient
+        already enforces its own timeout (self.timeout), so nesting a second
+        wait_for is redundant and can cause subtle task-cancellation interference
+        in pytest event-loop environments (Python 3.12+).
         """
         import asyncio
         import time
 
         deadline = time.monotonic() + timeout
+        last_logged_hp: float = 0.0
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
+
+            # Diagnostic log every 10s to help debug adapter readiness
+            elapsed = timeout - remaining
+            if elapsed - last_logged_hp >= 10.0:
+                logger.info(
+                    "wait_until_actionable: %.0fs elapsed (remaining=%.0fs, timeout=%.0fs)",
+                    elapsed, remaining, timeout,
+                )
+                last_logged_hp = elapsed
+
             try:
-                health = await asyncio.wait_for(self.health_check(), timeout=remaining)
-                if health.healthy and await self.get_available_actions():
-                    return True
-            except (STS2Error, asyncio.TimeoutError):
-                # Re-check remaining time before sleeping
+                health = await self.health_check()
+                if health.healthy:
+                    actions = await self.get_available_actions()
+                    if actions:
+                        return True
+            except STS2Error:
+                # Transient error — continue polling
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
+
             await asyncio.sleep(min(0.5, remaining))
         return False
 
