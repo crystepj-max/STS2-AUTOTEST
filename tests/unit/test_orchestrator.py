@@ -252,6 +252,50 @@ class TestNavigationRegression:
 
         assert exc_info.value.message == "map vote interface missing after combat"
 
+    def test_nav_to_screen_updates_current_screen_after_success(self) -> None:
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.MAP),
+            GameState(screen=GameScreen.COMBAT),
+        ]
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+        action = ActionDescriptor(
+            action_type="nav_to_screen",
+            params={"target": "COMBAT"},
+        )
+
+        with patch(
+            "sts2_autotest.core.orchestrator.progress_until",
+            new=AsyncMock(return_value=None),
+        ):
+            result = _run(orchestrator.execute_action(action))
+
+        assert result.status == "success"
+        assert orchestrator._current_screen == GameScreen.COMBAT
+
+    def test_nav_to_screen_raises_when_final_screen_misses_target(self) -> None:
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.MAP),
+            GameState(screen=GameScreen.SHOP),
+        ]
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+        action = ActionDescriptor(
+            action_type="nav_to_screen",
+            params={"target": "COMBAT"},
+        )
+
+        with patch(
+            "sts2_autotest.core.orchestrator.progress_until",
+            new=AsyncMock(return_value=None),
+        ):
+            with pytest.raises(
+                STS2Error, match="nav_to_screen expected COMBAT but reached SHOP"
+            ):
+                _run(orchestrator.execute_action(action))
+
+        assert orchestrator._current_screen == GameScreen.SHOP
+
 
 class TestCrashHandling:
     """AC#6: crash detection and response."""

@@ -937,9 +937,28 @@ class TestOrchestrator:
                         category=ErrorCategory.TIMEOUT_ERROR,
                         message="map vote interface missing after combat",
                     )
+                    raise STS2Error(
+                        category=ErrorCategory.TIMEOUT_ERROR,
+                        message=str(exc),
+                    )
+            reached_state = await self._get_state_validated()
+            self._current_screen = self.state_engine.update_state(
+                self._current_screen,
+                reached_state.screen.value,
+                event=action.action_type,
+            )
+            if reached_state.screen.value != target.upper():
                 raise STS2Error(
-                    category=ErrorCategory.TIMEOUT_ERROR,
-                    message=str(exc),
+                    category=ErrorCategory.GAME_ERROR,
+                    message=(
+                        f"nav_to_screen expected {target.upper()} "
+                        f"but reached {reached_state.screen.value}"
+                    ),
+                    detail={
+                        "action": action.action_type,
+                        "expected_state": target.upper(),
+                        "actual_state": reached_state.screen.value,
+                    },
                 )
             return ActionResult(
                 status="success",
