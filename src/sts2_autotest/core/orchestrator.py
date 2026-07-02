@@ -14,6 +14,7 @@ from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.data_validator import validate_game_state
 from sts2_autotest.core.lock_manager import LockManager
+from sts2_autotest.core.navigation import NavigationBlocked, progress_until
 from sts2_autotest.core.progress import ProgressRecord, clear_progress, save_progress
 from sts2_autotest.core.evidence_hooks import EvidenceHooks, StubEvidenceHooks
 from sts2_autotest.common.types import SessionStatus
@@ -422,7 +423,11 @@ class TestOrchestrator:
         # If the game has a saved run, start_new_run won't be available;
         # we need to call abandon_run first to clear it.
         fresh_actions = await self.adapter.get_available_actions()
-        if state.screen == GameScreen.MAIN_MENU and "start_new_run" not in fresh_actions:
+        # Check has_run_save from state extras (set by Agent adapter)
+        has_saved_run = bool(
+            (getattr(state, "model_extra", None) or {}).get("menu", {}).get("has_run_save", False)
+        )
+        if state.screen == GameScreen.MAIN_MENU and "start_new_run" not in fresh_actions and has_saved_run:
             if "abandon_run" in fresh_actions:
                 logger.info("Saved run detected — clearing via abandon_run")
                 abandon = await self.adapter.act("abandon_run")
@@ -897,6 +902,55 @@ class TestOrchestrator:
         if action.action_type == "choose_neow_blessing":
             return await self._execute_choose_neow_blessing(action, on_pre_state)
 
+        # nav_to_screen — 自适应导航，调用框架 navigation.progress_until
+        if action.action_type == "nav_to_screen":
+            target = (action.params or {}).get("target")
+            if not target or not isinstance(target, str):
+                raise STS2Error(
+                    category=ErrorCategory.ADAPTER_ERROR,
+                    message=f"nav_to_screen requires 'target' param, got {action.params}",
+                )
+
+            pre_state = await self._get_state_validated()
+            self._current_screen = pre_state.screen
+            if on_pre_state is not None:
+                on_pre_state(pre_state)
+
+            async def _nav_get_state() -> dict[str, Any]:
+                gs = await self.adapter.get_state()
+                return gs.model_dump()
+
+            try:
+                await progress_until(
+                    get_state=_nav_get_state,
+                    act=lambda name, p: self.adapter.act(name, p),
+                    target_screen=target,
+                    timeout=action.timeout,
+                )
+            except NavigationBlocked as exc:
+                latest_state = await self.adapter.get_state()
+                map_block = getattr(latest_state, "map", {}) or {}
+                available = getattr(latest_state, "available_actions", None)
+                if (
+                    latest_state.screen == GameScreen.MAP
+                    and isinstance(map_block, dict)
+                    and map_block.get("local_vote")
+                    and not available
+                ):
+                    raise STS2Error(
+                        category=ErrorCategory.TIMEOUT_ERROR,
+                        message="map vote interface missing after combat",
+                    )
+                raise STS2Error(
+                    category=ErrorCategory.TIMEOUT_ERROR,
+                    message=str(exc),
+                )
+            return ActionResult(
+                status="success",
+                state_changed=True,
+                detail=f"Navigation to {target} completed",
+            )
+
         # 1. Pre-read state (with validation)
         pre_state = await self._get_state_validated()
         self._current_screen = pre_state.screen
@@ -1003,7 +1057,14 @@ class TestOrchestrator:
                         timeout=action.timeout,
                     ),
                 )
+                # Neow shows a result page with a "Proceed" button
+                # accessible via choose_event_option(index=0).
                 current_state = await self._get_state_validated()
+                if current_state.screen == GameScreen.EVENT:
+                    await self.execute_action(
+                        ActionDescriptor(action_type="choose_event", params={"index": 0}, timeout=action.timeout),
+                    )
+                    current_state = await self._get_state_validated()
                 if current_state.screen == GameScreen.MAP:
                     return result
 
@@ -1161,16 +1222,17 @@ class TestOrchestrator:
         """
         results: list[ActionResult] = []
         for i, action in enumerate(actions):
-            actionable = await self._wait_until_action_available(
-                action.action_type,
-                action.timeout,
-            )
-            if not actionable:
-                raise STS2Error(
-                    category=ErrorCategory.TIMEOUT_ERROR,
-                    message=f"Game not actionable before action {i}: {action.action_type}",
-                    detail={"action_index": i, "action": action.action_type},
+            if action.action_type != "nav_to_screen":
+                actionable = await self._wait_until_action_available(
+                    action.action_type,
+                    action.timeout,
                 )
+                if not actionable:
+                    raise STS2Error(
+                        category=ErrorCategory.TIMEOUT_ERROR,
+                        message=f"Game not actionable before action {i}: {action.action_type}",
+                        detail={"action_index": i, "action": action.action_type},
+                    )
             results.append(
                 await self.execute_action(
                     action, on_pre_state=on_first_pre_state if i == 0 else None
