@@ -252,6 +252,32 @@ class TestNavigationRegression:
 
         assert exc_info.value.message == "map vote interface missing after combat"
 
+    def test_nav_to_screen_reports_plain_navigation_timeout(self) -> None:
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.MAP),
+            GameState(screen=GameScreen.MAP, available_actions=[]),
+        ]
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+        action = ActionDescriptor(
+            action_type="nav_to_screen",
+            params={"target": "COMBAT"},
+        )
+
+        with patch(
+            "sts2_autotest.core.orchestrator.progress_until",
+            new=AsyncMock(
+                side_effect=NavigationBlocked(
+                    "Waiting for COMBAT timed out, last screen: MAP"
+                )
+            ),
+        ):
+            with pytest.raises(STS2Error) as exc_info:
+                _run(orchestrator.execute_action(action))
+
+        assert exc_info.value.category == ErrorCategory.TIMEOUT_ERROR
+        assert "Waiting for COMBAT timed out, last screen: MAP" in exc_info.value.message
+
     def test_nav_to_screen_updates_current_screen_after_success(self) -> None:
         mock_adapter = _make_mock_adapter()
         mock_adapter.get_state.side_effect = [

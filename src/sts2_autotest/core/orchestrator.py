@@ -937,10 +937,10 @@ class TestOrchestrator:
                         category=ErrorCategory.TIMEOUT_ERROR,
                         message="map vote interface missing after combat",
                     )
-                    raise STS2Error(
-                        category=ErrorCategory.TIMEOUT_ERROR,
-                        message=str(exc),
-                    )
+                raise STS2Error(
+                    category=ErrorCategory.TIMEOUT_ERROR,
+                    message=str(exc),
+                )
             reached_state = await self._get_state_validated()
             self._current_screen = self.state_engine.update_state(
                 self._current_screen,
