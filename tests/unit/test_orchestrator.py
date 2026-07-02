@@ -10,7 +10,8 @@ import pytest
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, HealthStatus
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
-from sts2_autotest.core.action_model import TestResult
+from sts2_autotest.core.action_model import ActionDescriptor, TestResult
+from sts2_autotest.core.navigation import NavigationBlocked
 from sts2_autotest.core.orchestrator import SessionSummary, TestOrchestrator
 from sts2_autotest.core.progress import load_progress
 from sts2_autotest.core.recovery import (
@@ -217,6 +218,39 @@ class TestStateFirstExecution:
         ])
         result = _run(orchestrator.execute_case("TC-001"))
         assert result.status == "pass"
+
+
+class TestNavigationRegression:
+    def test_nav_to_screen_reports_missing_map_vote_interface_after_combat(self) -> None:
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.MAP),
+            GameState(
+                screen=GameScreen.MAP,
+                map={"local_vote": {"row": 0, "col": 3}, "available_nodes": []},
+                available_actions=[],
+            ),
+        ]
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+        action = ActionDescriptor(
+            action_type="nav_to_screen",
+            params={"target": "COMBAT"},
+        )
+
+        with patch(
+            "sts2_autotest.core.orchestrator.progress_until",
+            new=AsyncMock(
+                side_effect=NavigationBlocked(
+                    "Waiting for COMBAT timed out, last screen: MAP"
+                )
+            ),
+        ):
+            with pytest.raises(
+                STS2Error, match="map vote interface missing after combat"
+            ) as exc_info:
+                _run(orchestrator.execute_action(action))
+
+        assert exc_info.value.message == "map vote interface missing after combat"
 
 
 class TestCrashHandling:
