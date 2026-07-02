@@ -423,11 +423,7 @@ class TestOrchestrator:
         # If the game has a saved run, start_new_run won't be available;
         # we need to call abandon_run first to clear it.
         fresh_actions = await self.adapter.get_available_actions()
-        # Check has_run_save from state extras (set by Agent adapter)
-        has_saved_run = bool(
-            (getattr(state, "model_extra", None) or {}).get("menu", {}).get("has_run_save", False)
-        )
-        if state.screen == GameScreen.MAIN_MENU and "start_new_run" not in fresh_actions and has_saved_run:
+        if state.screen == GameScreen.MAIN_MENU and "start_new_run" not in fresh_actions:
             if "abandon_run" in fresh_actions:
                 logger.info("Saved run detected — clearing via abandon_run")
                 abandon = await self.adapter.act("abandon_run")
@@ -1057,14 +1053,7 @@ class TestOrchestrator:
                         timeout=action.timeout,
                     ),
                 )
-                # Neow shows a result page with a "Proceed" button
-                # accessible via choose_event_option(index=0).
                 current_state = await self._get_state_validated()
-                if current_state.screen == GameScreen.EVENT:
-                    await self.execute_action(
-                        ActionDescriptor(action_type="choose_event", params={"index": 0}, timeout=action.timeout),
-                    )
-                    current_state = await self._get_state_validated()
                 if current_state.screen == GameScreen.MAP:
                     return result
 
