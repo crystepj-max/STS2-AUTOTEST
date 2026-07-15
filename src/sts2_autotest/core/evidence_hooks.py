@@ -7,6 +7,9 @@ and creates evidence pack on session end.
 
 from __future__ import annotations
 
+import importlib
+import os
+from pathlib import Path
 from typing import Any, Protocol
 
 from sts2_autotest.common.evidence import FailureInfo
@@ -68,6 +71,32 @@ class StubEvidenceHooks:
         pass
 
 
+def build_evidence_hooks(
+    evidence_root: Path,
+    *,
+    pack_id: str | None = None,
+) -> EvidenceHooks:
+    """按统一策略构造证据采集器。
+
+    证据实现属于可替换的运行期扩展，使用动态加载保持核心入口的分层边界。
+    """
+    if os.environ.get("STS2_AUTOTEST_EVIDENCE", "full").lower() == "none":
+        return StubEvidenceHooks()
+
+    screen_capture = importlib.import_module("sts2_autotest.evidence.capture").ScreenCapture
+    log_collector = importlib.import_module("sts2_autotest.evidence.logs").LogCollector
+    evidence_packager = importlib.import_module(
+        "sts2_autotest.evidence.packager"
+    ).EvidencePackager
+    return RealEvidenceHooks(
+        screen_capture(evidence_root / "screenshots"),
+        log_collector=log_collector(evidence_root / "logs"),
+        packager=evidence_packager(evidence_root),
+        pack_id=pack_id,
+        capture_screenshots=os.environ.get("STS2_AUTOTEST_EVIDENCE", "full").lower() == "full",
+    )
+
+
 class RealEvidenceHooks:
     """Evidence hooks with screenshot, log, and packager integration.
 
@@ -83,11 +112,15 @@ class RealEvidenceHooks:
         log_collector: LogCollectorProtocol | None = None,
         packager: EvidencePackagerProtocol | None = None,
         window_title: str = _DEFAULT_WINDOW_TITLE,
+        pack_id: str | None = None,
+        capture_screenshots: bool = True,
     ) -> None:
         self._capture = capture
         self._log_collector = log_collector
         self._packager = packager
         self._window_title = window_title
+        self._pack_id = pack_id
+        self._capture_screenshots = capture_screenshots
         self._last_failure: FailureInfo | None = None
 
     def on_case_start(self, case_id: str) -> None:
@@ -95,27 +128,28 @@ class RealEvidenceHooks:
 
     def on_case_end(self, result: TestResult) -> None:
         """Capture screenshot + log on case end. Failure gets filtered logs."""
-        result_capture = self._capture.capture_with_validation(
-            self._window_title, result.case_id
-        )
-        if result_capture.ok:
-            logger.info(
-                "Screenshot saved for case %s: %s",
-                result.case_id,
-                result_capture.path,
+        if self._capture_screenshots:
+            result_capture = self._capture.capture_with_validation(
+                self._window_title, result.case_id
             )
-        elif result_capture.status == "skipped":
-            logger.warning(
-                "Screenshot skipped for case %s: %s",
-                result.case_id,
-                result_capture.message,
-            )
-        else:
-            logger.warning(
-                "Screenshot validation failed for case %s: %s",
-                result.case_id,
-                result_capture.message,
-            )
+            if result_capture.ok:
+                logger.info(
+                    "Screenshot saved for case %s: %s",
+                    result.case_id,
+                    result_capture.path,
+                )
+            elif result_capture.status == "skipped":
+                logger.warning(
+                    "Screenshot skipped for case %s: %s",
+                    result.case_id,
+                    result_capture.message,
+                )
+            else:
+                logger.warning(
+                    "Screenshot validation failed for case %s: %s",
+                    result.case_id,
+                    result_capture.message,
+                )
 
         # Collect filtered logs on failure
         if result.status == "fail" and self._log_collector is not None:
@@ -155,21 +189,22 @@ class RealEvidenceHooks:
             exit_code=exit_code,
         )
 
-        crash_capture = self._capture.capture(
-            self._window_title, case_id=f"{case_id}_crash"
-        )
-        if crash_capture.ok:
-            logger.info(
-                "Crash screenshot saved for case %s: %s",
-                case_id,
-                crash_capture.path,
+        if self._capture_screenshots:
+            crash_capture = self._capture.capture(
+                self._window_title, case_id=f"{case_id}_crash"
             )
-        else:
-            logger.warning(
-                "Crash screenshot failed for case %s: %s",
-                case_id,
-                crash_capture.message,
-            )
+            if crash_capture.ok:
+                logger.info(
+                    "Crash screenshot saved for case %s: %s",
+                    case_id,
+                    crash_capture.path,
+                )
+            else:
+                logger.warning(
+                    "Crash screenshot failed for case %s: %s",
+                    case_id,
+                    crash_capture.message,
+                )
 
         if self._log_collector is not None:
             self._log_collector.collect_on_failure(f"{case_id}_crash")
@@ -188,13 +223,14 @@ class RealEvidenceHooks:
             failed = summary.get("failed", 0)
             crashed = summary.get("crashed", 0)
             run_result = "failed" if (failed + crashed) > 0 else "passed"
+            pack_kwargs: dict[str, Any] = {"run_result": run_result}
+            if self._pack_id:
+                pack_kwargs["pack_id"] = self._pack_id
             if self._last_failure is None:
-                pack_result = self._packager.create_pack(run_result=run_result)
+                pack_result = self._packager.create_pack(**pack_kwargs)
             else:
-                pack_result = self._packager.create_pack(
-                    run_result=run_result,
-                    failure=self._last_failure,
-                )
+                pack_kwargs["failure"] = self._last_failure
+                pack_result = self._packager.create_pack(**pack_kwargs)
             self._last_failure = None  # Reset for next session
             # Export artifact (Story 4.7, FR54) — non-blocking
             try:

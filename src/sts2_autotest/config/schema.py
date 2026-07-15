@@ -32,14 +32,14 @@ class AgentAdapterConfig(BaseModel):
 
     enabled: bool = False
     transport: Literal["http", "mcp"] = "http"
-    endpoint: str = "http://localhost:8080"
+    endpoint: str = "http://127.0.0.1:8080"
     mcp_endpoint: str = "http://127.0.0.1:8765/mcp"
     timeout: float = Field(default=30.0, gt=0)
     tool_profile: str = Field(default="guided", pattern=r"^(guided|layered|full)$")
     health_path: str = "health"
-    state_path: str = "game_state"
-    actions_path: str = "available_actions"
-    act_path: str = "act"
+    state_path: str = "state"
+    actions_path: str = "actions/available"
+    act_path: str = "action"
     wait_path: str = "wait_until_actionable"
     debug_actions: bool = False
 

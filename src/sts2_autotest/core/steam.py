@@ -98,16 +98,16 @@ class SteamController:
         """Launch the game via Steam and return its PID."""
         logger.info("Starting game (app %s)...", self.app_id)
         existing_pids = self._find_game_pids()
-        if _IS_MACOS:
-            subprocess.Popen(["open", f"steam://run/{self.app_id}"])
-        else:
-            subprocess.Popen([self.steam_exe, "-applaunch", self.app_id])
         if reuse_existing and existing_pids:
             pid = sorted(existing_pids)[0]
             self._game_pid = pid
             self._assign_to_job(pid)
-            logger.info("Game is already running (PID %s)", pid)
+            logger.info("Game is already running (PID %s) — reusing existing session", pid)
             return pid
+        if _IS_MACOS:
+            subprocess.Popen(["open", f"steam://run/{self.app_id}"])
+        else:
+            subprocess.Popen([self.steam_exe, "-applaunch", self.app_id])
         # Wait for game process to appear.
         start = time.monotonic()
         while time.monotonic() - start < self.startup_timeout:

@@ -47,6 +47,13 @@ class TestCLIParser:
         args = _create_parser().parse_args(["run", "--all"])
         assert args.timeout == 30
 
+    def test_run_journey_contract(self) -> None:
+        args = _create_parser().parse_args(
+            ["run", "--journey", "first_battle", "--character-id", "IRONCLAD"]
+        )
+        assert args.journey == "first_battle"
+        assert args.character_id == "IRONCLAD"
+
     def test_doctor_json(self) -> None:
         args = _create_parser().parse_args(["doctor", "--json"])
         assert args.json is True
@@ -54,6 +61,11 @@ class TestCLIParser:
     def test_report_with_id(self) -> None:
         args = _create_parser().parse_args(["report", "run-001"])
         assert args.run_id == "run-001"
+
+    def test_capabilities_command_parses(self) -> None:
+        args = _create_parser().parse_args(["capabilities", "--json"])
+        assert args.command == "capabilities"
+        assert args.json is True
 
     def test_report_evidence_dir(self) -> None:
         args = _create_parser().parse_args(["report", "--evidence-dir", "/tmp/evidence"])
@@ -119,6 +131,40 @@ class TestCLICommands:
         result = run_cmd(args)
         assert result == 1
 
+    def test_detached_run_persists_run_id_without_blocking(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        args = _create_parser().parse_args(["run", "--all", "--detach"])
+        with patch("sts2_autotest.core.run_service.spawn_worker") as worker:
+            assert run_cmd(args) == 0
+        worker.assert_called_once()
+        run_id = worker.call_args.args[1].run_id
+        from sts2_autotest.core.run_service import RunStore
+
+        saved = RunStore(tmp_path / "runs").load(run_id)
+        assert saved is not None
+        assert saved.status == "QUEUED"
+        assert saved.request.argv[-2:] == ["--internal-run-id", run_id]
+
+    def test_journey_run_uses_common_journey_entrypoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        args = _create_parser().parse_args(
+            ["run", "--journey", "first_battle", "--character-id", "IRONCLAD"]
+        )
+        adapter = object()
+        monkeypatch.setattr("sts2_autotest.cli.main._create_adapter", lambda _: adapter)
+        with patch(
+            "sts2_autotest.cli.main._run_journey_foreground", return_value=0
+        ) as journey:
+            assert run_cmd(args) == 0
+        journey.assert_called_once_with(
+            adapter,
+            journey="first_battle",
+            character_id="IRONCLAD",
+            timeout=30.0,
+            run_id=None,
+        )
+
     def test_run_all_pipeline_targets_suite_files_when_suites_exist(
         self, tmp_path: Path
     ) -> None:
@@ -155,15 +201,20 @@ class TestCLICommands:
             patch("sts2_autotest.cli.main._create_adapter"),
             patch("sts2_autotest.cli.main.review_cmd", return_value=0),
             patch("sts2_autotest.cli.main.compile_cmd", return_value=0),
-            patch("subprocess.call", return_value=0) as mock_pytest,
+            patch(
+                "sts2_autotest.cli.mcp_tools.run_tests_in_dir",
+                return_value={"status": "OK", "duration_ms": 1},
+            ) as mock_runner,
         ):
             mock_progress.return_value = tmp_path / "progress.json"
 
             assert run_cmd(args) == 0
 
-        command = mock_pytest.call_args.args[0]
-        assert str(output_dir / "test_suite_first_battle_smoke.py") in command
-        assert str(output_dir) not in command
+        kwargs = mock_runner.call_args.kwargs
+        assert str(output_dir / "test_suite_first_battle_smoke.py") in {
+            str(path) for path in kwargs["targets"]
+        }
+        assert kwargs["output_dir"] == str(output_dir)
 
     def test_doctor_returns_zero_or_one(self) -> None:
         args = _create_parser().parse_args(["doctor"])
@@ -295,6 +346,17 @@ class TestCLICommands:
 
 class TestCreateAdapter:
     """_create_adapter reads agent transport env vars."""
+
+    def test_agent_http_defaults_use_loopback_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sts2_autotest.adapters.agent import AgentAdapter
+
+        monkeypatch.delenv("STS2_ADAPTER__AGENT__TRANSPORT", raising=False)
+        monkeypatch.delenv("STS2_ADAPTER__AGENT__ENDPOINT", raising=False)
+
+        adapter = _create_adapter("agent")
+
+        assert isinstance(adapter, AgentAdapter)
+        assert adapter.endpoint == "http://127.0.0.1:8080"
 
     def test_agent_mcp_endpoint_inherits_agent_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient

@@ -26,6 +26,9 @@ autotest run --all
 
 # 3. 查看最近一次运行的报告
 autotest report
+
+# 4. 查看跨 Agent 公共能力契约
+autotest capabilities --json
 ```
 
 ### 命令一览
@@ -38,6 +41,7 @@ autotest report
 | `autotest doctor` | 检查运行环境就绪情况（支持 `--json`、`--ci`） |
 | `autotest report` | 查看测试运行摘要 |
 | `autotest queue` | 管理本地测试队列 |
+| `autotest capabilities` | 输出跨 Agent 共用的任务状态和旅程契约 |
 | `autotest progress` | 查看断点续跑进度 |
 | `autotest agent-test` | 一键执行完整 Test Agent 工作流（构建 → 本地化检查 → 部署 → 冒烟 → 报告） |
 | `autotest serve` | 启动健康检查 HTTP 端点（`/health`、`/health/live`、`/health/ready`） |
@@ -88,6 +92,8 @@ lint-imports
 - 项目说明与开发约定：[CLAUDE.md](CLAUDE.md)
 - STS2-Cli-Mod CLI 参考：[docs/sts2-cli-mod-reference.md](docs/sts2-cli-mod-reference.md)
 - 自然语言测试：[docs/natural-language-testing/](docs/natural-language-testing/)
+- 平台能力盘点与 Gawain 边界：[docs/platform-capability-inventory.md](docs/platform-capability-inventory.md)
+- 跨 Agent 统一运行契约：[docs/unified-run-contract.md](docs/unified-run-contract.md)
 
 ## 许可
 

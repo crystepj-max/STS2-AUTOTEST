@@ -21,6 +21,7 @@ class GameScreen(StrEnum):
     REST = "REST"
     EVENT = "EVENT"
     CHEST = "CHEST"
+    BUNDLE_SELECTION = "BUNDLE_SELECTION"
     BOSS_REWARD = "BOSS_REWARD"
     CARD_REWARD = "CARD_REWARD"
     RELIC_REWARD = "RELIC_REWARD"
@@ -28,6 +29,7 @@ class GameScreen(StrEnum):
     VICTORY = "VICTORY"
     CRASHED = "CRASHED"
     UNKNOWN = "UNKNOWN"
+
 
     @property
     def is_terminal(self) -> bool:
@@ -44,7 +46,7 @@ _TERMINAL_STATES: frozenset[GameScreen] = frozenset({
     GameScreen.GAME_OVER,
     GameScreen.VICTORY,
     GameScreen.CRASHED,
-    GameScreen.UNKNOWN,  # No outgoing transitions — session must restart
+    GameScreen.UNKNOWN,
 })
 
 _ALLOWED_TRANSITIONS: dict[GameScreen, frozenset[GameScreen]] = {
@@ -60,8 +62,11 @@ _ALLOWED_TRANSITIONS: dict[GameScreen, frozenset[GameScreen]] = {
     }),
     GameScreen.SHOP: frozenset({GameScreen.MAP}),
     GameScreen.REST: frozenset({GameScreen.MAP}),
-    GameScreen.EVENT: frozenset({GameScreen.MAP, GameScreen.COMBAT}),
+    GameScreen.EVENT: frozenset({GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}),
     GameScreen.CHEST: frozenset({GameScreen.MAP}),
+    GameScreen.BUNDLE_SELECTION: frozenset({
+        GameScreen.EVENT, GameScreen.MAP,
+    }),
     GameScreen.CARD_REWARD: frozenset({GameScreen.MAP}),
     GameScreen.RELIC_REWARD: frozenset({GameScreen.MAP}),
     GameScreen.BOSS_REWARD: frozenset({GameScreen.MAP, GameScreen.VICTORY}),

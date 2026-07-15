@@ -45,7 +45,7 @@ def test_suite_gawain_smoke(autotest, _session_loop):
         .require_start_state("""- 游戏已启动，位于主菜单""")
         .setup(
             start_new_run(),
-            select_character("gawain"),
+            select_character("GAWAINMOD-GAWAIN"),
         )
         .execute(
             embark(),

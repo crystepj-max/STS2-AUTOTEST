@@ -5,7 +5,7 @@ import json
 import signal
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
@@ -94,6 +94,8 @@ class TestOrchestrator:
         progress_path: str | None = None,
         resumed_from: str | None = None,
         lock_path: str | None = None,
+        lifecycle: Any = None,
+        status_callback: Callable[[str], None] | None = None,
     ) -> None:
         self.adapter = adapter
         self.state_engine = state_engine or StateEngine()
@@ -127,6 +129,9 @@ class TestOrchestrator:
         self._lock_manager: LockManager | None = (
             LockManager(lock_path) if lock_path else None
         )
+        self._lifecycle = lifecycle
+        self._traveling_since: float | None = None
+        self._status_callback = status_callback
         self._action_trace_hook: Callable[
             [ActionDescriptor, GameState, GameState, ActionResult], None
         ] | None = None
@@ -153,6 +158,34 @@ class TestOrchestrator:
         In non-strict mode, violations log WARNING and return _last_valid_state.
         """
         state = await self.adapter.get_state()
+        if self._lifecycle is not None:
+            state_payload = state.model_dump()
+            if self._lifecycle.is_phantom_combat(state_payload):
+                raise STS2Error(
+                    category=ErrorCategory.CRASH_ERROR,
+                    message="Phantom combat detected: combat screen has no combat state",
+                )
+            map_block = state_payload.get("map") or {}
+            if (
+                str(state_payload.get("screen") or "").upper() == "MAP"
+                and isinstance(map_block, dict)
+                and map_block.get("is_traveling")
+                and not list(map_block.get("available_nodes") or [])
+            ):
+                import time as _time
+
+                self._traveling_since = self._traveling_since or _time.monotonic()
+                if self._lifecycle.travel_hang_expired(
+                    state_payload,
+                    self._traveling_since,
+                    now=_time.monotonic(),
+                ):
+                    raise STS2Error(
+                        category=ErrorCategory.TIMEOUT_ERROR,
+                        message="Map travel made no progress within the recovery threshold",
+                    )
+            else:
+                self._traveling_since = None
         violations = validate_game_state(state)
 
         if violations and _is_transient_validation_violation(violations):
@@ -269,11 +302,12 @@ class TestOrchestrator:
                 await asyncio.sleep(1)
 
         # Phase 2: hard reset — kill and restart the game
+        hard_state: GameState | None
         try:
-            state = await self.adapter.get_state()
+            hard_state = await self.adapter.get_state()
         except STS2Error:
-            state = None
-        if state is not None and state.screen == GameScreen.MAIN_MENU:
+            hard_state = None
+        if hard_state is not None and hard_state.screen == GameScreen.MAIN_MENU:
             await self.wait_until_actionable(timeout=5.0)
             return
 
@@ -490,6 +524,8 @@ class TestOrchestrator:
         # Release adapter resources
         try:
             await self.adapter.cleanup()
+        except STS2Error as exc:
+            logger.warning("Adapter cleanup failed: %s", exc)
         except Exception as exc:
             logger.warning("Adapter cleanup failed: %s", exc)
 
@@ -760,6 +796,8 @@ class TestOrchestrator:
             return result3
 
         # Non-P0, non-terminate: attempt recovery (FAST_PATH or RECREATE)
+        if self._status_callback is not None:
+            self._status_callback("RECOVERING")
         recovered, new_adapter = await self.recovery.execute(decision.action, self.adapter)
 
         if recovered and new_adapter is not None:
@@ -771,6 +809,8 @@ class TestOrchestrator:
             )
 
         if recovered:
+            if self._status_callback is not None:
+                self._status_callback("RUNNING")
             # Clear crash flag if previously set
             if self._crashed:
                 self._crashed = False
@@ -914,7 +954,12 @@ class TestOrchestrator:
 
             async def _nav_get_state() -> dict[str, Any]:
                 gs = await self.adapter.get_state()
-                return gs.model_dump()
+                state = gs.model_dump()
+                try:
+                    state["available_actions"] = await self.adapter.get_available_actions()
+                except STS2Error:
+                    state["available_actions"] = []
+                return state
 
             try:
                 await progress_until(
@@ -927,6 +972,11 @@ class TestOrchestrator:
                 latest_state = await self.adapter.get_state()
                 map_block = getattr(latest_state, "map", {}) or {}
                 available = getattr(latest_state, "available_actions", None)
+                if available is None:
+                    try:
+                        available = await self.adapter.get_available_actions()
+                    except STS2Error:
+                        available = []
                 if (
                     latest_state.screen == GameScreen.MAP
                     and isinstance(map_block, dict)
@@ -974,6 +1024,17 @@ class TestOrchestrator:
 
         # 2. Validate action in available set (empty = nothing available)
         available = await self.adapter.get_available_actions()
+        if (
+            action.action_type == "start_new_run"
+            and action.action_type not in available
+            and "open_character_select" in available
+        ):
+            action = ActionDescriptor(
+                action_type="open_character_select",
+                params={},
+                timeout=action.timeout,
+                expected_state=action.expected_state,
+            )
         if action.action_type not in available:
             await self._record_adapter_result(True)
             raise STS2Error(
@@ -1058,7 +1119,7 @@ class TestOrchestrator:
             run_state.get("character_id")
             if isinstance(run_state, dict)
             else None
-        ) or "GAWAINMOD-GAWAIN"
+        ) or (action.params or {}).get("character_id") or "IRONCLAD"
 
         max_attempts = int((action.params or {}).get("max_attempts", 5))
         current_state = pre_state

@@ -87,6 +87,15 @@ class TestSessionLifecycle:
         result = _run(orchestrator.start_session())
         assert result is False
 
+    def test_start_session_fails_when_not_actionable(self) -> None:
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.wait_until_actionable.return_value = False
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+
+        result = _run(orchestrator.start_session())
+
+        assert result is False
+
     def test_stop_session(self, orchestrator: TestOrchestrator) -> None:
         _run(orchestrator.start_session())
         _run(orchestrator.stop_session())
@@ -220,6 +229,22 @@ class TestStateFirstExecution:
         assert result.status == "pass"
 
 
+class TestStartRunFallback:
+    def test_start_new_run_falls_back_to_character_select(self) -> None:
+        mock_adapter = _make_mock_adapter(
+            screen=GameScreen.MAIN_MENU,
+            post_action_screen=GameScreen.CHARACTER_SELECT,
+            actions=["open_character_select"],
+        )
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+        action = ActionDescriptor(action_type="start_new_run")
+
+        result = _run(orchestrator.execute_action(action))
+
+        assert result.status == "success"
+        mock_adapter.act.assert_awaited_once_with("open_character_select", {})
+
+
 class TestNavigationRegression:
     def test_nav_to_screen_reports_missing_map_vote_interface_after_combat(self) -> None:
         mock_adapter = _make_mock_adapter()
@@ -298,6 +323,32 @@ class TestNavigationRegression:
 
         assert result.status == "success"
         assert orchestrator._current_screen == GameScreen.COMBAT
+
+    def test_nav_to_screen_merges_live_available_actions_into_progress_state(self) -> None:
+        mock_adapter = _make_mock_adapter()
+        mock_adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.MAP),
+            GameState(screen=GameScreen.MAP, map={"local_vote": {"row": 0, "col": 3}}),
+            GameState(screen=GameScreen.COMBAT),
+        ]
+        mock_adapter.get_available_actions = AsyncMock(return_value=["choose_map_node"])
+        orchestrator = TestOrchestrator(adapter=mock_adapter)
+        action = ActionDescriptor(
+            action_type="nav_to_screen",
+            params={"target": "COMBAT"},
+        )
+
+        async def _assert_progress_state(**kwargs: Any) -> None:
+            state = await kwargs["get_state"]()
+            assert state["available_actions"] == ["choose_map_node"]
+
+        with patch(
+            "sts2_autotest.core.orchestrator.progress_until",
+            new=AsyncMock(side_effect=_assert_progress_state),
+        ):
+            result = _run(orchestrator.execute_action(action))
+
+        assert result.status == "success"
 
     def test_nav_to_screen_raises_when_final_screen_misses_target(self) -> None:
         mock_adapter = _make_mock_adapter()
@@ -694,6 +745,26 @@ class TestStateValidation:
         state = _run(orch._get_state_validated())
         assert state.screen == GameScreen.COMBAT
 
+    def test_transient_empty_combat_hand_retries_until_state_recovers(
+        self, mock_adapter: Any
+    ) -> None:
+        orch = TestOrchestrator(adapter=mock_adapter, strict_validation=False)
+
+        transient = GameState(
+            screen=GameScreen.COMBAT,
+            combat={"hand": [], "deck": [{"card_id": "A"}]},
+        )
+        recovered = GameState(
+            screen=GameScreen.COMBAT,
+            combat={"hand": [{"card_id": "A"}], "deck": [{"card_id": "B"}]},
+        )
+        mock_adapter.get_state.side_effect = [transient, recovered]
+
+        state = _run(orch._get_state_validated())
+
+        assert state == recovered
+        assert orch._last_valid_state == recovered
+
     def test_strict_validation_flag_init(self) -> None:
         """strict_validation flag is passed through constructor."""
         mock = _make_mock_adapter()
@@ -813,6 +884,17 @@ class TestLockIntegration:
 
 class TestAutoReset:
     """Auto-reset behavior when session starts from a non-MAIN_MENU state."""
+
+    def test_auto_reset_at_main_menu_does_not_open_abandon_modal(self) -> None:
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.return_value = GameState(screen=GameScreen.MAIN_MENU)
+        mock.wait_until_actionable.return_value = True
+
+        orch = TestOrchestrator(adapter=mock)
+        _run(orch._auto_reset_to_main_menu())
+
+        mock.act.assert_not_called()
 
     def test_auto_reset_from_map_with_steam_returns_false(self) -> None:
         """MAP state triggers hard reset; without a running game it fails → False."""

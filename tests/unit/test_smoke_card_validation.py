@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -93,11 +94,12 @@ class TestSmokeCardValidation:
             captured["script"] = cmd[2]
             return subprocess.CompletedProcess(cmd, 1, "", "")
 
-        with patch(
-            "sts2_autotest.core.test_agent_runner.subprocess.run",
-            side_effect=fake_run,
-        ):
-            result = _capture_macos_window_png(tmp_path / "screen.png", "Slay the Spire 2")
+        with patch.dict(sys.modules, {"Quartz": None, "AppKit": None}):
+            with patch(
+                "sts2_autotest.core.test_agent_runner.subprocess.run",
+                side_effect=fake_run,
+            ):
+                result = _capture_macos_window_png(tmp_path / "screen.png", "Slay the Spire 2")
 
         assert result is False
         assert "def _select_macos_window" in captured["script"]

@@ -7,7 +7,7 @@ AgentAdapter 通过 HTTP API 对接 STS2-Agent，提供异步原生游戏控制�
 
 ## 前置条件
 
-- STS2-Agent 已安装并运行（默认 `http://localhost:8080`）
+- STS2-Agent 已安装并运行（默认 `http://127.0.0.1:8080`）
 - STS2-Agent 与游戏版本兼容
 
 ## 配置方式
@@ -20,7 +20,7 @@ adapter:
     enabled: false
   agent:
     enabled: true
-    endpoint: "http://localhost:8080"
+    endpoint: "http://127.0.0.1:8080"
     timeout: 30
     tool_profile: "guided"   # guided | layered | full
     debug_actions: false
@@ -29,10 +29,10 @@ adapter:
 ### 方式二：环境变量
 
 ```bash
-export STS2_AGENT_ENABLED=true
-export STS2_CLI_ENABLED=false
-export STS2_AGENT_ENDPOINT=http://localhost:8080
-export STS2_AGENT_TIMEOUT=30
+export STS2_ADAPTER__AGENT__ENABLED=true
+export STS2_ADAPTER__CLI__ENABLED=false
+export STS2_ADAPTER__AGENT__ENDPOINT=http://127.0.0.1:8080
+export STS2_ADAPTER__AGENT__TIMEOUT=30
 ```
 
 ### 方式三：CLI 参数

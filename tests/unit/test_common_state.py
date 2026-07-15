@@ -15,8 +15,8 @@ class TestGameScreen:
     def test_has_all_required_states(self) -> None:
         expected = {
             "MAIN_MENU", "CHARACTER_SELECT", "MAP", "COMBAT", "SHOP", "REST",
-            "EVENT", "CHEST", "BOSS_REWARD", "CARD_REWARD", "RELIC_REWARD",
-            "GAME_OVER", "VICTORY", "CRASHED", "UNKNOWN",
+            "EVENT", "CHEST", "BUNDLE_SELECTION", "BOSS_REWARD", "CARD_REWARD",
+            "RELIC_REWARD", "GAME_OVER", "VICTORY", "CRASHED", "UNKNOWN",
         }
         actual = {s.name for s in GameScreen}
         assert expected == actual
@@ -24,6 +24,7 @@ class TestGameScreen:
     def test_enum_values_match_names(self) -> None:
         for state in GameScreen:
             assert state.value == state.name
+
 
     def test_is_string_enum(self) -> None:
         assert isinstance(GameScreen.MAIN_MENU, str)
@@ -85,6 +86,10 @@ class TestAllowedTransitions:
         assert GameScreen.CARD_REWARD in transitions
         assert GameScreen.RELIC_REWARD in transitions
         assert GameScreen.BOSS_REWARD in transitions
+
+    def test_event_can_transition_to_card_reward(self) -> None:
+        transitions = GameScreen.EVENT.allowed_transitions
+        assert GameScreen.CARD_REWARD in transitions
 
     def test_terminal_states_have_no_transitions(self) -> None:
         for state in (GameScreen.GAME_OVER, GameScreen.VICTORY, GameScreen.CRASHED):

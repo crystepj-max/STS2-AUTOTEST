@@ -19,12 +19,14 @@ _ASSERTION_IMPORTS = (
     "choose_map_node",
     "combat_basic_policy",
     "embark",
-    "enemy_hp_decreased_by",
     "end_turn",
+    "enemy_hp_decreased_by",
     "enemy_took_exact_hits",
     "enter_combat",
     "game_reached_state",
     "give_card",
+    "hand_size_changed_by",
+    "minion_queue_ids_are",
     "no_crash_detected",
     "has_travelable_node",
     "play_card",
@@ -33,12 +35,15 @@ _ASSERTION_IMPORTS = (
     "player_hp_changed_by",
     "return_to_menu",
     "select_character",
+    "set_hp",
+    "set_seed",
     "skip_card_reward",
     "start_new_run",
 )
 
 
 def _build_import_block(body: str) -> str:
+    """只导入生成内容实际使用的名称，避免生成文件依赖无关功能。"""
     imports: list[str] = []
     if "json." in body:
         imports.append("import json")
@@ -46,21 +51,18 @@ def _build_import_block(body: str) -> str:
         imports.append("from pathlib import Path")
     if "pytest." in body:
         imports.append("import pytest")
-
     imports.append("from sts2_autotest.dsl.fluent import define")
-
-    used_assertions = [name for name in _ASSERTION_IMPORTS if f"{name}(" in body]
-    if used_assertions:
+    used = [name for name in _ASSERTION_IMPORTS if f"{name}(" in body]
+    if used:
         imports.append(
             "from sts2_autotest.dsl.assertions import (\n"
-            + "\n".join(f"    {name}," for name in used_assertions)
+            + "\n".join(f"    {name}," for name in used)
             + "\n)"
         )
     if "GameScreen." in body:
         imports.append("from sts2_autotest.common.state import GameScreen")
     if "ActionDescriptor(" in body:
         imports.append("from sts2_autotest.core.action_model import ActionDescriptor")
-
     return "\n".join(imports)
 
 
@@ -71,61 +73,179 @@ _STEP_TO_ACTION: dict[str, str] = {
 
 _CHARACTER_IDS: dict[str, str] = {
     "Ironclad": "IRONCLAD",
-    "Gawain": "gawain",
+    "Gawain": "GAWAINMOD-GAWAIN",
     "战士": "IRONCLAD",
     "铁甲战士": "IRONCLAD",
 }
 
 
-def _step_to_action_call(step: str) -> str:
-    """Convert a natural language step to a DSL function call.
+def _assertion_to_call(assertion: str) -> str:
+    """Convert a natural-language Then assertion into a DSL assertion call.
 
-    Falls back to ActionDescriptor if no direct DSL function mapping exists.
+    Shared by case- and suite-level generation so the recognized pattern set
+    never drifts between the two. Falls back to a TODO placeholder (no crash,
+    no silent pass) when nothing matches.
     """
-    event_match = re.search(r"第\s*(\d+)\s*个选项", step)
-    if "开局事件" in step and event_match:
+    assertion_lower = assertion.lower()
+
+    exact_hits_match = re.search(r"造成\s*(\d+)\s*点伤害\s*(\d+)\s*次", assertion)
+    if exact_hits_match:
+        return f"enemy_took_exact_hits({exact_hits_match.group(1)}, {exact_hits_match.group(2)})"
+
+    if "deal" in assertion_lower and "damage" in assertion_lower and "twice" in assertion_lower:
+        damage_match = re.search(r"deal\s+(\d+)\s+damage", assertion_lower)
+        if damage_match:
+            return f"enemy_took_exact_hits({damage_match.group(1)}, 2)"
+        return f"# TODO: implement assertion for '{assertion}'"
+
+    enemy_damage_match = re.search(r"敌人受到\s*(\d+)\s*点伤害", assertion)
+    if enemy_damage_match:
+        return f"enemy_hp_decreased_by({enemy_damage_match.group(1)})"
+
+    energy_match = re.search(r"玩家能量减少\s*(\d+)", assertion)
+    if energy_match:
+        return f"player_energy_decreased_by({energy_match.group(1)})"
+
+    block_match = re.search(r"玩家格挡增加\s*(\d+)", assertion)
+    if block_match:
+        return f"player_block_increased_by({block_match.group(1)})"
+
+    heal_cn_match = re.search(r"(?:玩家)?回复\s*(\d+)\s*点生命", assertion)
+    if heal_cn_match:
+        return f"player_hp_changed_by({heal_cn_match.group(1)})"
+
+    hp_changed_match = re.search(r"player hp changed by\s*([+-]?\d+)", assertion_lower)
+    if hp_changed_match:
+        return f"player_hp_changed_by({hp_changed_match.group(1)})"
+
+    hand_match = re.search(r"手牌(?:数量)?(增加|减少)\s*(\d+)", assertion)
+    if hand_match:
+        sign = "" if hand_match.group(1) == "增加" else "-"
+        return f"hand_size_changed_by({sign}{hand_match.group(2)})"
+
+    minion_queue_match = re.search(r"仆从队列(?:为|等于)\s*\[([A-Za-z0-9_:\-,\s]*)\]", assertion)
+    if minion_queue_match is not None:
+        ids = [
+            item.strip().strip("'").strip('"')
+            for item in minion_queue_match.group(1).split(",")
+            if item.strip()
+        ]
+        quoted_ids = ", ".join(json.dumps(item, ensure_ascii=False) for item in ids)
+        return f"minion_queue_ids_are([{quoted_ids}])"
+
+    if "crash" in assertion_lower:
+        return "no_crash_detected()"
+    if "rest" in assertion_lower or "营火" in assertion or "休息" in assertion:
+        return "game_reached_state(GameScreen.REST)"
+    if "map" in assertion_lower or "地图" in assertion:
+        return "game_reached_state(GameScreen.MAP)"
+    if "event" in assertion_lower or "事件" in assertion:
+        return "game_reached_state(GameScreen.EVENT)"
+    if "combat" in assertion_lower or "战斗" in assertion:
+        return "game_reached_state(GameScreen.COMBAT)"
+    if "节点" in assertion or "node" in assertion_lower:
+        return "has_travelable_node()"
+
+    return f"# TODO: implement assertion for '{assertion}'"
+
+
+def _step_to_action_call(step: str) -> str:
+    """Convert a natural-language step into a DSL call or ActionDescriptor."""
+    step = step.strip()
+
+    if step in {"启动游戏", "开始新局", "开始新 run"}:
+        return "start_new_run()"
+    if step == "开始冒险":
+        return "embark()"
+    if step == "返回主菜单":
+        return "return_to_menu()"
+    if step in {"进入首次战斗", "进入首场战斗", "战斗"}:
+        return "enter_combat()"
+    if step == "推进事件对话":
+        return "advance_dialogue()"
+    if "基础策略" in step and "战斗" in step:
+        return "combat_basic_policy()"
+    if step == "收取奖励并继续":
+        return 'ActionDescriptor(action_type="collect_rewards_and_proceed")'
+    if "跳过卡牌奖励" in step:
+        return "skip_card_reward()"
+    if step == "直接获胜当前战斗":
+        return 'ActionDescriptor(action_type="win_combat")'
+    if step == "启用地图穿行":
+        return 'ActionDescriptor(action_type="enable_travel")'
+    if step == "选择首个营火节点":
+        return 'ActionDescriptor(action_type="choose_map_node_by_type", params={"node_type": "RestSite"})'
+    if step == "选择首个普通战斗节点" or step == "选择首个战斗节点":
+        return 'ActionDescriptor(action_type="nav_to_screen", params={"target": "COMBAT"})'
+    if step == "选择涅奥祝福":
+        return 'ActionDescriptor(action_type="choose_neow_blessing")'
+    if step in {"点击 Proceed", "点击继续前进", "选择 Proceed"}:
+        return "choose_event(0)"
+    if step == "选择魔网共鸣":
+        return 'ActionDescriptor(action_type="choose_rest_option", params={"option_index": 2})'
+    if step == "离开营火返回地图":
+        return 'ActionDescriptor(action_type="proceed")'
+
+    event_match = re.search(r"开局事件(?:的)?\s*第\s*(\d+)\s*个选项", step)
+    if event_match:
         return f"choose_event({event_match.group(1)})"
 
-    map_node_match = re.search(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)", step)
-    if "地图节点" in step and map_node_match:
+    map_node_match = re.search(r"地图节点\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", step)
+    if map_node_match:
         return f"choose_map_node({map_node_match.group(1)}, {map_node_match.group(2)})"
+    if "首个可走地图节点" in step or "第一个可走地图节点" in step:
+        return 'ActionDescriptor(action_type="choose_map_node", params={"index": 0})'
 
-    if "返回主菜单" in step:
-        return "return_to_menu()"
-    if "开始新 run" in step or "开始新局" in step:
-        return "start_new_run()"
-    character_match = re.search(r"选择\s*([A-Za-z][A-Za-z0-9_-]*|战士|铁甲战士)", step)
+    deck_card_match = re.search(r"选择待变化的第\s*(\d+)\s*张牌", step)
+    if deck_card_match:
+        return (
+            'ActionDescriptor(action_type="select_deck_card", '
+            f'params={{"index": {deck_card_match.group(1)}}})'
+        )
+
+    deck_option_match = re.search(r"牌堆选牌.*第\s*(\d+)\s*个选项", step)
+    if deck_option_match:
+        return (
+            'ActionDescriptor(action_type="select_deck_card", '
+            f'params={{"index": {deck_option_match.group(1)}}})'
+        )
+
+    character_match = re.search(
+        r"选择\s*([A-Za-z][A-Za-z0-9_-]*|战士|铁甲战士|Gawain|Ironclad)", step
+    )
     if character_match:
-        character_name = character_match.group(1)
-        character_id = _CHARACTER_IDS.get(character_name)
+        character_id = _CHARACTER_IDS.get(character_match.group(1))
         if character_id:
             return f'select_character("{character_id}")'
+
     give_card_match = re.search(r"添加\s+([A-Za-z0-9_:-]+)\s+到手牌", step)
     if give_card_match:
         return f'give_card("{give_card_match.group(1)}")'
-    if "开始冒险" in step:
-        return "embark()"
-    if "推进事件对话" in step:
-        # advance_dialogue only needed when the event requires it;
-        # NEOW's blessing transitions directly to MAP after choosing.
-        return "advance_dialogue()"
-    if "进入首次战斗" in step or "进入首场战斗" in step:
-        return "enter_combat()"
-    if "基础策略" in step and "战斗" in step:
-        return "combat_basic_policy()"
-    if "跳过卡牌奖励" in step:
-        return "skip_card_reward()"
+
+    play_card_match = re.search(r"使用\s+([A-Za-z0-9_:-]+)", step)
+    if play_card_match:
+        return f'play_card("{play_card_match.group(1)}")'
+
+    seed_match = re.search(r"设置种子\s*(-?\d+)", step)
+    if seed_match:
+        return f"set_seed({seed_match.group(1)})"
+
+    hp_match = re.search(r"设置玩家生命(?:值)?\s*(\d+)", step)
+    if hp_match:
+        return f"set_hp({hp_match.group(1)})"
+
+    block_match = re.search(r"给予玩家\s*(\d+)\s*点格挡", step)
+    if block_match:
+        return (
+            'ActionDescriptor(action_type="give_block", '
+            f'params={{"amount": {block_match.group(1)}}})'
+        )
 
     step_lower = step.lower()
     for keyword, action in _STEP_TO_ACTION.items():
         if step_lower.startswith(keyword):
-            if keyword == "使用":
-                rest = step[len(keyword) :].strip().strip("'").strip('"')
-                if rest:
-                    return f'{action}("{rest}")'
-                return f"ActionDescriptor(action_type={keyword!r})"
             return action
-    # Fallback: use ActionDescriptor for unrecognized steps
+
     return f"ActionDescriptor(action_type={step!r})"
 
 
@@ -138,62 +258,6 @@ def _case_id_to_class_name(suite_id: str) -> str:
     """Convert SUITE-FIRST-BATTLE-SMOKE to TestSuiteFirstBattleSmoke."""
     parts = suite_id.replace("-", " ").title().split()
     return "TestSuite" + "".join(parts[1:])
-
-
-def _assertion_to_dsl_call(assertion: str) -> str:
-    """Convert a natural language assertion to a DSL assertion call."""
-    assertion_lower = assertion.lower()
-    exact_hits_match = re.search(r"造成\s*(\d+)\s*点伤害\s*(\d+)\s*次", assertion)
-    if exact_hits_match:
-        return f"enemy_took_exact_hits({exact_hits_match.group(1)}, {exact_hits_match.group(2)})"
-
-    if "deal" in assertion_lower and "damage" in assertion_lower and "twice" in assertion_lower:
-        damage_match = re.search(r"deal\s+(\d+)\s+damage", assertion_lower)
-        if damage_match:
-            return f"enemy_took_exact_hits({damage_match.group(1)}, 2)"
-        return f"# TODO: implement assertion for '{assertion}'"
-
-    enemy_damage_match = re.search(
-        r"(?:敌人.*?(?:受到|承受)|enemy hp decreased by)\s*(\d+)", assertion_lower
-    )
-    if enemy_damage_match:
-        return f"enemy_hp_decreased_by({enemy_damage_match.group(1)})"
-
-    block_match = re.search(
-        r"(?:玩家.*?格挡.*?(?:增加|获得)|player block increased by)\s*(\d+)",
-        assertion_lower,
-    )
-    if block_match:
-        return f"player_block_increased_by({block_match.group(1)})"
-
-    energy_match = re.search(
-        r"(?:玩家.*?能量.*?(?:减少|消耗)|player energy decreased by)\s*(\d+)",
-        assertion_lower,
-    )
-    if energy_match:
-        return f"player_energy_decreased_by({energy_match.group(1)})"
-
-    hp_match = re.search(
-        r"(?:玩家.*?(?:回复|治疗|生命).*?([+-]?\d+)|player hp changed by\s*([+-]?\d+))",
-        assertion_lower,
-    )
-    if hp_match:
-        amount = hp_match.group(1) or hp_match.group(2)
-        return f"player_hp_changed_by({amount})"
-
-    if "crash" in assertion_lower:
-        return "no_crash_detected()"
-    if "map" in assertion_lower or "地图" in assertion:
-        return "game_reached_state(GameScreen.MAP)"
-    if "event" in assertion_lower or "事件" in assertion:
-        return "game_reached_state(GameScreen.EVENT)"
-    if "rest" in assertion_lower or "营火" in assertion or "休息" in assertion:
-        return "game_reached_state(GameScreen.REST)"
-    if "combat" in assertion_lower or "战斗" in assertion:
-        return "game_reached_state(GameScreen.COMBAT)"
-    if "节点" in assertion or "node" in assertion_lower:
-        return "has_travelable_node()"
-    return f"# TODO: implement assertion for '{assertion}'"
 
 
 class CodeGenerator:
@@ -219,7 +283,7 @@ class CodeGenerator:
                 [
                     f"def test_{func_name}():",
                     f'    """{spec.title}"""',
-                    '    pytest.skip("No steps defined")',
+                    f'    pytest.skip("No steps defined")',
                 ]
             )
 
@@ -228,9 +292,7 @@ class CodeGenerator:
         execute_step = steps[-1]
 
         # Build assertion calls (no leading whitespace -> indented at assembly time)
-        assert_calls: list[str] = []
-        for assertion in assertions:
-            assert_calls.append(_assertion_to_dsl_call(assertion))
+        assert_calls: list[str] = [_assertion_to_call(assertion) for assertion in assertions]
 
         # Build function body lines
         lines: list[str] = []
@@ -351,7 +413,7 @@ class CodeGenerator:
             lines.append("        .assert_that(")
             if spec.assertions:
                 for assertion in spec.assertions:
-                    lines.append(f"            {_assertion_to_dsl_call(assertion)},")
+                    lines.append(f"            {_assertion_to_call(assertion)},")
             else:
                 lines.append("            # no assertions defined")
             lines.append("        )")

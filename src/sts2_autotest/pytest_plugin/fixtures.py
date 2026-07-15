@@ -8,8 +8,8 @@ for each test.
 import asyncio
 import os
 import platform
-from collections.abc import Callable
-from typing import Generator, Literal
+from pathlib import Path
+from typing import Any, Callable, Generator
 
 import pytest
 
@@ -18,8 +18,10 @@ from sts2_autotest.adapters.discovery import find_game_dir, steam_roots
 from sts2_autotest.adapters.cli_mod import CliModAdapter
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameState
+from sts2_autotest.core.evidence_hooks import build_evidence_hooks
 from sts2_autotest.core.orchestrator import TestOrchestrator
 from sts2_autotest.core.recovery import DefaultRecoveryStrategy
+from sts2_autotest.core.runtime_factory import build_lifecycle_manager
 from sts2_autotest.core.steam import SteamController
 
 logger = get_logger("pytest_plugin.fixtures")
@@ -40,7 +42,7 @@ class SessionInitError(Exception):
 def _session_init_error_message() -> str:
     """Build a user-facing session initialization failure message."""
     if _is_agent_enabled():
-        endpoint = os.environ.get("STS2_ADAPTER__AGENT__ENDPOINT", "http://localhost:8080")
+        endpoint = os.environ.get("STS2_ADAPTER__AGENT__ENDPOINT", "http://127.0.0.1:8080")
         return (
             "Failed to start test session with AgentAdapter. "
             "Ensure STS2-Agent is running and reachable at "
@@ -80,8 +82,8 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
         transport_raw = os.environ.get("STS2_ADAPTER__AGENT__TRANSPORT", "http")
         if transport_raw not in ("http", "mcp"):
             raise ValueError("STS2_ADAPTER__AGENT__TRANSPORT must be 'http' or 'mcp'")
-        transport: Literal["http", "mcp"] = "mcp" if transport_raw == "mcp" else "http"
-        endpoint = os.environ.get("STS2_ADAPTER__AGENT__ENDPOINT", "http://localhost:8080")
+        transport: str = transport_raw
+        endpoint = os.environ.get("STS2_ADAPTER__AGENT__ENDPOINT", "http://127.0.0.1:8080")
         mcp_client = (
             FastMcpAgentClient(
                 endpoint=os.environ.get("STS2_ADAPTER__AGENT__MCP_ENDPOINT", endpoint)
@@ -96,7 +98,7 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
             debug_actions=os.environ.get("STS2_ADAPTER__AGENT__DEBUG_ACTIONS", "false").lower()
             in ("true", "1", "yes"),
             mcp_client=mcp_client,
-            transport=transport,
+            transport=transport,  # type: ignore[arg-type]
         )
     return CliModAdapter()
 
@@ -236,7 +238,28 @@ def _orchestrator(_session_loop: asyncio.AbstractEventLoop) -> Generator[TestOrc
         game_startup_timeout=60.0,
         steam_controller=steam,
     )
-    orch = TestOrchestrator(adapter=adapter, recovery=recovery)
+    evidence_root = Path(
+        os.environ.get("STS2_AUTOTEST_EVIDENCE_DIR", "tests/output")
+    )
+    try:
+        lifecycle = build_lifecycle_manager(adapter, steam, evidence_root)
+    except (OSError, ValueError) as exc:
+        logger.warning("Lifecycle manager unavailable: %s", exc)
+        lifecycle = None
+    if lifecycle is not None:
+        recovery = DefaultRecoveryStrategy(
+            adapter_factory=_create_adapter_factory(),
+            game_startup_timeout=60.0,
+            steam_controller=steam,
+            lifecycle_manager=lifecycle,
+        )
+    orch = TestOrchestrator(
+        adapter=adapter,
+        recovery=recovery,
+        evidence=build_evidence_hooks(evidence_root),
+        lifecycle=lifecycle,
+        lock_path=str(evidence_root / ".sts2-autotest.lock"),
+    )
     ok = _start_orchestrator_session(_session_loop, orch, adapter)
     if not ok:
         # Clean up partially initialized resources before failing

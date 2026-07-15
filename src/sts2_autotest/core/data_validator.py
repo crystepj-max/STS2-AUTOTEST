@@ -26,7 +26,7 @@ def validate_game_state(state: GameState) -> list[str]:
 
     combat = extra.get("combat")
     if isinstance(combat, dict):
-        _check_combat_data(combat, violations)
+        _check_combat_data(state.screen, combat, violations)
 
     # Check for top-level player_hp field if no combat dict
     hp = extra.get("player_hp")
@@ -39,11 +39,14 @@ def validate_game_state(state: GameState) -> list[str]:
     return violations
 
 
-def _check_combat_data(combat: dict[str, Any], violations: list[str]) -> None:
+def _check_combat_data(screen: GameScreen, combat: dict[str, Any], violations: list[str]) -> None:
     """Validate combat-specific data fields."""
     hp = combat.get("player_hp")
     if isinstance(hp, (int, float)) and hp < 0:
         violations.append(f"combat.player_hp is negative: {hp}")
+
+    if screen != GameScreen.COMBAT:
+        return
 
     hand = combat.get("hand")
     if isinstance(hand, list) and len(hand) == 0:

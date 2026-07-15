@@ -12,7 +12,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-MCP_PROTOCOL_VERSION = "2024-11-05"
+# Stable protocol version used by the cross-agent service. The server keeps
+# the old JSON-RPC shape for existing local clients while exposing the newer
+# transport/version contract to new clients.
+MCP_PROTOCOL_VERSION = "2025-06-18"
 
 # JSON-RPC 2.0 error codes
 PARSE_ERROR = -32700

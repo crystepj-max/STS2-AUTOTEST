@@ -107,7 +107,7 @@ class TestAgentAdapterTransport:
 
         assert result.healthy is True
         assert adapter.transport == "http"
-        assert mock._requests[0]["url"] == "http://localhost:8080/health"
+        assert mock._requests[0]["url"] == "http://127.0.0.1:8080/health"
 
     def test_mcp_transport_uses_injected_client(self) -> None:
         mcp = MockMcpClient()
@@ -124,12 +124,26 @@ class TestAgentAdapterTransport:
 
         assert client.endpoint == "http://127.0.0.1:8765/mcp"
 
+    def test_fast_mcp_client_disables_env_proxy_lookup(self) -> None:
+        client = FastMcpAgentClient()
+
+        http_client = client._get_client()
+
+        assert getattr(http_client, "_trust_env") is False
+
     def test_default_mcp_client_uses_adapter_endpoint(self) -> None:
         adapter = AgentAdapter(endpoint="http://example.test/custom", transport="mcp")
 
         client = cast(FastMcpAgentClient, adapter._get_mcp_client())
 
         assert client.endpoint == "http://example.test/custom"
+
+    def test_default_http_client_disables_env_proxy_lookup(self) -> None:
+        adapter = AgentAdapter()
+
+        http_client = adapter._get_client()
+
+        assert getattr(http_client, "_trust_env") is False
 
     def test_mcp_non_json_response_maps_to_parse_error(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -165,7 +179,7 @@ class TestAgentAdapterHealthCheck:
         result = _run(adapter.health_check())
 
         assert result.healthy is True
-        assert mock._requests[0]["url"] == "http://localhost:8080/health"
+        assert mock._requests[0]["url"] == "http://127.0.0.1:8080/health"
 
     def test_real_agent_enveloped_ready_health_is_healthy(self) -> None:
         mock = MockAsyncClient()
@@ -218,6 +232,33 @@ class TestAgentAdapterGetState:
         assert state.screen == GameScreen.COMBAT
         assert state.in_combat is True
 
+    def test_card_selection_screen_maps_to_card_reward(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "CARD_SELECTION"}})
+        adapter = AgentAdapter(client=mock)
+
+        state = _run(adapter.get_state())
+
+        assert state.screen == GameScreen.CARD_REWARD
+
+    def test_reward_screen_maps_to_card_reward(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "REWARD"}})
+        adapter = AgentAdapter(client=mock)
+
+        state = _run(adapter.get_state())
+
+        assert state.screen == GameScreen.CARD_REWARD
+
+    def test_real_agent_main_menu_state_maps_to_main_menu(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAIN_MENU"}})
+        adapter = AgentAdapter(client=mock)
+
+        state = _run(adapter.get_state())
+
+        assert state.screen == GameScreen.MAIN_MENU
+
     def test_unknown_screen_maps_to_unknown(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"screen": "SOME_NEW_SCREEN"})
@@ -269,6 +310,67 @@ class TestAgentAdapterAvailableActions:
 
         assert actions == ["end_turn", "play_card"]
 
+    def test_main_menu_actions_add_start_new_run_alias(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAIN_MENU",
+                    "actions": [
+                        {"name": "open_character_select", "requires_target": False},
+                        {"name": "open_timeline", "requires_target": False},
+                    ],
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["open_character_select", "open_timeline", "start_new_run"]
+
+    def test_saved_run_actions_add_start_new_run_alias(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAIN_MENU",
+                    "actions": [
+                        {"name": "continue_run", "requires_target": False},
+                        {"name": "abandon_run", "requires_target": False},
+                        {"name": "open_timeline", "requires_target": False},
+                    ],
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["continue_run", "abandon_run", "open_timeline", "start_new_run"]
+
+    def test_map_actions_add_choose_map_node_by_type_alias(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": ["choose_map_node"]})
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["choose_map_node", "choose_map_node_by_type"]
+
+    def test_event_actions_add_choose_neow_blessing_alias(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": ["choose_event_option"]})
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["choose_event_option", "choose_event", "choose_neow_blessing"]
+
     def test_empty_list(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"actions": []})
@@ -278,14 +380,14 @@ class TestAgentAdapterAvailableActions:
 
         assert actions == []
 
-    def test_debug_actions_adds_give_card(self) -> None:
+    def test_debug_actions_adds_custom_debug_actions(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"actions": ["play_card"]})
         adapter = AgentAdapter(client=mock, debug_actions=True)
 
         actions = _run(adapter.get_available_actions())
 
-        assert actions == ["play_card", "give_card"]
+        assert actions == ["play_card", "give_card", "set_seed", "set_hp", "give_block", "win_combat", "enable_travel"]
 
 
 class TestAgentAdapterAct:
@@ -293,6 +395,10 @@ class TestAgentAdapterAct:
 
     def test_success(self) -> None:
         mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "OTHER_EVENT"}}},
+        )
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock)
 
@@ -303,15 +409,493 @@ class TestAgentAdapterAct:
 
     def test_success_flattens_action_args(self) -> None:
         mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "OTHER_EVENT"}}},
+        )
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock)
 
         result = _run(adapter.act("choose_event", {"index": 0}))
 
         assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_start_new_run_maps_to_open_character_select(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "open_character_select"},
+                        {"name": "open_timeline"},
+                    ]
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("start_new_run"))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "open_character_select",
+        }
+
+    def test_start_new_run_abandons_existing_save_then_opens_character_select(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "continue_run"},
+                        {"name": "abandon_run"},
+                        {"name": "open_timeline"},
+                    ]
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "confirm_modal"},
+                        {"name": "dismiss_modal"},
+                    ]
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "open_character_select"},
+                        {"name": "open_timeline"},
+                    ]
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("start_new_run"))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {"action": "abandon_run"}
+        assert mock._requests[3]["kwargs"]["json"] == {"action": "confirm_modal"}
+        assert mock._requests[5]["kwargs"]["json"] == {"action": "open_character_select"}
+
+    def test_choose_event_maps_to_choose_event_option(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "OTHER_EVENT"}}},
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_choose_neow_blessing_prefers_single_select_branch(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "event_id": "NEOW",
+                        "options": [
+                            {
+                                "index": 0,
+                                "text_key": "NEOW.pages.INITIAL.options.ARCANE_SCROLL",
+                                "title": "奥术卷轴",
+                                "description": "获得一张随机稀有牌。",
+                                "is_locked": False,
+                            },
+                            {
+                                "index": 1,
+                                "text_key": "NEOW.pages.INITIAL.options.NEW_LEAF",
+                                "title": "新叶",
+                                "description": "变化1张牌。",
+                                "is_locked": False,
+                            },
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAP"}})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_neow_blessing"))
+
+        assert result.status == "success"
+        post_payloads = [
+            request["kwargs"]["json"]
+            for request in mock._requests
+            if request["method"] == "POST" and "json" in request["kwargs"]
+        ]
+        assert post_payloads[0] == {
+            "action": "choose_event_option",
+            "option_index": 1,
+        }
+
+    def test_choose_event_auto_confirms_finished_event_with_single_proceed(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "OTHER_EVENT"}}},
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_finished": True,
+                        "options": [
+                            {"index": 0, "is_proceed": True, "title": "Proceed"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+        assert mock._requests[2]["method"] == "GET"
+        assert mock._requests[2]["url"] == "http://127.0.0.1:8080/state"
+        assert mock._requests[3]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_choose_event_neow_auto_advances_card_selection_then_proceed(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "NEOW"}}},
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "CARD_SELECTION",
+                    "selection": {
+                        "cards": [
+                            {"index": 0, "name": "Automation"},
+                            {"index": 1, "name": "Volley"},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_finished": True,
+                        "options": [
+                            {"index": 0, "is_proceed": True, "title": "Proceed"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAP"}})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+        assert mock._requests[3]["kwargs"]["json"] == {
+            "action": "select_deck_card",
+            "option_index": 0,
+        }
+        assert mock._requests[5]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_choose_event_neow_auto_collects_reward_then_proceed(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "NEOW"}}},
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "REWARD",
+                    "reward": {"cards": [], "relics": []},
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_finished": True,
+                        "options": [
+                            {"index": 0, "is_proceed": True, "title": "Proceed"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAP"}})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+        assert mock._requests[3]["kwargs"]["json"] == {
+            "action": "collect_rewards_and_proceed",
+        }
+        assert mock._requests[5]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_choose_event_neow_waits_for_delayed_finished_event_then_proceed(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "NEOW"}}},
+        )
+        mock.add_response(200, {"ok": True})
+        for _ in range(10):
+            mock.add_response(
+                200,
+                {
+                    "ok": True,
+                    "data": {
+                        "screen": "EVENT",
+                        "event": {
+                            "event_id": "NEOW",
+                            "is_finished": False,
+                            "options": [
+                                {"index": 0, "is_proceed": False, "title": "Blessing"},
+                            ],
+                        },
+                    },
+                },
+            )
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "event_id": "NEOW",
+                        "is_finished": True,
+                        "options": [
+                            {"index": 0, "is_proceed": True, "title": "Proceed"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAP"}})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[-2]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_select_deck_card_maps_index_to_option_index(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("select_deck_card", {"index": 2}))
+
+        assert result.status == "success"
         assert mock._requests[0]["kwargs"]["json"] == {
-            "action": "choose_event",
-            "index": 0,
+            "action": "select_deck_card",
+            "option_index": 2,
+        }
+
+    def test_select_deck_card_auto_confirms_finished_event_with_single_proceed(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_finished": True,
+                        "options": [
+                            {"index": 1, "is_proceed": True, "title": "Proceed"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("select_deck_card", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "select_deck_card",
+            "option_index": 0,
+        }
+        assert mock._requests[1]["method"] == "GET"
+        assert mock._requests[2]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 1,
+        }
+
+    def test_collect_rewards_and_proceed_auto_confirms_finished_event_with_single_proceed(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_finished": True,
+                        "options": [
+                            {"index": 0, "is_proceed": True, "title": "Proceed"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("collect_rewards_and_proceed"))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "collect_rewards_and_proceed",
+        }
+        assert mock._requests[2]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_choose_map_node_resolves_coordinates_to_option_index(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAP",
+                    "map": {
+                        "available_nodes": [
+                            {"index": 0, "col": 0, "row": 0},
+                            {"index": 1, "col": 1, "row": 0},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_map_node", {"col": 1, "row": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_map_node",
+            "option_index": 1,
+        }
+
+    def test_choose_map_node_accepts_legacy_row_col_ordering(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAP",
+                    "map": {
+                        "available_nodes": [
+                            {"index": 0, "col": 0, "row": 1},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_map_node", {"col": 1, "row": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_map_node",
+            "option_index": 0,
         }
 
     def test_play_card_resolves_card_id_to_agent_card_index(self) -> None:
@@ -343,18 +927,95 @@ class TestAgentAdapterAct:
             "target_index": 0,
         }
 
-    def test_give_card_uses_debug_console_command(self) -> None:
+    def test_play_card_resolves_semantic_card_id_to_runtime_index(self) -> None:
         mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "COMBAT",
+                    "combat": {
+                        "hand": [
+                            {"index": 3, "card_id": "GAWAINMOD-EMERGENCY_RECRUIT"},
+                        ]
+                    },
+                },
+            },
+        )
         mock.add_response(200, {"ok": True})
-        adapter = AgentAdapter(client=mock, debug_actions=True)
+        adapter = AgentAdapter(client=mock)
 
-        result = _run(adapter.act("give_card", {"card_id": "TWIN_STRIKE"}))
+        result = _run(adapter.act("play_card", {"card_id": "gawain:emergency_recruit"}))
 
         assert result.status == "success"
-        assert mock._requests[0]["url"] == "http://localhost:8080/action"
-        assert mock._requests[0]["kwargs"]["json"] == {
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "play_card",
+            "card_index": 3,
+        }
+
+    def test_play_card_drops_default_target_for_non_targeted_card(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "COMBAT",
+                    "combat": {
+                        "hand": [
+                            {
+                                "index": 4,
+                                "card_id": "GAWAINMOD-PORTABLE_MAGIC_TERMINAL",
+                                "requires_target": False,
+                            },
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("play_card", {"card_id": "gawain:portable_magic_terminal", "target": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "play_card",
+            "card_index": 4,
+        }
+
+    def test_give_card_uses_debug_console_command(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "COMBAT",
+                    "run": {
+                        "deck": [
+                            {"card_id": "GAWAINMOD-EMERGENCY_RECRUIT"},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(
+            endpoint="http://127.0.0.1:8080",
+            client=mock,
+            debug_actions=True,
+        )
+
+        result = _run(adapter.act("give_card", {"card_id": "gawain:emergency_recruit"}))
+
+        assert result.status == "success"
+        assert mock._requests[0]["url"] == "http://127.0.0.1:8080/state"
+        assert mock._requests[1]["url"] == "http://127.0.0.1:8080/action"
+        assert mock._requests[1]["kwargs"]["json"] == {
             "action": "run_console_command",
-            "command": "card TWIN_STRIKE hand",
+            "command": "card GAWAINMOD-EMERGENCY_RECRUIT hand",
         }
 
     def test_give_card_requires_debug_actions(self) -> None:
@@ -364,6 +1025,218 @@ class TestAgentAdapterAct:
 
         assert result.status == "failure"
         assert result.detail == "give_card requires AgentAdapter(debug_actions=True)"
+
+    def test_set_seed_uses_debug_console_command(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(
+            endpoint="http://127.0.0.1:8080",
+            client=mock,
+            debug_actions=True,
+        )
+
+        result = _run(adapter.act("set_seed", {"seed": 35}))
+
+        assert result.status == "success"
+        assert mock._requests[0]["url"] == "http://127.0.0.1:8080/action"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "gawain_emergency_recruit_seed 35",
+        }
+
+    def test_set_seed_requires_debug_actions(self) -> None:
+        adapter = AgentAdapter()
+
+        result = _run(adapter.act("set_seed", {"seed": 35}))
+
+        assert result.status == "failure"
+        assert result.detail == "set_seed requires AgentAdapter(debug_actions=True)"
+
+    def test_set_hp_uses_damage_console_command(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "COMBAT",
+                    "combat": {"player": {"current_hp": 80}},
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("set_hp", {"hp": 75}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "damage 5 0",
+        }
+
+    def test_set_hp_uses_heal_console_command_when_target_is_higher(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "COMBAT",
+                    "combat": {"player": {"current_hp": 70}},
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("set_hp", {"hp": 75}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "heal 5",
+        }
+
+    def test_set_hp_requires_debug_actions(self) -> None:
+        adapter = AgentAdapter()
+
+        result = _run(adapter.act("set_hp", {"hp": 75}))
+
+        assert result.status == "failure"
+        assert result.detail == "set_hp requires AgentAdapter(debug_actions=True)"
+
+    def test_give_block_uses_debug_console_command(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("give_block", {"amount": 9}))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "block 9 0",
+        }
+
+    def test_win_combat_uses_debug_console_command(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("win_combat"))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "win",
+        }
+
+    def test_enable_travel_uses_debug_console_command(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("enable_travel"))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "travel",
+        }
+
+    def test_choose_map_node_by_type_resolves_option_index(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAP",
+                    "map": {
+                        "available_nodes": [
+                            {"index": 3, "node_type": "Monster"},
+                            {"index": 16, "node_type": "RestSite"},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_map_node_by_type", {"node_type": "RestSite"}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_map_node",
+            "option_index": 16,
+        }
+
+    def test_choose_map_node_by_type_skips_current_traveled_node_when_travel_enabled(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAP",
+                    "map": {
+                        "current_node": {"row": 1, "col": 0},
+                        "is_travel_enabled": True,
+                        "nodes": [
+                            {"index": 1, "row": 1, "col": 0, "node_type": "Monster", "state": "Traveled"},
+                            {"index": 2, "row": 1, "col": 1, "node_type": "Monster", "state": "Travelable"},
+                            {"index": 5, "row": 2, "col": 0, "node_type": "Unknown", "state": "Untravelable"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_map_node_by_type", {"node_type": "Monster"}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_map_node",
+            "option_index": 2,
+        }
+
+    def test_choose_map_node_by_type_uses_full_map_when_travel_enabled(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "MAP",
+                    "map": {
+                        "current_node": {"row": 2, "col": 3},
+                        "is_travel_enabled": True,
+                        "available_nodes": [
+                            {"index": 8, "row": 3, "col": 2, "node_type": "Monster", "state": "Travelable"},
+                        ],
+                        "nodes": [
+                            {"index": 5, "row": 2, "col": 3, "node_type": "Monster", "state": "Traveled"},
+                            {"index": 8, "row": 3, "col": 2, "node_type": "Monster", "state": "Travelable"},
+                            {"index": 20, "row": 6, "col": 0, "node_type": "RestSite", "state": "Travelable"},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_map_node_by_type", {"node_type": "RestSite"}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "choose_map_node",
+            "option_index": 20,
+        }
 
     def test_failure(self) -> None:
         mock = MockAsyncClient()
@@ -382,6 +1255,114 @@ class TestAgentAdapterAct:
         result = _run(adapter.act("play_card"))
 
         assert result.status == "timeout"
+
+    def test_select_character_resolves_character_id_to_option_index(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "CHARACTER_SELECT",
+                    "character_select": {
+                        "characters": [
+                            {"character_id": "IRONCLAD", "index": 0},
+                            {"character_id": "SILENT", "index": 1},
+                            {"character_id": "GAWAINMOD-GAWAIN", "index": 6},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("select_character", {"character_id": "GAWAINMOD-GAWAIN"}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "select_character",
+            "option_index": 6,
+        }
+
+    def test_select_character_fuzzy_matches_lowercase_id(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "CHARACTER_SELECT",
+                    "character_select": {
+                        "characters": [
+                            {"character_id": "IRONCLAD", "index": 0},
+                            {"character_id": "GAWAINMOD-GAWAIN", "index": 6},
+                        ]
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("select_character", {"character_id": "gawain"}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "select_character",
+            "option_index": 6,
+        }
+
+    def test_select_character_passes_through_when_option_index_given(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("select_character", {"option_index": 3}))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "select_character",
+            "option_index": 3,
+        }
+
+    def test_select_character_passes_through_when_character_not_found(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "CHARACTER_SELECT",
+                    "character_select": {"characters": [{"character_id": "IRONCLAD", "index": 0}]},
+                },
+            },
+        )
+        mock.add_response(200, {"ok": False, "error": "CHARACTER_NOT_FOUND"})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("select_character", {"character_id": "UNKNOWN_MOD-HERO"}))
+
+        assert result.status == "failure"
+
+    def test_enter_combat_is_noop_when_already_in_combat(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "COMBAT",
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("enter_combat"))
+
+        assert result.status == "success"
+        assert result.state_changed is False
+        assert len(mock._requests) == 1
 
 
 class TestAgentAdapterWaitUntilActionable:
@@ -407,8 +1388,36 @@ class TestAgentAdapterWaitUntilActionable:
 
         assert result is True
         assert [request["method"] for request in mock._requests] == ["GET", "GET"]
-        assert mock._requests[0]["url"] == "http://localhost:8080/health"
-        assert mock._requests[1]["url"] == "http://localhost:8080/actions/available"
+        assert mock._requests[0]["url"] == "http://127.0.0.1:8080/health"
+        assert mock._requests[1]["url"] == "http://127.0.0.1:8080/actions/available"
+
+    def test_ignores_debug_only_actions_until_real_action_is_available(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"status": "ready"}})
+        mock.add_response(200, {"ok": True, "data": {"actions": []}})
+        mock.add_response(200, {"ok": True, "data": {"status": "ready"}})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "open_character_select"},
+                    ]
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.wait_until_actionable(1.0))
+
+        assert result is True
+        assert [request["url"] for request in mock._requests] == [
+            "http://127.0.0.1:8080/health",
+            "http://127.0.0.1:8080/actions/available",
+            "http://127.0.0.1:8080/health",
+            "http://127.0.0.1:8080/actions/available",
+        ]
 
     def test_returns_false_on_timeout(self) -> None:
         mock = MockAsyncClient()
@@ -522,7 +1531,7 @@ class TestAgentAdapterErrorMapping:
     def test_http_status_error_504_via_exception(self) -> None:
         """HTTPStatusError(504) exception injection triggers timeout result."""
         mock = MockAsyncClient()
-        request = httpx.Request("GET", "http://localhost:8080/game_state")
+        request = httpx.Request("GET", "http://127.0.0.1:8080/game_state")
         mock.add_exception(
             httpx.HTTPStatusError("Gateway Timeout", request=request, response=httpx.Response(504))
         )
@@ -534,7 +1543,7 @@ class TestAgentAdapterErrorMapping:
     def test_http_status_error_500_via_exception(self) -> None:
         """HTTPStatusError exception injection triggers ADAPTER_ERROR."""
         mock = MockAsyncClient()
-        request = httpx.Request("GET", "http://localhost:8080/game_state")
+        request = httpx.Request("GET", "http://127.0.0.1:8080/game_state")
         mock.add_exception(
             httpx.HTTPStatusError("Server Error", request=request, response=httpx.Response(500))
         )
@@ -619,6 +1628,7 @@ class TestAgentAdapterScreenMapping:
             "CHEST": GameScreen.CHEST,
             "BOSS_REWARD": GameScreen.BOSS_REWARD,
             "CARD_REWARD": GameScreen.CARD_REWARD,
+            "REWARD": GameScreen.CARD_REWARD,
             "GAME_OVER": GameScreen.GAME_OVER,
             "VICTORY": GameScreen.VICTORY,
             "CRASHED": GameScreen.CRASHED,

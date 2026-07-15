@@ -167,7 +167,7 @@ adapter:
     timeout: 30.0
   agent:
     enabled: false
-    endpoint: http://localhost:8080
+    endpoint: http://127.0.0.1:8080
     timeout: 30.0
 
 execution:
@@ -438,6 +438,8 @@ def test_card_flow():
 | `set_seed(seed)` | 设置随机种子。 |
 | `give_card(card_id)` | 给玩家添加卡牌。 |
 | `set_hp(hp)` | 设置玩家 HP。 |
+
+当 Agent 返回 4xx/5xx，且响应体里包含 `error.message` 时，失败详情会直接显示这条原因，便于定位“命令不存在”之类的接口或配置问题。
 
 ### 9.2 断言函数
 

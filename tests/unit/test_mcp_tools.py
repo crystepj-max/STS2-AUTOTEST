@@ -28,6 +28,7 @@ class TestToolRegistry:
         expected = {
             "health_check", "review_spec", "compile_spec",
             "run_test", "get_report", "list_specs", "run_pipeline",
+            "capabilities", "submit_run", "get_run", "cancel_run", "resume_run",
         }
         assert names == expected
 
@@ -36,10 +37,78 @@ class TestToolRegistry:
         result = registry.dispatch("health_check", {})
         assert result["status"] == "ok"
 
+    def test_capabilities_describe_persistent_run_contract(self):
+        result = ToolRegistry().dispatch("capabilities", {})
+        assert "submit_run" in result["operations"]
+        assert "BLOCKED_ENVIRONMENT" in result["run_statuses"]
+
+
+class TestPersistentRunTools:
+    def test_get_run_returns_not_found_for_unknown_id(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_get_run
+
+        result = handle_get_run({"run_id": "missing"})
+        assert result["status"] == "NOT_FOUND"
+
+    def test_run_id_rejects_path_traversal(self):
+        from sts2_autotest.cli.mcp_tools import handle_get_run
+
+        with pytest.raises(McpError, match="invalid characters"):
+            handle_get_run({"run_id": "../run.json"})
+
     def test_registry_dispatch_unknown_tool(self):
         registry = ToolRegistry()
         with pytest.raises(McpError, match="Unknown tool"):
             registry.dispatch("nonexistent", {})
+
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_submit_run_persists_and_is_idempotent(self, mock_worker, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        args = {
+            "project": "examplemod",
+            "suite": "smoke",
+            "timeout": 120,
+            "idempotency_key": "examplemod-smoke-1",
+        }
+        first = handle_submit_run(args)
+        second = handle_submit_run(args)
+
+        assert first["run_id"] == second["run_id"]
+        assert first["status"] == "QUEUED"
+        mock_worker.assert_called_once()
+
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_submit_suite_does_not_append_all_target(self, mock_worker, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        handle_submit_run({"project": "examplemod", "suite": "smoke"})
+
+        argv = mock_worker.call_args.args[2]
+        assert "--suite" in argv
+        assert "--all" not in argv
+
+    def test_submit_rejects_invalid_evidence_level(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        with pytest.raises(McpError, match="evidence"):
+            handle_submit_run({"evidence": "verbose"})
+
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_resume_run_preserves_resume_mode_in_worker_argv(self, mock_worker, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_resume_run, handle_submit_run
+
+        original = handle_submit_run({"project": "examplemod", "suite": "smoke"})
+        resumed = handle_resume_run({"run_id": original["run_id"]})
+
+        assert resumed["request"]["mode"] == "resume"
+        assert "--resume" in resumed["request"]["argv"]
+        assert mock_worker.call_count == 2
 
 
 class TestHealthCheck:

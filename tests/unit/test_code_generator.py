@@ -121,7 +121,7 @@ class TestCodeGenerator:
 
         code = self.generator.generate_case_test(spec)
 
-        assert 'select_character("gawain")' in code
+        assert 'select_character("GAWAINMOD-GAWAIN")' in code
         assert 'select_character("IRONCLAD")' not in code
 
     def test_chinese_ironclad_selection_allows_no_space(self) -> None:
@@ -160,6 +160,138 @@ class TestCodeGenerator:
         assert "give_card" in code
         assert 'give_card("TWIN_STRIKE")' in code
         assert 'play_card("TWIN_STRIKE")' in code
+
+    def test_generate_case_test_maps_set_seed_step(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-SEEDED-RECRUIT",
+            title="Seeded recruit",
+            steps=["设置种子 35", "使用 gawain:emergency_recruit"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "set_seed" in code
+        assert "set_seed(35)" in code
+        assert 'play_card("gawain:emergency_recruit")' in code
+
+    def test_generate_case_test_maps_first_available_map_node_step(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-NAVIGATE",
+            title="Navigate first node",
+            steps=["选择首个可走地图节点", "进入首场战斗"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert 'ActionDescriptor(action_type="choose_map_node", params={"index": 0})' in code
+        assert "enter_combat()" in code
+
+    def test_generate_case_test_maps_transform_card_selection_step(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-NEOW-TRANSFORM",
+            title="Transform a starter card",
+            steps=["开局事件 第 0 个选项", "选择待变化的第 0 张牌"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "choose_event(0)" in code
+        assert 'ActionDescriptor(action_type="select_deck_card", params={"index": 0})' in code
+
+    def test_generate_case_test_maps_collect_rewards_and_proceed_step(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-NEOW-REWARD",
+            title="Collect reward and leave neow",
+            steps=["开局事件 第 1 个选项", "收取奖励并继续"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "choose_event(1)" in code
+        assert 'ActionDescriptor(action_type="collect_rewards_and_proceed")' in code
+
+    def test_generate_case_test_maps_proceed_step_to_choose_event(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-NEOW-PROCEED",
+            title="Proceed from neow",
+            steps=["点击 Proceed"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "choose_event(0)" in code
+
+    def test_generate_case_test_maps_choose_neow_blessing_step(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-NEOW-BLESSING",
+            title="Choose neow blessing",
+            steps=["选择涅奥祝福"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert 'ActionDescriptor(action_type="choose_neow_blessing")' in code
+
+    def test_generate_case_test_maps_minion_queue_assertion(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-SEEDED-RESULT",
+            title="Seeded result",
+            steps=["设置种子 1", "使用 gawain:emergency_recruit"],
+            assertions=["仆从队列为 [cecil_militia]"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "minion_queue_ids_are" in code
+        assert 'minion_queue_ids_are(["cecil_militia"])' in code
+
+    def test_generate_case_test_maps_empty_minion_queue_assertion(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-CLEAR-QUEUE",
+            title="Clear queue",
+            steps=["直接获胜当前战斗"],
+            assertions=["仆从队列为 []"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "minion_queue_ids_are([])" in code
+
+    def test_generate_case_test_maps_set_hp_and_debug_steps(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-HEAL-SETUP",
+            title="Heal setup",
+            steps=["设置玩家生命值 50", "给予玩家 99 点格挡", "直接获胜当前战斗"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "set_hp(50)" in code
+        assert 'ActionDescriptor(action_type="give_block", params={"amount": 99})' in code
+        assert 'ActionDescriptor(action_type="win_combat")' in code
+
+    def test_generate_case_test_maps_rest_assertion(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-REST",
+            title="Rest assertion",
+            steps=["选择地图节点 (1, 0)"],
+            assertions=["game reached state REST"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert "game_reached_state(GameScreen.REST)" in code
+
+    def test_generate_case_test_maps_choose_first_rest_node_step(self) -> None:
+        spec = TestSpec(
+            id="TC-GAWAIN-REST-NODE",
+            title="Rest node",
+            steps=["选择首个营火节点"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert 'ActionDescriptor(action_type="choose_map_node_by_type", params={"node_type": "RestSite"})' in code
 
     def test_generate_case_test_maps_exact_hit_assertion(self) -> None:
         spec = TestSpec(

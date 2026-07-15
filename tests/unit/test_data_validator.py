@@ -94,6 +94,15 @@ class TestValidateGameState:
         violations = validate_game_state(state)
         assert violations == []
 
+    def test_map_with_cached_combat_snapshot_does_not_trigger_combat_empty_warnings(self) -> None:
+        state = GameState(
+            screen=GameScreen.MAP,
+            combat={"player_hp": 50, "hand": [], "deck": []},
+            map={"available_nodes": [{"index": 0, "node_type": "Monster"}]},
+        )
+        violations = validate_game_state(state)
+        assert violations == []
+
     def test_combat_none_player_hp_not_flagged(self) -> None:
         """COMBAT with 'player_hp' set to None should not raise negative HP."""
         state = GameState(

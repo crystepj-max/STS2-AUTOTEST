@@ -202,7 +202,7 @@ src/sts2_autotest/
 STS2_ADAPTER__CLI__ENABLED=true        # CLI 适配器（默认启用）
 STS2_ADAPTER__AGENT__ENABLED=false     # Agent 适配器（Beta，默认禁用）
 STS2_ADAPTER__AGENT__TRANSPORT=http    # Agent 传输方式：http 或 mcp
-STS2_ADAPTER__AGENT__ENDPOINT=http://localhost:8080
+STS2_ADAPTER__AGENT__ENDPOINT=http://127.0.0.1:8080
 
 # 执行参数
 STS2_EXECUTION__GAME_TIMEOUT=60.0

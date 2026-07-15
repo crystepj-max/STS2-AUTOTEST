@@ -33,9 +33,13 @@ _SUPPORTED_STEP_PATTERNS: list[re.Pattern[str]] = [
     for pattern in (
         r"启动游戏|返回主菜单|选择标准模式|开始新\s*run|开始新局",
         r"选择\s*(Ironclad|Gawain|战士|铁甲战士)|开始冒险",
-        r"开局事件.*第\s*\d+\s*个选项|推进事件对话",
-        r"地图节点.*\(\s*\d+\s*,\s*\d+\s*\)|进入首次战斗|进入首场战斗",
+        r"开局事件.*第\s*\d+\s*个选项|选择涅奥祝福|推进事件对话|点击\s*Proceed|点击继续前进|选择\s*Proceed",
+        r"地图节点.*\(\s*\d+\s*,\s*\d+\s*\)|选择首个可走地图节点|选择第一个可走地图节点|选择首个战斗节点|选择首个普通战斗节点|选择首个营火节点|进入首次战斗|进入首场战斗",
+        r"收取奖励并继续",
+        r"选择待变化的第\s*\d+\s*张牌|牌堆选牌.*第\s*\d+\s*个选项",
         r"添加\s+[A-Za-z0-9_:-]+\s+到手牌",
+        r"设置种子\s*-?\d+",
+        r"设置玩家生命(?:值)?\s*\d+|给予玩家\s*\d+\s*点格挡|直接获胜当前战斗|启用地图穿行",
         r"基础策略.*战斗|跳过卡牌奖励",
         r"结束回合|使用\s+.+",
     )
@@ -47,13 +51,15 @@ _SUPPORTED_ASSERTION_PATTERNS: list[re.Pattern[str]] = [
         r"crash",
         r"到达\s*MAP|位于\s*MAP|\bMAP\b|地图",
         r"到达\s*EVENT|位于\s*EVENT|\bEVENT\b|事件",
-        r"到达\s*REST|位于\s*REST|\bREST\b|营火|休息",
         r"到达\s*COMBAT|位于\s*COMBAT|\bCOMBAT\b|战斗|combat",
-        r"(?:敌人.*?(?:受到|承受)|enemy hp decreased by)\s*\d+",
-        r"(?:玩家.*?格挡.*?(?:增加|获得)|player block increased by)\s*\d+",
-        r"(?:玩家.*?能量.*?(?:减少|消耗)|player energy decreased by)\s*\d+",
-        r"(?:玩家.*?(?:回复|治疗|生命).*?[+-]?\d+|player hp changed by\s*[+-]?\d+)",
+        r"到达\s*REST|位于\s*REST|\bREST\b|营火|休息",
         r"造成\s*\d+\s*点伤害\s*\d+\s*次",
+        r"敌人受到\s*\d+\s*点伤害",
+        r"玩家能量减少\s*\d+",
+        r"玩家格挡增加\s*\d+",
+        r"(?:玩家)?回复\s*\d+\s*点生命|player hp changed by",
+        r"手牌(?:数量)?(?:增加|减少)\s*\d+",
+        r"仆从队列(?:为|等于)\s*\[[A-Za-z0-9_:\-,\s]*\]",
         r"节点|node",
     )
 ]
@@ -212,7 +218,7 @@ class SpecReviewer:
         lines = [f"# {spec.id} {spec.title}", ""]
         lines.append("## Metadata")
         lines.append(f"- id: {spec.id}")
-        lines.append("- level: case")
+        lines.append(f"- level: case")
         if spec.tags:
             lines.append(f"- tags: {', '.join(spec.tags)}")
         lines.append(f"- priority: {spec.priority}")

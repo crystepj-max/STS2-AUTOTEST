@@ -130,6 +130,10 @@ class TestAdapterConfig:
     def test_agent_transport_defaults_to_http(self) -> None:
         cfg = AgentAdapterConfig()
         assert cfg.transport == "http"
+        assert cfg.endpoint == "http://127.0.0.1:8080"
+        assert cfg.state_path == "state"
+        assert cfg.actions_path == "actions/available"
+        assert cfg.act_path == "action"
 
     def test_agent_transport_accepts_mcp(self) -> None:
         cfg = AgentAdapterConfig(transport="mcp")

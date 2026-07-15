@@ -20,10 +20,10 @@ import sys
 import time
 import asyncio
 import inspect
+import importlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
@@ -38,9 +38,9 @@ from sts2_autotest.core.visual_qa import (
 )
 from sts2_autotest.report_html import write_html_report
 
-yaml: ModuleType | None
+yaml: Any = None
 try:
-    import yaml
+    yaml = importlib.import_module("yaml")
 except Exception:  # pragma: no cover
     yaml = None
 

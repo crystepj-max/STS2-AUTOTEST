@@ -19,6 +19,7 @@ def _run(coro: Any) -> Any:
 
 def _make_mock_adapter() -> Any:
     states = itertools.cycle([
+        GameState(screen=GameScreen.MAIN_MENU),
         GameState(screen=GameScreen.MAP),
         GameState(screen=GameScreen.COMBAT),
     ])

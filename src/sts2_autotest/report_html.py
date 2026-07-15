@@ -33,6 +33,31 @@ def _b64img(path: Path) -> str:
         return ""
 
 
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _render_evidence_links(evidence_files: list[dict[str, Any]], cfg_dir: Path) -> str:
+    links: list[str] = []
+    for item in evidence_files:
+        label = str(item.get("label", "")).strip() or "凭证"
+        rel_path = str(item.get("path", "")).strip()
+        if not rel_path:
+            continue
+        full_path = cfg_dir / rel_path
+        exists = full_path.exists()
+        suffix = "" if exists else "（缺失）"
+        links.append(
+            f'<a class="evidence-link" href="{_h(rel_path)}" target="_blank" rel="noopener noreferrer">{_h(label)}{suffix}</a>'
+        )
+    if not links:
+        return ""
+    return f'<div class="evidence-links">{"".join(links)}</div>'
+
+
 def _count_cases(cases: list[dict[str, Any]]) -> dict[str, int]:
     return {
         "passed": sum(1 for case in cases if case.get("result") == "通过"),
@@ -55,13 +80,38 @@ def build_report_html(config: dict[str, Any]) -> str:
         result = str(step.get("result", "跳过"))
         badge = _badge_kind(result)
         detail = str(step.get("detail", ""))
+        log_path = str(step.get("log_path", "")).strip()
+        log_text = ""
+        if log_path:
+            log_text = _read_text(cfg_dir / log_path)
+        if not log_text:
+            log_text = f"# {test_case.get('name', '')} - 步骤 {index + 1}\n# 结果: {result}\n# {detail}"
+
+        screenshots = []
+        for rel_path in step.get("image_paths", []) or []:
+            rel_path_str = str(rel_path).strip()
+            if not rel_path_str:
+                continue
+            src = _b64img(cfg_dir / rel_path_str)
+            if src:
+                screenshots.append(
+                    f'<div class="img-box"><div class="img-label">{_h(Path(rel_path_str).name)}</div><img src="{src}"></div>'
+                )
+
+        evidence_links = _render_evidence_links(step.get("evidence_files", []) or [], cfg_dir)
+        screenshot_html = ""
+        if screenshots:
+            screenshot_html = f'<div class="img-row">{"".join(screenshots)}</div>'
+
         return f"""<div class="step"><div class="step-header" onclick="toggle(this)">
   <span class="step-name">{index + 1}. {_h(step.get('name', 'Execute'))}</span>
   <span class="badge badge-{badge}">{_h(result)}</span>
 </div>
 <div class="step-evidence">
   <p>{_h(detail)}</p>
-  <pre class="log"># {_h(test_case.get('name', ''))} - 步骤 {index + 1}\n# 结果: {_h(result)}\n# {_h(detail)}</pre>
+  {evidence_links}
+  {screenshot_html}
+  <pre class="log">{_h(log_text)}</pre>
 </div></div>"""
 
     def ocr_html(analysis: Any) -> str:
@@ -93,12 +143,16 @@ def build_report_html(config: dict[str, Any]) -> str:
                     meta_parts.append(f"confidence={confidence}")
                 if bbox is not None:
                     meta_parts.append(f"bbox={bbox}")
-                meta_text = f" <span class=\"ocr-meta\">({_h(', '.join(meta_parts))})</span>" if meta_parts else ""
-                rows.append(
-                    f"<li>[{_h(severity)}] {_h(finding_message)}: <code>{_h(text)}</code>{meta_text}</li>"
+                meta_text = (
+                    f' <span class="ocr-meta">({_h(", ".join(meta_parts))})</span>'
+                    if meta_parts
+                    else ""
                 )
-            joined = "".join(rows)
-            body = f"视觉辅助分析：发现 {len(rows)} 条可疑项<ul>{joined}</ul>"
+                rows.append(
+                    f"<li>[{_h(severity)}] {_h(finding_message)}: "
+                    f"<code>{_h(text)}</code>{meta_text}</li>"
+                )
+            body = f"视觉辅助分析：发现 {len(rows)} 条可疑项<ul>{''.join(rows)}</ul>"
         else:
             suffix = f" - {_h(message)}" if message else ""
             body = f"视觉辅助分析：未执行{suffix}"
@@ -116,7 +170,9 @@ def build_report_html(config: dict[str, Any]) -> str:
         before_src = _b64img(cfg_dir / before_img) if before_img else ""
         after_src = _b64img(cfg_dir / after_img) if after_img else ""
         exp_items = card.get("exp", {})
-        exp_str = "、".join(f"{_h(key)}={_h(value)}" for key, value in exp_items.items()) or "无直接数值校验"
+        exp_str = "、".join(
+            f"{_h(key)}={_h(value)}" for key, value in exp_items.items()
+        ) or "无直接数值校验"
         result = str(card.get("result", "跳过"))
         badge = _badge_kind(result)
         before_ocr = ocr_html(card.get("screenshot_before_ocr"))
@@ -222,6 +278,9 @@ h1{{font-size:24px;display:flex;align-items:center;gap:12px;margin-bottom:4px}}
 .step-evidence{{display:none;padding:10px 12px;background:#0f0f15;border-top:1px solid #22222a}}
 .step-evidence p{{font-size:12px;color:#888;margin-bottom:6px}}
 pre.log{{background:#050510;color:#6ee;padding:8px;border-radius:4px;font-size:11px;overflow-x:auto;font-family:"SF Mono",Menlo,monospace}}
+.evidence-links{{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}}
+.evidence-link{{display:inline-block;padding:4px 8px;border-radius:4px;border:1px solid #2a2a30;background:#161620;color:#9ad;text-decoration:none;font-size:12px}}
+.evidence-link:hover{{background:#1d1d28}}
 .img-row{{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0}}
 .img-row img{{max-width:100%;height:auto;border-radius:4px;border:1px solid #22222a}}
 .img-box{{flex:1;min-width:150px}}

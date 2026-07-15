@@ -84,9 +84,21 @@
 - 但代表性闭环还没有“真实通过”。
 - 暂缓原因：真实 Steam 启动 / 游戏进程接管仍需要单独排查，不作为当前批次其它 B25 框架能力的阻塞项。
 
+**2026-06-16 真实实跑记录（经 MCP daemon :8090）**
+
+- Steam 启动链路已恢复：StS2 `v0.103.3` + mod `0.7.1`，agent `ready`。
+- 经 MCP `compile_spec -> run_test` 真实驱动游戏：`start_new_run` ✅ → 到达 `CHARACTER_SELECT` ✅ → `select_character` ❌（`B25-P0-5` 角色选择 id 解析未就绪）。
+- 流水线机制本身全通（review/compile/run/get_report/junit/evidence 均产出），失败点是新登记的 `B25-P0-5`。
+
+**2026-06-17 最终通过记录**
+
+- `B25-P0-5`（角色解析）✅ 修复
+- `B25-P0-6`（settle）✅ 修复，含事后补修的异常处理 + CliModAdapter 缓存修复
+- `TC-GAWAIN-PREPARE-NEW-RUN` 经 `compile_spec -> run_test` 真实 **PASS**（`passed: 1, failed: 0, status: OK`）
+
 **TODO 标签**
 
-- `TODO-B25-STEAM-REAL-RUN`: 恢复后验证真实 `case / suite / autotest run --all` 端到端通过。
+- `TODO-B25-STEAM-REAL-RUN`: 已达成。首条 NL 用例已真实通过。
 
 **需要完成**
 
@@ -122,6 +134,72 @@
 
 - 生成出的测试文件，不需要人工再改动步骤顺序即可运行。
 - 首战 smoke 不再因为“当前屏幕不对”而在第一步动作即失败。
+
+### B25-P0-5: DONE - 角色选择动作的 id 与 option_index 解析（NL 路径）
+
+**发现日期：** 2026-06-16（首次真实 `run_test` 实跑，见 `B25-P0-3` 记录）
+
+**现状（已修复，2026-06-16）**
+
+- `CodeGenerator._CHARACTER_IDS` 把”选择 Gawain”编译成 `select_character(“gawain”)`，但实机注册 id 是大写 `GAWAINMOD-GAWAIN`（与 `IRONCLAD` 同规则）。
+- 更关键的是：live STS2-Agent 的 `select_character` 动作要求 `option_index`，**不接受** `character_id`。
+- 且该 `option_index` 必须取自 `character_select.characters[].index` 字段，**不是数组下标**（实测数组下标 6 = `GAWAINMOD-GAWAIN`，但 `option_index=6` 实际选中的是 `WATCHER-WATCHER`）。
+- DSL 的 `select_character`（`dsl/assertions.py`）与 agent adapter（`adapters/agent.py:_resolve_agent_action_args` 仅特化 `play_card`）都没有做这层解析，导致 NL 路径在选角第一步即失败：`Action 'select_character' failed: Character 'gawain' not found`。
+- 成熟的 `TestAgentRunner._resolve_gawain_character_option_index` 已正确处理：遍历 `characters`，用 `_is_gawain_character_value` 匹配身份字段，取 `character.get(“index”, fallback_index)` 作为 `option_index`。即**框架内已有正确实现，但 B25 NL→DSL 路径未复用**。
+
+**完成记录**
+
+- `_CHARACTER_IDS` 已修正：`”Gawain” -> “GAWAINMOD-GAWAIN”`，与实机 id 保持一致。
+- `AgentAdapter._resolve_agent_action_args` 新增 `select_character` 分支：当 `character_id` 在 args 中且无 `option_index` 时，调用 `_resolve_select_character_args` 从 `character_select.characters[].index` 解析出正确的 `option_index`。
+- 解析采用模糊匹配（忽略大小写与分隔符），兼容 `”gawain”`、`”GAWAINMOD-GAWAIN”` 等多种写法；解析失败时 fall-through 传原 args 并记 WARNING，让 agent 返回其自有错误（区分”未匹配”与”agent 自身 CHARACTER_NOT_FOUND”）。
+- 已新增 4 个单元测试覆盖解析、模糊匹配、pass-through 和 fall-through 场景。
+- 生成测试文件（`test_tc_gawain_prepare_new_run.py`、`test_suite_gawain_smoke.py`）已更新为 `select_character(“GAWAINMOD-GAWAIN”)`。
+
+**验收标准**
+
+- `TC-GAWAIN-PREPARE-NEW-RUN` 经 `compile_spec -> run_test` 在真实游戏环境下 `PASS`（主菜单 → 选 Gawain → embark → 到达 EVENT）。
+- 不再出现 `Character 'gawain' not found`，也不再误选成其它角色。
+
+**2026-06-16 复跑验证**
+
+- 重启 daemon 加载修复代码后重编译，生成测试已变为 `select_character("GAWAINMOD-GAWAIN")`。
+- 实机重跑：`start_new_run` → `select_character` → `embark` 全部通过，实机最终 `screen=EVENT`、`run.character_id=GAWAINMOD-GAWAIN`，角色解析修复**端到端确认有效**。
+- 但 case 仍未 `PASS`：断言抓到 `UNKNOWN`，根因是新登记的 `B25-P0-6`（断言前无状态沉降等待），与角色解析正交。即 P0-5 的角色解析达标，case 级 `PASS` 现被 `B25-P0-6` 阻塞。
+
+### B25-P0-6: DONE - 动作后状态沉降与断言重试（settle / poll）
+
+**发现日期：** 2026-06-16（`B25-P0-5` 修复后复跑实机）
+
+**现状（已修复，2026-06-16）**
+
+- `FluentBuilder.assert_that`（`dsl/fluent.py`）在执行完动作序列后，**立刻**单次 `get_state()` 取 `final_state`，再逐条跑断言，中间无任何 settle / 轮询。
+- `embark` 之后游戏处于 `embark → 加载 → EVENT` 过场，单次快照抓到 `screen=UNKNOWN`，`game_reached_state(EVENT)` 判失败；实机数百毫秒后即到达 `EVENT`（已用 live 状态证实）。
+- 这是**确定性失败**（非偶发 flaky）：动作返回与画面沉降之间没有等待窗口。
+- 关联：`AgentAdapter.wait_until_actionable` 已有”可操作即返回”的轮询，但”可操作”早于”目标画面沉降”，不能替代断言级的目标态等待。
+
+**完成记录**
+
+- `FluentBuilder.__init__` 新增 `settle_timeout=5.0` 和 `settle_poll_interval=0.5` 参数。
+- `FluentBuilder._settle_and_get_state` 新方法：首次 `get_state()` 返回 `UNKNOWN` 时，以 `settle_poll_interval` 轮询，直至 screen ≠ UNKNOWN 或 `settle_timeout` 到期；非 UNKNOWN 失败不轮询，避免所有断言失败都等 5 秒。
+- `assert_that` 中的单次 `adapter.get_state()` 替换为 `_settle_and_get_state()`。
+- `define()` 函数透传 `settle_timeout` 和 `settle_poll_interval` 可选参数，保持向后兼容。
+- 已新增 4 个单元测试覆盖：settle 成功路径、无需 settle 直通路径、settle 超时报最后 UNKNOWN 状态、非 UNKNOWN 错误状态立即失败不轮询。
+
+**后续补修（2026-06-17）**
+
+- `_settle_and_get_state` 中 `get_state()` 调用包裹异常处理：新增 `_get_state_or_unknown` 工具方法，捕获所有异常并返回 UNKNOWN 而非崩溃，使 settle 循环对 agent 不可用（加载过渡期 `/state` 挂起）有弹性。
+- `CliModAdapter._get_state_sync` 修复：**不再缓存 UNKNOWN 状态**。原本加载过渡期的 UNKNOWN 被缓存后，settle 循环的后续轮询全部命中缓存、无法拿到 EVENT。此 bug 是 settle 机制在默认 adapter 下无法工作的根因。
+
+**验收标准**
+
+- `TC-GAWAIN-PREPARE-NEW-RUN` 经 `compile_spec -> run_test` 真实 `PASS`（不再被过场期 `UNKNOWN` 卡住）。
+- 终态断言在合理超时内对”稍后才沉降的目标画面”能稳定判定通过。
+
+**2026-06-17 实跑验证**
+
+- 最终验证：从干净 MAIN_MENU → start_new_run → select_character(“GAWAINMOD-GAWAIN”) → embark → 断言 EVENT。
+- 结果：**`PASS`**（`passed: 1, failed: 0, status: OK`，测试耗时 ~120s）。
+- 关键依赖链：P0-5（角色解析）→ P0-6（settle）→ P0-6 补修（异常处理 + 缓存修复）串联后首条 NL 用例真实通过。
 
 ---
 
@@ -307,10 +385,12 @@
 
 建议按下面顺序继续推进：
 
-1. `B25-P0-1` case 起始状态校验与执行前护栏
-2. `B25-P0-2` suite 共享会话串联语义
-3. `B25-P0-4` 首批闭环场景的关键路径编排补全
-4. `B25-P0-3` TODO / 暂缓：真实 `case / suite / run --all` 验证通过（等待 Steam 启动链路恢复）
+1. `B25-P0-5` DONE：角色选择动作的 id 与 option_index 解析（NL 路径）
+2. `B25-P0-6` DONE：动作后状态沉降与断言重试（settle / poll，含异常处理 + CliModAdapter 缓存修复）
+3. `B25-P0-1` case 起始状态校验与执行前护栏
+4. `B25-P0-2` suite 共享会话串联语义
+5. `B25-P0-4` 首批闭环场景的关键路径编排补全
+6. `B25-P0-3` DONE：真实 `case / suite / run --all` 验证通过（首条 NL 用例 `TC-GAWAIN-PREPARE-NEW-RUN` 已真实 PASS）
 5. `B25-P1-3` DONE：执行失败信息升级
 6. `B25-P1-1` DONE：review 能力感知化
 7. `B25-P1-2` DONE：revised draft 正式进入工作流

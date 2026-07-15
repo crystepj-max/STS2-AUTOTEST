@@ -64,6 +64,32 @@ def _create_parser() -> Any:
         default=None,
         help="Adapter type (overrides config: cli=STS2-Cli-Mod, agent=STS2-Agent)",
     )
+    run.add_argument(
+        "--evidence",
+        choices=["none", "minimal", "full"],
+        default="full",
+        help="Evidence collection level",
+    )
+    run.add_argument(
+        "--idempotency-key",
+        help="Stable retry key; submitting the same key reuses the existing run",
+    )
+    run.add_argument(
+        "--detach",
+        action="store_true",
+        help="Submit a persistent background run and return its run ID",
+    )
+    run.add_argument("--internal-run-id", help=argparse.SUPPRESS)
+    run.add_argument(
+        "--journey",
+        choices=["new_run", "resume_run", "first_battle", "finish_interstitials"],
+        help="Run one reusable game journey instead of a project case suite",
+    )
+    run.add_argument(
+        "--character-id",
+        default="IRONCLAD",
+        help="Character for new_run/first_battle",
+    )
 
     # autotest review
     review = sub.add_parser("review", help="Review natural language test specs")
@@ -107,6 +133,19 @@ def _create_parser() -> Any:
 
     queue = sub.add_parser("queue", help="Manage the local session queue")
     queue.add_argument("queue_action", choices=["pause", "resume", "status"])
+
+    status = sub.add_parser("status", help="Show a persistent run status")
+    status.add_argument("run_id")
+    status.add_argument("--json", action="store_true", help="Output structured JSON")
+
+    capabilities = sub.add_parser("capabilities", help="Show the stable cross-agent contract")
+    capabilities.add_argument("--json", action="store_true", help="Output structured JSON")
+
+    cancel = sub.add_parser("cancel", help="Cancel a persistent run")
+    cancel.add_argument("run_id")
+
+    resume = sub.add_parser("resume", help="Resume a persistent run")
+    resume.add_argument("run_id")
 
     sub.add_parser("progress", help="Show saved runtime progress")
 
@@ -243,7 +282,7 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
             )
         transport = cast(Literal["http", "mcp"], transport_raw)
         agent_endpoint = _get_env(
-            ["STS2_ADAPTER__AGENT__ENDPOINT"], "http://localhost:8080"
+            ["STS2_ADAPTER__AGENT__ENDPOINT"], "http://127.0.0.1:8080"
         )
         mcp_client = (
             FastMcpAgentClient(
@@ -318,6 +357,7 @@ def _run_orchestrator_with_adapter(
     progress_path: str | None = None,
     resumed_from: str | None = None,
     adapter_factory: Callable[[], GameAdapterProtocol] | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Create an orchestrator with the given adapter and run the given case IDs.
 
@@ -326,19 +366,42 @@ def _run_orchestrator_with_adapter(
     from sts2_autotest.core.orchestrator import TestOrchestrator
     from sts2_autotest.core.recovery import DefaultRecoveryStrategy
     from sts2_autotest.core.steam import SteamController
+    from sts2_autotest.core.runtime_factory import build_lifecycle_manager
+    from sts2_autotest.core.evidence_hooks import build_evidence_hooks
 
     steam = SteamController(startup_timeout=60.0)
     recreate_factory = adapter_factory or (lambda: _create_adapter("cli"))
+    evidence_root = Path(
+        os.environ.get("STS2_AUTOTEST_EVIDENCE_DIR", DEFAULT_EVIDENCE_DIR)
+    )
+    try:
+        lifecycle = build_lifecycle_manager(adapter, steam, evidence_root)
+    except (OSError, ValueError) as exc:
+        print(f"[autotest] lifecycle manager unavailable: {exc}")
+        lifecycle = None
     recovery = DefaultRecoveryStrategy(
         adapter_factory=recreate_factory,
         game_startup_timeout=60.0,
         steam_controller=steam,
+        lifecycle_manager=lifecycle,
     )
+    evidence = build_evidence_hooks(evidence_root, pack_id=run_id)
+    status_callback = None
+    if run_id:
+        store = _run_store()
+
+        def status_callback(status: str) -> None:
+            store.update(run_id, phase=status, status=status)
+
     orch = TestOrchestrator(
         adapter=adapter,
         recovery=recovery,
+        evidence=evidence,
         progress_path=progress_path,
         resumed_from=resumed_from,
+        lock_path=str(evidence_root / ".sts2-autotest.lock"),
+        lifecycle=lifecycle,
+        status_callback=status_callback,
     )
 
     loop = asyncio.new_event_loop()
@@ -666,6 +729,7 @@ def _dispatch_orchestrator(
     progress_path: str | None = None,
     resumed_from: str | None = None,
     use_agent: bool = False,
+    run_id: str | None = None,
 ) -> int:
     """Route to the correct orchestrator with the given adapter.
 
@@ -687,19 +751,39 @@ def _dispatch_orchestrator(
         case_ids,
         timeout=timeout,
         adapter_factory=lambda: _create_adapter("agent" if use_agent else "cli"),
+        run_id=run_id,
         **kwargs,
     )
 
 
 def queue_cmd(args: Any) -> int:
-    """Handle local queue pause/resume/status control commands."""
+    """Handle the persistent single-game queue."""
+    store = _run_store()
+    pause_marker = store.root / "queue.paused"
     action = args.queue_action
     if action == "pause":
+        pause_marker.parent.mkdir(parents=True, exist_ok=True)
+        pause_marker.write_text("paused\n", encoding="utf-8")
         print(json.dumps({"queue": "local", "paused": True, "action": "pause"}))
     elif action == "resume":
+        pause_marker.unlink(missing_ok=True)
         print(json.dumps({"queue": "local", "paused": False, "action": "resume"}))
     else:
-        print(json.dumps({"queue": "local", "paused": False, "depth": 0}))
+        records = store.list(include_terminal=False)
+        print(json.dumps({
+            "queue": "local",
+            "paused": pause_marker.exists(),
+            "depth": len(records),
+            "runs": [record.run_id for record in records],
+        }, ensure_ascii=False))
+    return 0
+
+
+def capabilities_cmd(args: Any) -> int:
+    """Print the stable capability contract for non-MCP Agent clients."""
+    from sts2_autotest.cli.mcp_tools import handle_capabilities
+
+    print(json.dumps(handle_capabilities({}), ensure_ascii=False, indent=2 if args.json else None))
     return 0
 
 
@@ -726,14 +810,302 @@ def progress_cmd(args: Any) -> int:
     return 0
 
 
+def _run_store() -> Any:
+    from sts2_autotest.core.run_service import RunStore
+
+    return RunStore(os.environ.get("STS2_AUTOTEST_RUN_ROOT", "tests/output/.runs"))
+
+
+def _child_argv(args: Any, run_id: str) -> list[str]:
+    """Rebuild a stable foreground command for a detached worker."""
+    argv = ["run"]
+    if getattr(args, "all", False):
+        argv.append("--all")
+    if getattr(args, "cases", None):
+        argv.extend(["--cases", *args.cases])
+    if getattr(args, "suite", None):
+        argv.extend(["--suite", args.suite])
+    if getattr(args, "failed", False):
+        argv.append("--failed")
+    if getattr(args, "resume", False):
+        argv.append("--resume")
+    if getattr(args, "no_resume", False):
+        argv.append("--no-resume")
+    for name, flag in (
+        ("timeout", "--timeout"),
+        ("project", "--project"),
+        ("spec_dir", "--spec-dir"),
+        ("output_dir", "--output-dir"),
+        ("adapter", "--adapter"),
+        ("evidence", "--evidence"),
+        ("idempotency_key", "--idempotency-key"),
+    ):
+        value = getattr(args, name, None)
+        if value is not None:
+            argv.extend([flag, str(value)])
+    if getattr(args, "journey", None):
+        argv.extend(["--journey", str(args.journey)])
+    if getattr(args, "character_id", None):
+        argv.extend(["--character-id", str(args.character_id)])
+    argv.extend(["--internal-run-id", run_id])
+    return argv
+
+
+def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> int:
+    from sts2_autotest.core.run_service import RunRequest, spawn_worker
+
+    store = _run_store()
+    request = request_override or RunRequest(
+        project=getattr(args, "project", None),
+        suite=getattr(args, "suite", None),
+        cases=list(getattr(args, "cases", None) or []),
+        mode="resume" if getattr(args, "resume", False) else "new",
+        timeout=int(getattr(args, "timeout", 30)),
+        adapter=getattr(args, "adapter", None),
+        spec_dir=getattr(args, "spec_dir", None),
+        evidence=getattr(args, "evidence", "full"),
+        idempotency_key=getattr(args, "idempotency_key", None),
+    )
+    record = store.create(request)
+    if record.request is not request:
+        print(json.dumps({"run_id": record.run_id, "status": record.status}, ensure_ascii=False))
+        return 0
+    request.argv = _child_argv(args, record.run_id)
+    store.update(record.run_id, request=request)
+    try:
+        spawn_worker(store, record, request.argv)
+    except OSError as exc:
+        store.update(
+            record.run_id,
+            status="FAILED_PLATFORM",
+            phase="COMPLETED",
+            finished_at=datetime_now_iso(),
+            message=f"Cannot start detached worker: {exc}",
+        )
+        print(json.dumps({"run_id": record.run_id, "status": "FAILED_PLATFORM"}))
+        return 1
+    print(json.dumps({"run_id": record.run_id, "status": "QUEUED"}, ensure_ascii=False))
+    return 0
+
+
+def datetime_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def status_cmd(args: Any) -> int:
+    from sts2_autotest.core.run_service import serialize_record
+
+    payload = serialize_record(_run_store().load(args.run_id))
+    print(json.dumps(payload, ensure_ascii=False, indent=2 if args.json else None))
+    return 0 if payload.get("status") != "NOT_FOUND" else 1
+
+
+def cancel_cmd(args: Any) -> int:
+    from sts2_autotest.core.run_service import serialize_record
+
+    payload = serialize_record(_run_store().request_cancel(args.run_id))
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0 if payload.get("status") != "NOT_FOUND" else 1
+
+
+def resume_run_cmd(args: Any) -> int:
+    from sts2_autotest.core.run_service import RunRequest
+
+    store = _run_store()
+    old = store.load(args.run_id)
+    if old is None:
+        print(json.dumps({"status": "NOT_FOUND", "run_id": args.run_id}))
+        return 1
+    argv = [item for item in old.request.argv if item not in ("--resume", "--detach")]
+    # The old request can predate persistent runs; use its structured fields then.
+    if not argv:
+        argv = ["run", "--all"]
+    request = RunRequest(
+        project=old.request.project,
+        suite=old.request.suite,
+        cases=list(old.request.cases),
+        mode="resume",
+        timeout=old.request.timeout,
+        adapter=old.request.adapter,
+        spec_dir=old.request.spec_dir,
+        evidence=old.request.evidence,
+        metadata={**old.request.metadata, "resumed_from": old.run_id},
+    )
+    from argparse import Namespace
+
+    # Reuse the normal detached submission while preserving the original request.
+    ns = Namespace(
+        project=request.project,
+        suite=request.suite,
+        cases=request.cases,
+        all="--all" in argv,
+        failed=False,
+        resume=True,
+        no_resume=False,
+        timeout=request.timeout,
+        spec_dir=request.spec_dir,
+        output_dir=None,
+        adapter=request.adapter,
+        journey=request.metadata.get("journey"),
+        character_id=request.metadata.get("character_id", "IRONCLAD"),
+        evidence=request.evidence,
+        idempotency_key=None,
+    )
+    return _submit_detached_run(ns, request_override=request)
+
+
 def run_cmd(args: Any) -> int:
+    """Submit or execute a run through the common persistent run service."""
+    if getattr(args, "detach", False) and not getattr(args, "internal_run_id", None):
+        return _submit_detached_run(args)
+
+    internal_run_id = getattr(args, "internal_run_id", None)
+    if not internal_run_id:
+        return _run_cmd_foreground(args)
+
+    from sts2_autotest.core.run_service import RunCancelled, complete_record, wait_for_turn
+
+    store = _run_store()
+    try:
+        wait_for_turn(store, internal_run_id, timeout=float(getattr(args, "timeout", 30)) * 10)
+        store.update(internal_run_id, phase="PRECHECK", status="PRECHECK")
+        store.update(internal_run_id, phase="PREPARING", status="PREPARING")
+        store.update(internal_run_id, phase="STARTING", status="STARTING")
+        store.update(internal_run_id, phase="RUNNING", status="RUNNING")
+        rc = _run_cmd_foreground(args)
+        store.update(internal_run_id, phase="COLLECTING", status="COLLECTING")
+        evidence_root = Path(
+            os.environ.get("STS2_AUTOTEST_EVIDENCE_DIR", DEFAULT_EVIDENCE_DIR)
+        )
+        run_evidence_dir = evidence_root / internal_run_id
+        result_payload: dict[str, Any] = {}
+        result_path = run_evidence_dir / "reports" / "run-result.json"
+        if result_path.is_file():
+            try:
+                loaded = json.loads(result_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    result_payload = loaded
+            except (OSError, ValueError):
+                pass
+        complete_record(
+            store,
+            internal_run_id,
+            exit_code=rc,
+            result=result_payload,
+            evidence_dir=str(run_evidence_dir if run_evidence_dir.exists() else evidence_root),
+        )
+        return rc
+    except RunCancelled:
+        return 1
+    except Exception as exc:
+        complete_record(
+            store,
+            internal_run_id,
+            exit_code=1,
+            message=str(exc),
+        )
+        print(f"[autotest] persistent run failed: {exc}")
+        return 1
+
+
+def _run_journey_foreground(
+    adapter: GameAdapterProtocol,
+    *,
+    journey: str,
+    character_id: str,
+    timeout: float,
+    run_id: str | None = None,
+) -> int:
+    """执行平台提供的通用游戏旅程。"""
+    from sts2_autotest.common.errors import STS2Error
+    from sts2_autotest.core.journeys import GenericJourneys, JourneyFailure
+    from sts2_autotest.core.evidence_hooks import build_evidence_hooks
+    from sts2_autotest.core.action_model import TestResult
+
+    case_id = f"journey:{journey}"
+    evidence_root = Path(
+        os.environ.get("STS2_AUTOTEST_EVIDENCE_DIR", DEFAULT_EVIDENCE_DIR)
+    )
+    evidence = build_evidence_hooks(evidence_root, pack_id=run_id)
+    evidence.on_case_start(case_id)
+
+    def write_result(status: str, message: str | None = None) -> None:
+        if not run_id:
+            return
+        result_dir = evidence_root / run_id / "reports"
+        try:
+            result_dir.mkdir(parents=True, exist_ok=True)
+            payload: dict[str, Any] = {"run_id": run_id, "status": status}
+            if message:
+                payload["message"] = message
+            (result_dir / "run-result.json").write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        runner = GenericJourneys(adapter, timeout=timeout)
+        if journey == "new_run":
+            result = loop.run_until_complete(runner.start_new_run(character_id))
+        elif journey == "resume_run":
+            result = loop.run_until_complete(runner.resume_run())
+        elif journey == "first_battle":
+            result = loop.run_until_complete(runner.enter_first_battle(character_id=character_id))
+        else:
+            result = loop.run_until_complete(runner.finish_interstitials())
+        evidence.on_case_end(TestResult(case_id, "pass", json.dumps(result, ensure_ascii=False)))
+        write_result("PASSED")
+        evidence.on_session_end({"total": 1, "passed": 1, "failed": 0, "crashed": 0, "skipped": 0})
+        print(json.dumps({"journey": journey, "status": "PASSED", "state": result}, ensure_ascii=False))
+        return 0
+    except (STS2Error, JourneyFailure) as exc:
+        evidence.on_crash(case_id, exc)
+        evidence.on_case_end(TestResult(case_id, "crash", str(exc)))
+        write_result("FAILED_PLATFORM", str(exc))
+        evidence.on_session_end({"total": 1, "passed": 0, "failed": 0, "crashed": 1, "skipped": 0})
+        print(json.dumps({"journey": journey, "status": "FAILED_PLATFORM", "message": str(exc)}, ensure_ascii=False))
+        return 1
+    except Exception as exc:
+        evidence.on_crash(case_id, exc)
+        evidence.on_case_end(TestResult(case_id, "fail", str(exc)))
+        write_result("FAILED_PRODUCT", str(exc))
+        evidence.on_session_end({"total": 1, "passed": 0, "failed": 1, "crashed": 0, "skipped": 0})
+        print(json.dumps({"journey": journey, "status": "FAILED_PRODUCT", "message": str(exc)}, ensure_ascii=False))
+        return 1
+    finally:
+        try:
+            loop.run_until_complete(adapter.cleanup())
+        except Exception:
+            pass
+        loop.close()
+
+
+def _run_cmd_foreground(args: Any) -> int:
     """Dispatch run command — connects to the real orchestrator with resume support."""
     from sts2_autotest.core.progress import clear_progress, load_progress
+
+    evidence_mode = getattr(args, "evidence", None)
+    if evidence_mode:
+        os.environ["STS2_AUTOTEST_EVIDENCE"] = str(evidence_mode)
 
     # Determine adapter type: --adapter flag takes precedence, then env var default
     adapter_type: str = args.adapter or ("agent" if _is_agent_default() else "cli")
     use_agent = adapter_type == "agent"
     adapter = _create_adapter(adapter_type)
+
+    if getattr(args, "journey", None):
+        return _run_journey_foreground(
+            adapter,
+            journey=args.journey,
+            character_id=args.character_id,
+            timeout=float(args.timeout),
+            run_id=getattr(args, "internal_run_id", None),
+        )
 
     progress_path = _get_progress_path()
     use_progress = str(progress_path)  # Enable progress persistence for all runs (AC1)
@@ -762,6 +1134,7 @@ def run_cmd(args: Any) -> int:
                 adapter, pending, timeout=args.timeout,
                 progress_path=use_progress, resumed_from=resumed_from,
                 use_agent=use_agent,
+                run_id=getattr(args, "internal_run_id", None),
             )
 
     # Auto-detect: progress file exists but no explicit flag
@@ -794,38 +1167,47 @@ def run_cmd(args: Any) -> int:
             if compile_rc != 0:
                 print("[autotest] Compile failed - aborting pipeline")
                 return 1
-            print("[autotest] Running compiled tests with pytest...")
-            import subprocess as _sp
+            print("[autotest] Running compiled tests through the common runner...")
             pytest_targets = _pytest_targets_for_compiled_specs(
                 pipeline_spec_dir,
                 output_dir,
             )
-            rc = _sp.call(
-                [sys.executable, "-m", "pytest", *pytest_targets, "-v", "--tb=short"]
+            from sts2_autotest.cli.mcp_tools import run_tests_in_dir
+
+            run_result = run_tests_in_dir(
+                pipeline_spec_dir,
+                timeout=args.timeout,
+                targets=[Path(target) for target in pytest_targets],
+                output_dir=output_dir,
+                run_id=getattr(args, "internal_run_id", None),
             )
-            return rc
+            return 0 if run_result.get("status") == "OK" else 1
         print("[autotest] Running all cases (no spec pipeline)...")
         return _dispatch_orchestrator(
             adapter, ["all"], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
+            run_id=getattr(args, "internal_run_id", None),
         )
     elif args.cases:
         print(f"[autotest] Running cases: {', '.join(args.cases)}")
         return _dispatch_orchestrator(
             adapter, args.cases, timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
+            run_id=getattr(args, "internal_run_id", None),
         )
     elif args.suite:
         print(f"[autotest] Running suite: {args.suite}")
         return _dispatch_orchestrator(
             adapter, [args.suite], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
+            run_id=getattr(args, "internal_run_id", None),
         )
     elif args.failed:
         print("[autotest] Re-running failed cases...")
         return _dispatch_orchestrator(
             adapter, ["failed"], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
+            run_id=getattr(args, "internal_run_id", None),
         )
     else:
         print("[autotest] No run option specified. "
@@ -1115,7 +1497,7 @@ def doctor_cmd(args: Any) -> int:
         from sts2_autotest.adapters.agent import AgentAdapter
 
         agent_endpoint = os.environ.get(
-            "STS2_ADAPTER__AGENT__ENDPOINT", "http://localhost:8080"
+            "STS2_ADAPTER__AGENT__ENDPOINT", "http://127.0.0.1:8080"
         )
 
         async def _probe_agent() -> bool:
@@ -1313,6 +1695,14 @@ def cli(argv: Sequence[str] | None = None) -> None:
         sys.exit(report_cmd(args))
     elif args.command == "queue":
         sys.exit(queue_cmd(args))
+    elif args.command == "status":
+        sys.exit(status_cmd(args))
+    elif args.command == "capabilities":
+        sys.exit(capabilities_cmd(args))
+    elif args.command == "cancel":
+        sys.exit(cancel_cmd(args))
+    elif args.command == "resume":
+        sys.exit(resume_run_cmd(args))
     elif args.command == "progress":
         sys.exit(progress_cmd(args))
     elif args.command == "agent-test":

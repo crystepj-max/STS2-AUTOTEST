@@ -155,11 +155,13 @@ class DefaultRecoveryStrategy:
         game_startup_timeout: float = 60.0,
         steam_controller: Any = None,
         popup_handler: Callable[[], PopupDisposition] | None = None,
+        lifecycle_manager: Any = None,
     ) -> None:
         self._adapter_factory = adapter_factory
         self._game_startup_timeout = game_startup_timeout
         self._steam_controller = steam_controller
         self._popup_handler = popup_handler
+        self._lifecycle_manager = lifecycle_manager
 
     def decide(
         self,
@@ -346,6 +348,14 @@ class DefaultRecoveryStrategy:
         """Level 1: restart game → recreate adapter → health check."""
         if not self._prepare_restart_popup("GAME_RESTART"):
             return False, None
+        if self._lifecycle_manager is not None:
+            try:
+                if await self._lifecycle_manager.relaunch_run(
+                    api_timeout=self._game_startup_timeout,
+                ):
+                    return await self._execute_recreate(adapter)
+            except Exception as exc:
+                logger.warning("GAME_RESTART lifecycle manager failed: %s", exc)
         if self._steam_controller is None:
             logger.warning("GAME_RESTART: no steam_controller — falling back to RECREATE")
             return await self._execute_recreate(adapter)
@@ -363,6 +373,15 @@ class DefaultRecoveryStrategy:
         """Level 2: stop game+Steam → start Steam+game → recreate adapter."""
         if not self._prepare_restart_popup("FULL_RESTART"):
             return False, None
+        if self._lifecycle_manager is not None:
+            try:
+                self._lifecycle_manager.terminate()
+                if await self._lifecycle_manager.ensure_game_up(
+                    api_timeout=self._game_startup_timeout,
+                ):
+                    return await self._execute_recreate(adapter)
+            except Exception as exc:
+                logger.warning("FULL_RESTART lifecycle manager failed: %s", exc)
         if self._steam_controller is None:
             logger.warning("FULL_RESTART: no steam_controller — falling back to RECREATE")
             return await self._execute_recreate(adapter)
