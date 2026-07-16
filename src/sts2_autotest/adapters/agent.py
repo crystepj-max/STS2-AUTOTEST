@@ -486,6 +486,8 @@ class AgentAdapter:
         if action == "start_new_run":
             result = await self._start_new_run()
             return result
+        if action == "abandon_run" and self.debug_actions:
+            return await self._run_debug_console_command("die")
         if action == "win_combat":
             if not self.debug_actions:
                 return ActionResult(

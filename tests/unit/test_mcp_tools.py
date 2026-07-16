@@ -91,6 +91,26 @@ class TestPersistentRunTools:
         assert "--suite" in argv
         assert "--all" not in argv
 
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_target_scene_defaults_to_agent_adapter(self, mock_worker, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        handle_submit_run({
+            "journey": "act_traversal",
+            "character_id": "IRONCLAD",
+            "target_scene": "NEXT_ACT",
+            "route_policy": "leftmost",
+            "combat_mode": "traversal",
+            "timeout": 60,
+            "evidence": "full",
+            "idempotency_key": "act-traversal-agent-default-1",
+        })
+
+        argv = mock_worker.call_args.args[2]
+        assert "--adapter" in argv
+        assert argv[argv.index("--adapter") + 1] == "agent"
+
     def test_submit_rejects_invalid_evidence_level(self, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run

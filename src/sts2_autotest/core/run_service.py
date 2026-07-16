@@ -92,6 +92,7 @@ class RunRecord:
     exit_code: int | None = None
     message: str | None = None
     result: dict[str, Any] = field(default_factory=dict)
+    progress: dict[str, Any] = field(default_factory=dict)
     evidence_dir: str | None = None
     cancel_requested: bool = False
 
@@ -134,6 +135,7 @@ class RunRecord:
             exit_code=int(data["exit_code"]) if data.get("exit_code") is not None else None,
             message=data.get("message"),
             result=dict(data.get("result", {})),
+            progress=dict(data.get("progress", {})),
             evidence_dir=data.get("evidence_dir"),
             cancel_requested=bool(data.get("cancel_requested", False)),
         )
@@ -374,6 +376,19 @@ def serialize_record(record: RunRecord | None) -> dict[str, Any]:
         return {"status": "NOT_FOUND"}
     payload = record.to_dict()
     payload["terminal"] = record.is_terminal
+    progress = payload.get("progress") or {}
+    if isinstance(progress, dict):
+        payload["current_chapter"] = progress.get("current_chapter")
+        payload["current_floor"] = progress.get("current_floor")
+        payload["current_screen"] = progress.get("current_screen")
+        payload["target_scene"] = progress.get("target_scene") or record.request.metadata.get("target_scene")
+        payload["rooms_processed"] = progress.get("rooms_processed", 0)
+        payload["room_types"] = progress.get("room_types", [])
+        payload["last_action"] = progress.get("last_action")
+        payload["last_updated_at"] = progress.get("updated_at") or record.updated_at
+        payload["steps"] = progress.get("steps", 0)
+        payload["recovering"] = progress.get("recovering", False)
+        payload["last_observed_change"] = progress.get("last_observed_change")
     return payload
 
 

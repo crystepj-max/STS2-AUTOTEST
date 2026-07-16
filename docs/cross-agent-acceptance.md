@@ -100,3 +100,20 @@ submit_run（保留 run_id）
 4. `get_report` 返回与 `get_run` 一致的终态；
 5. 任务证据目录和报告路径；
 6. 至少一次取消或断线后的查询/恢复验证。
+
+## 7. 目标场景与整章真实验收
+
+公共 MCP 的 `capabilities` 必须公开目标场景、整章能力、路线规则、战斗模式、证据级别和提交参数。`submit_run` 支持 `journey`、`character_id`、`target_scene`、`route_policy`、`combat_mode`、`timeout`、`evidence` 和 `idempotency_key`。
+
+整章旗舰任务固定为：
+
+```text
+journey=act_traversal
+character_id=<合法角色标识>
+target_scene=NEXT_ACT
+route_policy=leftmost
+combat_mode=traversal
+evidence=full
+```
+
+只有报告同时证明第一章新局、角色选择、开图事件、地图路线、实际房间、战斗奖励、Boss、Boss 奖励、章节从第一章变为第二章、第二章开图事件和稳定地图，最终状态才可标记为 `PASSED`。单目标场景验收必须分别通过同一个 `submit_run → get_run → get_report` 入口完成。

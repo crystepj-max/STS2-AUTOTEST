@@ -27,6 +27,7 @@ class LogCollectorProtocol(Protocol):
 
     def collect(self, case_id: str) -> object: ...
     def collect_on_failure(self, case_id: str) -> object: ...
+    def collect_snapshot(self, case_id: str, *, max_bytes: int = 8 * 1024 * 1024) -> object: ...
 
 
 class EvidencePackagerProtocol(Protocol):
@@ -53,6 +54,7 @@ class EvidenceHooks(Protocol):
     def on_case_end(self, result: TestResult) -> None: ...
     def on_crash(self, case_id: str, error: Exception) -> None: ...
     def on_session_end(self, summary: dict[str, Any]) -> None: ...
+    def capture_state(self, case_id: str, state: dict[str, Any]) -> None: ...
 
 
 class StubEvidenceHooks:
@@ -68,6 +70,9 @@ class StubEvidenceHooks:
         pass
 
     def on_session_end(self, summary: dict[str, Any]) -> None:
+        pass
+
+    def capture_state(self, case_id: str, state: dict[str, Any]) -> None:
         pass
 
 
@@ -122,6 +127,8 @@ class RealEvidenceHooks:
         self._pack_id = pack_id
         self._capture_screenshots = capture_screenshots
         self._last_failure: FailureInfo | None = None
+        self._captured_screenshots: list[Path] = []
+        self._captured_logs: list[Path] = []
 
     def on_case_start(self, case_id: str) -> None:
         logger.debug("Case %s started", case_id)
@@ -133,6 +140,8 @@ class RealEvidenceHooks:
                 self._window_title, result.case_id
             )
             if result_capture.ok:
+                if result_capture.path is not None:
+                    self._captured_screenshots.append(Path(result_capture.path))
                 logger.info(
                     "Screenshot saved for case %s: %s",
                     result.case_id,
@@ -153,7 +162,19 @@ class RealEvidenceHooks:
 
         # Collect filtered logs on failure
         if result.status == "fail" and self._log_collector is not None:
-            self._log_collector.collect_on_failure(result.case_id)
+            log_result = self._log_collector.collect_on_failure(result.case_id)
+            log_path = getattr(log_result, "dest_path", None)
+            if log_path is not None:
+                self._captured_logs.append(Path(log_path))
+        elif self._log_collector is not None:
+            collect_snapshot = getattr(self._log_collector, "collect_snapshot", None)
+            if callable(collect_snapshot):
+                log_result = collect_snapshot(result.case_id)
+            else:
+                log_result = self._log_collector.collect(result.case_id)
+            log_path = getattr(log_result, "dest_path", None)
+            if log_path is not None:
+                self._captured_logs.append(Path(log_path))
 
         # B10: capture failure info from non-crash failures when on_crash didn't fire first
         if self._last_failure is None and result.status in ("fail", "crash", "deterministic_fail"):
@@ -187,6 +208,13 @@ class RealEvidenceHooks:
                 tb_module.format_exception(type(error), error, error.__traceback__),
             ),
             exit_code=exit_code,
+            stuck_screen=(
+                (getattr(error, "last_state", None) or {}).get("screen")
+                if isinstance(getattr(error, "last_state", None), dict)
+                else None
+            ),
+            last_action=getattr(error, "last_action", None),
+            last_state=getattr(error, "last_state", None),
         )
 
         if self._capture_screenshots:
@@ -194,6 +222,8 @@ class RealEvidenceHooks:
                 self._window_title, case_id=f"{case_id}_crash"
             )
             if crash_capture.ok:
+                if crash_capture.path is not None:
+                    self._captured_screenshots.append(Path(crash_capture.path))
                 logger.info(
                     "Crash screenshot saved for case %s: %s",
                     case_id,
@@ -207,7 +237,10 @@ class RealEvidenceHooks:
                 )
 
         if self._log_collector is not None:
-            self._log_collector.collect_on_failure(f"{case_id}_crash")
+            log_result = self._log_collector.collect_on_failure(f"{case_id}_crash")
+            log_path = getattr(log_result, "dest_path", None)
+            if log_path is not None:
+                self._captured_logs.append(Path(log_path))
 
     def on_session_end(self, summary: dict[str, Any]) -> None:
         """Create evidence pack if packager is available."""
@@ -222,8 +255,23 @@ class RealEvidenceHooks:
         if self._packager is not None:
             failed = summary.get("failed", 0)
             crashed = summary.get("crashed", 0)
-            run_result = "failed" if (failed + crashed) > 0 else "passed"
-            pack_kwargs: dict[str, Any] = {"run_result": run_result}
+            declared_status = str(summary.get("status", "")).upper()
+            run_result = (
+                "blocked"
+                if declared_status == "BLOCKED_ENVIRONMENT"
+                else "failed"
+                if (failed + crashed) > 0
+                else "passed"
+            )
+            # 真实耗时由调用方透传，避免报告里的 duration_ms 恒为 0。
+            try:
+                duration_ms = int(summary.get("duration_ms", 0) or 0)
+            except (TypeError, ValueError):
+                duration_ms = 0
+            pack_kwargs: dict[str, Any] = {
+                "run_result": run_result,
+                "duration_ms": duration_ms,
+            }
             if self._pack_id:
                 pack_kwargs["pack_id"] = self._pack_id
             if self._last_failure is None:
@@ -235,8 +283,27 @@ class RealEvidenceHooks:
             # Export artifact (Story 4.7, FR54) — non-blocking
             try:
                 if pack_result is not None:
+                    copy_artifacts = getattr(self._packager, "copy_artifacts", None)
+                    if callable(copy_artifacts):
+                        copy_artifacts(
+                            getattr(pack_result, "name", str(pack_result)),
+                            screenshots=self._captured_screenshots,
+                            logs=self._captured_logs,
+                        )
                     pack_name = getattr(pack_result, "name", None)
                     if pack_name is not None:
                         self._packager.export_artifact(str(pack_name), result=run_result)
             except Exception:
                 logger.warning("Artifact export failed (non-blocking)", exc_info=True)
+            self._captured_screenshots.clear()
+            self._captured_logs.clear()
+
+    def capture_state(self, case_id: str, state: dict[str, Any]) -> None:
+        """为关键场景保留一张游戏窗口截图。"""
+        if not self._capture_screenshots:
+            return
+        result = self._capture.capture_with_validation(self._window_title, case_id)
+        if result.ok and result.path is not None:
+            self._captured_screenshots.append(Path(result.path))
+        else:
+            logger.warning("State screenshot skipped for %s: %s", case_id, result.message)

@@ -111,6 +111,9 @@ def _required_run_id(args: dict[str, Any]) -> str:
 
 def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
     """返回跨 Agent 能力协商结果。"""
+    debug_actions_enabled = os.environ.get(
+        "STS2_ADAPTER__AGENT__DEBUG_ACTIONS", "false"
+    ).lower() in {"true", "1", "yes", "on"}
     return {
         "service": "sts2-autotest",
         "contract_version": "1",
@@ -120,10 +123,30 @@ def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
             "FAILED_PLATFORM", "BLOCKED_ENVIRONMENT", "CANCELLED",
         ],
         "operations": [
-            "submit_run", "get_run", "cancel_run", "resume_run", "get_report",
+            "capabilities", "submit_run", "get_run", "cancel_run", "resume_run", "get_report",
         ],
         "transports": ["mcp_http", "cli_json"],
         "single_game_instance": True,
+        "goal_scene_execution": True,
+        "supported_target_scene": [
+            "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT",
+            "REST", "SHOP", "CHEST", "CARD_REWARD", "NEXT_ACT",
+        ],
+        "supports_act_traversal": True,
+        "route_policies": ["leftmost", "target"],
+        "combat_modes": ["traversal", "basic"],
+        "combat_capabilities": {
+            "traversal_fast_end_action": "win_combat",
+            "traversal_fast_end_enabled": debug_actions_enabled,
+            "traversal_fallback": "basic",
+            "fast_end_is_development_only": True,
+        },
+        "evidence_levels": ["none", "minimal", "full"],
+        "submit_parameters": [
+            "journey", "character_id", "target_scene", "route_policy",
+            "combat_mode", "timeout", "evidence", "idempotency_key",
+        ],
+        "compatibility": "旧 project/suite/cases 请求继续可用；目标场景请求使用同一任务入口。",
     }
 
 
@@ -146,6 +169,12 @@ def _request_argv(args: dict[str, Any], run_id: str, *, mode: str = "new") -> li
         argv.extend(["--adapter", str(args["adapter"])])
     if args.get("journey"):
         argv.extend(["--journey", str(args["journey"])])
+    if args.get("target_scene"):
+        argv.extend(["--target-scene", str(args["target_scene"])])
+    if args.get("route_policy"):
+        argv.extend(["--route-policy", str(args["route_policy"])])
+    if args.get("combat_mode"):
+        argv.extend(["--combat-mode", str(args["combat_mode"])])
     if args.get("character_id"):
         argv.extend(["--character-id", str(args["character_id"])])
     if args.get("timeout") is not None:
@@ -162,26 +191,37 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
     if timeout < 1:
         raise McpError(INVALID_PARAMS, "timeout must be at least 1 second")
     store = _run_store()
+    journey = args.get("journey")
+    target_scene = args.get("target_scene")
+    if target_scene and not journey:
+        journey = "goal_scene"
+    adapter = args.get("adapter")
+    if adapter is None and (target_scene or journey in {"goal_scene", "act_traversal"}):
+        adapter = "agent"
+    request_args = {**args, "adapter": adapter} if adapter else args
     request = RunRequest(
         project=args.get("project"),
         suite=args.get("suite"),
         cases=[str(item) for item in args.get("cases", [])],
         mode=mode,
         timeout=timeout,
-        adapter=args.get("adapter"),
+        adapter=adapter,
         spec_dir=args.get("spec_dir"),
         evidence=evidence,
         idempotency_key=args.get("idempotency_key"),
         metadata={
             **(metadata or {}),
-            **({"journey": args["journey"]} if args.get("journey") else {}),
+            **({"journey": journey} if journey else {}),
             **({"character_id": args["character_id"]} if args.get("character_id") else {}),
+            **({"target_scene": target_scene} if target_scene else {}),
+            **({"route_policy": args["route_policy"]} if args.get("route_policy") else {}),
+            **({"combat_mode": args["combat_mode"]} if args.get("combat_mode") else {}),
         },
     )
     record = store.create(request)
     if record.request is not request:
         return serialize_record(record)
-    request.argv = _request_argv(args, record.run_id, mode=mode)
+    request.argv = _request_argv(request_args, record.run_id, mode=mode)
     store.update(record.run_id, request=request)
     try:
         spawn_worker(store, record, request.argv)
@@ -199,10 +239,30 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
 def handle_submit_run(args: dict[str, Any]) -> dict[str, Any]:
     """异步提交统一测试任务，立即返回 run_id。"""
     spec_dir = args.get("spec_dir")
+    target_scenes = {
+        "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT",
+        "REST", "SHOP", "CHEST", "CARD_REWARD", "NEXT_ACT",
+    }
+    if args.get("target_scene") and str(args["target_scene"]).upper() not in target_scenes:
+        raise McpError(INVALID_PARAMS, f"Unsupported target_scene: {args['target_scene']}")
+    if args.get("route_policy", "leftmost") not in {"leftmost", "target"}:
+        raise McpError(INVALID_PARAMS, "route_policy must be leftmost or target")
+    if args.get("combat_mode", "traversal") not in {"traversal", "basic"}:
+        raise McpError(INVALID_PARAMS, "combat_mode must be traversal or basic")
+    journey = args.get("journey")
+    if journey and journey not in {
+        "new_run", "resume_run", "first_battle", "finish_interstitials",
+        "goal_scene", "act_traversal",
+    }:
+        raise McpError(INVALID_PARAMS, f"Unsupported journey: {journey}")
+    if journey == "act_traversal" and args.get("target_scene") not in (None, "NEXT_ACT", "next_act"):
+        raise McpError(INVALID_PARAMS, "act_traversal target_scene must be NEXT_ACT")
     if spec_dir:
         resolved = _validate_path(str(spec_dir))
         if not resolved.is_dir():
             raise McpError(INVALID_PARAMS, f"spec_dir is not a directory: {spec_dir}")
+    if journey == "act_traversal" and not args.get("target_scene"):
+        args = {**args, "target_scene": "NEXT_ACT"}
     return _submit_persistent_run(args)
 
 
@@ -231,6 +291,9 @@ def handle_resume_run(args: dict[str, Any]) -> dict[str, Any]:
             "timeout": record.request.timeout,
             "journey": record.request.metadata.get("journey"),
             "character_id": record.request.metadata.get("character_id"),
+            "target_scene": record.request.metadata.get("target_scene"),
+            "route_policy": record.request.metadata.get("route_policy", "leftmost"),
+            "combat_mode": record.request.metadata.get("combat_mode", "traversal"),
             "evidence": record.request.evidence,
         },
         mode="resume",
@@ -440,9 +503,25 @@ def read_run_report(run_id: str) -> dict[str, Any]:
     failure = summary.get("failure")
     if not isinstance(failure, dict) and record is not None:
         failure = record.result.get("failure")
+
+    def read_json_file(name: str) -> dict[str, Any] | None:
+        path = report_dir / "reports" / name
+        if not path.is_file():
+            return None
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return loaded if isinstance(loaded, dict) else None
+
     return {
         "summary": summary or run_summary,
+        "run": run_summary,
+        "progress": (record.progress if record is not None else {}),
         "failures": [failure] if isinstance(failure, dict) else [],
+        "evidence_manifest": read_json_file("evidence-manifest.json"),
+        "journey_trace": read_json_file("journey-trace.json"),
+        "journey_failure": read_json_file("journey-failure.json"),
         "evidence_pack_url": artifact_path,
     }
 
@@ -590,9 +669,21 @@ class ToolRegistry:
                             "adapter": {"type": "string", "enum": ["cli", "agent"]},
                             "journey": {
                                 "type": "string",
-                                "enum": ["new_run", "resume_run", "first_battle", "finish_interstitials"],
+                                "enum": [
+                                    "new_run", "resume_run", "first_battle", "finish_interstitials",
+                                    "goal_scene", "act_traversal",
+                                ],
                             },
                             "character_id": {"type": "string"},
+                            "target_scene": {
+                                "type": "string",
+                                "enum": [
+                                    "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT",
+                                    "REST", "SHOP", "CHEST", "CARD_REWARD", "NEXT_ACT",
+                                ],
+                            },
+                            "route_policy": {"type": "string", "enum": ["leftmost", "target"]},
+                            "combat_mode": {"type": "string", "enum": ["traversal", "basic"]},
                             "evidence": {"type": "string", "enum": ["none", "minimal", "full"]},
                             "idempotency_key": {"type": "string"},
                         },

@@ -28,7 +28,8 @@ def _badge_kind(result: str) -> str:
 
 def _b64img(path: Path) -> str:
     try:
-        return f"data:image/png;base64,{base64.b64encode(path.read_bytes()).decode()}"
+        mime_type = "image/jpeg" if path.suffix.lower() in {".jpg", ".jpeg"} else "image/png"
+        return f"data:{mime_type};base64,{base64.b64encode(path.read_bytes()).decode()}"
     except Exception:
         return ""
 

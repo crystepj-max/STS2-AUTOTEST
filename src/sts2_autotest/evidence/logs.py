@@ -5,6 +5,7 @@ from __future__ import annotations
 __test__ = False
 
 import os
+import platform
 import re
 import shutil
 import time
@@ -23,14 +24,30 @@ _GODOT_PATTERN = re.compile(
     r"(DEBUG|INFO|WARN|WARNING|ERROR|CRITICAL):\s+(.*)$"
 )
 
-# Default Godot log directory (Windows)
-_DEFAULT_LOG_DIR = Path(
-    os.environ.get(
-        "STS2_GODOT_LOG_DIR",
-        os.path.join(os.environ.get("APPDATA", ""), "Godot", "app_userdata",
-                     "Slay the Spire 2", "logs"),
-    )
-)
+def _default_log_dir() -> Path:
+    """Resolve the native STS2 Godot log directory for the current OS."""
+    override = os.environ.get("STS2_GODOT_LOG_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    if platform.system() == "Darwin":
+        candidates = [
+            Path.home() / "Library/Application Support/SlayTheSpire2/logs",
+            Path.home() / "Library/Application Support/Godot/app_userdata/Slay the Spire 2/logs",
+        ]
+    elif platform.system() == "Windows":
+        candidates = [
+            Path(os.environ.get("APPDATA", "")) / "Godot/app_userdata/Slay the Spire 2/logs",
+        ]
+    else:
+        candidates = [
+            Path.home() / ".local/share/godot/app_userdata/Slay the Spire 2/logs",
+        ]
+
+    return next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
+
+
+_DEFAULT_LOG_DIR = _default_log_dir()
 
 
 @dataclass
@@ -169,6 +186,40 @@ class LogCollector:
             total_lines=result_total,
             matched_lines=len(result_entries),
             entries=result_entries[: self._max_entries],
+        )
+
+    def collect_snapshot(
+        self, case_id: str, *, max_bytes: int = 8 * 1024 * 1024
+    ) -> LogCollectionResult:
+        """保存运行结束时的日志尾部，避免复制整个持续增长的日志。"""
+        self._cleanup_old_logs()
+        log_path = self._find_latest_log()
+        if log_path is None:
+            logger.warning("No Godot log file found in %s", self._log_dir)
+            return LogCollectionResult()
+
+        content = self._read_tail_with_retry(log_path, max_bytes)
+        if content is None:
+            return LogCollectionResult(source_path=log_path)
+
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        timestamp = now.strftime("%Y%m%dT%H%M%S")
+        ms = now.microsecond // 1000
+        dest = self._output_dir / f"{case_id}_tail_{timestamp}_{ms:03d}.log"
+        try:
+            dest.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Failed to save log snapshot: %s", exc)
+            return LogCollectionResult(source_path=log_path)
+
+        entries, total = self._parse_log_text(content)
+        return LogCollectionResult(
+            source_path=log_path,
+            dest_path=dest,
+            total_lines=total,
+            matched_lines=len(entries),
+            entries=entries[: self._max_entries],
         )
 
     def collect_on_failure(self, case_id: str) -> LogCollectionResult:
@@ -348,6 +399,23 @@ class LogCollector:
                                 )
                             except OSError:
                                 pass
+                    return None
+        return None  # pragma: no cover
+
+    def _read_tail_with_retry(self, path: Path, max_bytes: int) -> str | None:
+        """Read only the newest bytes so a multi-gigabyte log remains safe."""
+        for attempt in range(self._lock_retries + 1):
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(0, os.SEEK_END)
+                    size = handle.tell()
+                    handle.seek(max(0, size - max_bytes), os.SEEK_SET)
+                    return handle.read(max_bytes).decode("utf-8", errors="replace")
+            except OSError as exc:
+                if attempt < self._lock_retries:
+                    time.sleep(self._lock_base_delay * (2 ** attempt))
+                else:
+                    logger.warning("Log tail read failed: %s", exc)
                     return None
         return None  # pragma: no cover
 

@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import shutil
+import time
 import subprocess
 import sys
 from pathlib import Path
@@ -82,13 +83,37 @@ def _create_parser() -> Any:
     run.add_argument("--internal-run-id", help=argparse.SUPPRESS)
     run.add_argument(
         "--journey",
-        choices=["new_run", "resume_run", "first_battle", "finish_interstitials"],
+        choices=[
+            "new_run", "resume_run", "first_battle", "finish_interstitials",
+            "goal_scene", "act_traversal",
+        ],
         help="Run one reusable game journey instead of a project case suite",
     )
     run.add_argument(
         "--character-id",
         default="IRONCLAD",
         help="Character for new_run/first_battle",
+    )
+    run.add_argument(
+        "--target-scene",
+        choices=[
+            "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT",
+            "REST", "SHOP", "CHEST", "CARD_REWARD", "NEXT_ACT",
+        ],
+        default=None,
+        help="目标场景；act_traversal 默认使用 NEXT_ACT",
+    )
+    run.add_argument(
+        "--route-policy",
+        choices=["leftmost", "target"],
+        default="leftmost",
+        help="地图路线规则",
+    )
+    run.add_argument(
+        "--combat-mode",
+        choices=["traversal", "basic"],
+        default="traversal",
+        help="战斗处理规则",
     )
 
     # autotest review
@@ -847,6 +872,12 @@ def _child_argv(args: Any, run_id: str) -> list[str]:
         argv.extend(["--journey", str(args.journey)])
     if getattr(args, "character_id", None):
         argv.extend(["--character-id", str(args.character_id)])
+    if getattr(args, "target_scene", None):
+        argv.extend(["--target-scene", str(args.target_scene)])
+    if getattr(args, "route_policy", None):
+        argv.extend(["--route-policy", str(args.route_policy)])
+    if getattr(args, "combat_mode", None):
+        argv.extend(["--combat-mode", str(args.combat_mode)])
     argv.extend(["--internal-run-id", run_id])
     return argv
 
@@ -865,6 +896,13 @@ def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> i
         spec_dir=getattr(args, "spec_dir", None),
         evidence=getattr(args, "evidence", "full"),
         idempotency_key=getattr(args, "idempotency_key", None),
+        metadata={
+            **({"journey": getattr(args, "journey")} if getattr(args, "journey", None) else {}),
+            **({"character_id": getattr(args, "character_id")} if getattr(args, "character_id", None) else {}),
+            **({"target_scene": getattr(args, "target_scene")} if getattr(args, "target_scene", None) else {}),
+            "route_policy": getattr(args, "route_policy", "leftmost"),
+            "combat_mode": getattr(args, "combat_mode", "traversal"),
+        },
     )
     record = store.create(request)
     if record.request is not request:
@@ -950,6 +988,9 @@ def resume_run_cmd(args: Any) -> int:
         adapter=request.adapter,
         journey=request.metadata.get("journey"),
         character_id=request.metadata.get("character_id", "IRONCLAD"),
+        target_scene=request.metadata.get("target_scene"),
+        route_policy=request.metadata.get("route_policy", "leftmost"),
+        combat_mode=request.metadata.get("combat_mode", "traversal"),
         evidence=request.evidence,
         idempotency_key=None,
     )
@@ -1010,6 +1051,113 @@ def run_cmd(args: Any) -> int:
         return 1
 
 
+def _write_journey_failure(
+    pack_dir: Path,
+    *,
+    journey: str,
+    failure: dict[str, Any],
+    duration_ms: int,
+) -> None:
+    """把失败留证单独落盘：卡在哪个页面、最后执行了什么、状态轨迹与原因。"""
+    try:
+        reports = pack_dir / "reports"
+        reports.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "journey": journey,
+            "duration_ms": duration_ms,
+            "stuck_screen": failure.get("stuck_screen"),
+            "last_action": failure.get("last_action"),
+            "reason_code": failure.get("reason_code"),
+            "reason": failure.get("reason"),
+            "status_trajectory": failure.get("status_trajectory"),
+            "last_state": failure.get("last_state"),
+            "evidence_hint": "崩溃截图见 ../screenshots，游戏日志见 ../logs",
+        }
+        (reports / "journey-failure.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _write_journey_evidence(
+    evidence_root: Path,
+    run_id: str | None,
+    *,
+    journey: str,
+    target_scene: str,
+    evidence: dict[str, Any],
+) -> None:
+    """把通用旅程的场景、操作、地图和证据清单写成机器可读文件。"""
+    if not run_id:
+        return
+    report_dir = evidence_root / run_id / "reports"
+    try:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        trace = {
+            "journey": journey,
+            "target_scene": target_scene,
+            **evidence,
+        }
+        (report_dir / "journey-trace.json").write_text(
+            json.dumps(trace, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        root = evidence_root / run_id
+        screenshot_count = len(list((root / "screenshots").glob("*"))) if (root / "screenshots").is_dir() else 0
+        log_count = len(list((root / "logs").glob("*"))) if (root / "logs").is_dir() else 0
+        files = [
+            str(path.relative_to(root))
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        ]
+        (report_dir / "evidence-manifest.json").write_text(
+            json.dumps(
+                {
+                    "declared": [
+                        "reports/run-result.json",
+                        "reports/journey-trace.json",
+                        "reports/evidence-manifest.json",
+                        "summary.json",
+                        "summary.md",
+                        "screenshots/",
+                        "logs/",
+                    ],
+                    "existing_files": files,
+                    "evidence_level": os.environ.get("STS2_AUTOTEST_EVIDENCE", "full"),
+                    "screenshot_count": screenshot_count,
+                    "log_count": log_count,
+                    "capture_status": {
+                        "screenshots": (
+                            {"status": "available", "count": screenshot_count}
+                            if screenshot_count
+                            else {
+                                "status": "unavailable",
+                                "count": 0,
+                                "reason": "运行结束时截图目录为空；未将空目录当作已截图。",
+                            }
+                        ),
+                        "logs": (
+                            {"status": "available", "count": log_count}
+                            if log_count
+                            else {
+                                "status": "unavailable",
+                                "count": 0,
+                                "reason": "本次运行没有可复制的游戏日志文件。",
+                            }
+                        ),
+                    },
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 def _run_journey_foreground(
     adapter: GameAdapterProtocol,
     *,
@@ -1017,10 +1165,13 @@ def _run_journey_foreground(
     character_id: str,
     timeout: float,
     run_id: str | None = None,
+    target_scene: str | None = None,
+    route_policy: str = "leftmost",
+    combat_mode: str = "traversal",
 ) -> int:
     """执行平台提供的通用游戏旅程。"""
     from sts2_autotest.common.errors import STS2Error
-    from sts2_autotest.core.journeys import GenericJourneys, JourneyFailure
+    from sts2_autotest.core.journeys import GenericJourneys, JourneyFailure, _extract_chapter
     from sts2_autotest.core.evidence_hooks import build_evidence_hooks
     from sts2_autotest.core.action_model import TestResult
 
@@ -1031,50 +1182,220 @@ def _run_journey_foreground(
     evidence = build_evidence_hooks(evidence_root, pack_id=run_id)
     evidence.on_case_start(case_id)
 
-    def write_result(status: str, message: str | None = None) -> None:
+    def capture_key_state(state: dict[str, Any]) -> None:
+        screen = str(state.get("screen") or "").upper()
+        chapter = _extract_chapter(state)
+        if screen in {"EVENT", "COMBAT", "CARD_REWARD"} or (
+            screen == "MAP" and chapter == 2
+        ):
+            capture_state = getattr(evidence, "capture_state", None)
+            if callable(capture_state):
+                safe_case_id = case_id.replace(":", "_")
+                capture_state(
+                    f"{safe_case_id}_{screen}_{int(time.monotonic() * 1000)}",
+                    state,
+                )
+
+    def write_result(
+        status: str,
+        message: str | None = None,
+        *,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         if not run_id:
             return
         result_dir = evidence_root / run_id / "reports"
         try:
             result_dir.mkdir(parents=True, exist_ok=True)
-            payload: dict[str, Any] = {"run_id": run_id, "status": status}
+            payload: dict[str, Any] = {
+                "run_id": run_id,
+                "task_id": run_id,
+                "status": status,
+            }
             if message:
                 payload["message"] = message
+            if extra:
+                payload.update(extra)
             (result_dir / "run-result.json").write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
         except OSError:
             pass
+
+    started = time.monotonic()
+    runner: GenericJourneys | None = None
+
+    def publish_progress(progress: dict[str, Any]) -> None:
+        if not run_id:
+            return
+        try:
+            from sts2_autotest.core.run_service import RunStore
+
+            RunStore(os.environ.get("STS2_AUTOTEST_RUN_ROOT", "tests/output/.runs")).update(
+                run_id,
+                progress=progress,
+            )
+        except (OSError, RuntimeError, ValueError):
+            pass
+
+    resolved_target = (target_scene or "").upper()
+    if journey == "act_traversal":
+        resolved_target = "NEXT_ACT"
+    elif not resolved_target:
+        resolved_target = {
+            "new_run": "MAP",
+            "resume_run": "MAP",
+            "first_battle": "COMBAT",
+            "finish_interstitials": "MAP",
+        }.get(journey, "MAP")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        runner = GenericJourneys(adapter, timeout=timeout)
+        runner = GenericJourneys(
+            adapter,
+            timeout=timeout,
+            target_scene=resolved_target,
+            route_policy=route_policy,
+            combat_mode=combat_mode,
+            progress_callback=publish_progress,
+            observation_callback=capture_key_state,
+        )
         if journey == "new_run":
             result = loop.run_until_complete(runner.start_new_run(character_id))
         elif journey == "resume_run":
             result = loop.run_until_complete(runner.resume_run())
         elif journey == "first_battle":
             result = loop.run_until_complete(runner.enter_first_battle(character_id=character_id))
+        elif journey in {"goal_scene", "act_traversal"} or target_scene:
+            result = loop.run_until_complete(
+                runner.execute_target(
+                    character_id=character_id,
+                    target_scene=resolved_target,
+                    route_policy=route_policy,
+                    combat_mode=combat_mode,
+                )
+            )
         else:
             result = loop.run_until_complete(runner.finish_interstitials())
+
+        duration_ms = int((time.monotonic() - started) * 1000)
+        trajectory = list(runner.trajectory)
         evidence.on_case_end(TestResult(case_id, "pass", json.dumps(result, ensure_ascii=False)))
-        write_result("PASSED")
-        evidence.on_session_end({"total": 1, "passed": 1, "failed": 0, "crashed": 0, "skipped": 0})
+        _write_journey_evidence(
+            evidence_root,
+            run_id,
+            journey=journey,
+            target_scene=resolved_target,
+            evidence=runner.evidence,
+        )
+        write_result(
+            "PASSED",
+            extra={
+                "duration_ms": duration_ms,
+                "status_trajectory": trajectory,
+                "final_state": result.get("screen"),
+                "target_scene": resolved_target,
+                "journey_evidence": runner.evidence,
+                "evidence_dir": str(evidence_root / run_id) if run_id else None,
+            },
+        )
+        evidence.on_session_end({
+            "total": 1, "passed": 1, "failed": 0, "crashed": 0, "skipped": 0,
+            "duration_ms": duration_ms,
+        })
+        _write_journey_evidence(
+            evidence_root,
+            run_id,
+            journey=journey,
+            target_scene=resolved_target,
+            evidence=runner.evidence,
+        )
         print(json.dumps({"journey": journey, "status": "PASSED", "state": result}, ensure_ascii=False))
         return 0
     except (STS2Error, JourneyFailure) as exc:
+        duration_ms = int((time.monotonic() - started) * 1000)
+        last_state = getattr(exc, "last_state", None)
+        last_action = getattr(exc, "last_action", None)
+        trajectory = list(runner.trajectory) if runner is not None else []
+        stuck_screen = (
+            str((last_state or {}).get("screen"))
+            if isinstance(last_state, dict) else None
+        )
+        failure = {
+            "stuck_screen": stuck_screen,
+            "last_action": last_action,
+            "last_state": last_state,
+            "reason_code": getattr(exc, "reason_code", None),
+            "reason": str(exc),
+            "status_trajectory": trajectory,
+        }
+        # 通用旅程的导航、动作、证据和目标达成失败均属于平台执行失败；
+        # 只有项目断言才允许归类为 FAILED_PRODUCT。
+        environment_signals = (
+            "connection refused",
+            "connection error",
+            "game not running",
+            "mod not loaded",
+            "cannot connect",
+        )
+        is_environment_blocked = isinstance(exc, STS2Error) and any(
+            signal in str(exc).lower() for signal in environment_signals
+        )
+        status = "BLOCKED_ENVIRONMENT" if is_environment_blocked else "FAILED_PLATFORM"
         evidence.on_crash(case_id, exc)
         evidence.on_case_end(TestResult(case_id, "crash", str(exc)))
-        write_result("FAILED_PLATFORM", str(exc))
-        evidence.on_session_end({"total": 1, "passed": 0, "failed": 0, "crashed": 1, "skipped": 0})
-        print(json.dumps({"journey": journey, "status": "FAILED_PLATFORM", "message": str(exc)}, ensure_ascii=False))
+        _write_journey_evidence(
+            evidence_root,
+            run_id,
+            journey=journey,
+            target_scene=resolved_target,
+            evidence=runner.evidence if runner is not None else {},
+        )
+        write_result(
+            status,
+            message=str(exc),
+            extra={
+                "duration_ms": duration_ms,
+                "status_trajectory": trajectory,
+                "failure": failure,
+                "target_scene": resolved_target,
+                "journey_evidence": runner.evidence if runner is not None else {},
+                "evidence_dir": str(evidence_root / run_id) if run_id else None,
+            },
+        )
+        if run_id:
+            _write_journey_failure(evidence_root / run_id, journey=journey, failure=failure, duration_ms=duration_ms)
+        evidence.on_session_end({
+            "total": 1, "passed": 0, "failed": 0, "crashed": 1, "skipped": 0,
+            "duration_ms": duration_ms,
+            "status": status,
+        })
+        _write_journey_evidence(
+            evidence_root,
+            run_id,
+            journey=journey,
+            target_scene=resolved_target,
+            evidence=runner.evidence if runner is not None else {},
+        )
+        print(json.dumps({"journey": journey, "status": status, "message": str(exc)}, ensure_ascii=False))
         return 1
     except Exception as exc:
+        duration_ms = int((time.monotonic() - started) * 1000)
         evidence.on_crash(case_id, exc)
         evidence.on_case_end(TestResult(case_id, "fail", str(exc)))
-        write_result("FAILED_PRODUCT", str(exc))
-        evidence.on_session_end({"total": 1, "passed": 0, "failed": 1, "crashed": 0, "skipped": 0})
+        write_result(
+            "FAILED_PRODUCT",
+            message=str(exc),
+            extra={
+                "duration_ms": duration_ms,
+                "evidence_dir": str(evidence_root / run_id) if run_id else None,
+            },
+        )
+        evidence.on_session_end({
+            "total": 1, "passed": 0, "failed": 1, "crashed": 0, "skipped": 0,
+            "duration_ms": duration_ms,
+        })
         print(json.dumps({"journey": journey, "status": "FAILED_PRODUCT", "message": str(exc)}, ensure_ascii=False))
         return 1
     finally:
@@ -1098,13 +1419,22 @@ def _run_cmd_foreground(args: Any) -> int:
     use_agent = adapter_type == "agent"
     adapter = _create_adapter(adapter_type)
 
-    if getattr(args, "journey", None):
+    if getattr(args, "journey", None) or getattr(args, "target_scene", None):
+        journey_kwargs: dict[str, Any] = {
+            "journey": args.journey,
+            "character_id": args.character_id,
+            "timeout": float(args.timeout),
+            "run_id": getattr(args, "internal_run_id", None),
+        }
+        if getattr(args, "target_scene", None) is not None:
+            journey_kwargs["target_scene"] = args.target_scene
+        if getattr(args, "route_policy", "leftmost") != "leftmost":
+            journey_kwargs["route_policy"] = args.route_policy
+        if getattr(args, "combat_mode", "traversal") != "traversal":
+            journey_kwargs["combat_mode"] = args.combat_mode
         return _run_journey_foreground(
             adapter,
-            journey=args.journey,
-            character_id=args.character_id,
-            timeout=float(args.timeout),
-            run_id=getattr(args, "internal_run_id", None),
+            **journey_kwargs,
         )
 
     progress_path = _get_progress_path()

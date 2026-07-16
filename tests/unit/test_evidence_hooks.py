@@ -42,6 +42,7 @@ class _FakePackager:
     def __init__(self) -> None:
         self.last_failure: FailureInfo | None = None
         self.last_run_result: str = "unknown"
+        self.last_duration_ms: int = 0
 
     def create_pack(
         self,
@@ -53,6 +54,7 @@ class _FakePackager:
     ) -> object:
         self.last_failure = failure
         self.last_run_result = run_result
+        self.last_duration_ms = duration_ms
         return Path("/tmp/pack")
 
     def export_artifact(self, pack_id: str, result: str = "unknown") -> object:
@@ -282,3 +284,68 @@ class TestOnSessionEndPackagerIntegration:
         assert fake_packager.last_failure is not None
         assert fake_packager.last_failure.type == "assertion_error"
         assert fake_packager.last_failure.message == "assertion failed"
+
+
+# ── on_crash 失败留证字段 ───────────────────────────────────────
+
+
+class TestOnCrashFailureEvidence:
+    """Tests for stuck_screen/last_action/last_state extraction in on_crash."""
+
+    def test_extracts_stuck_screen_and_last_action_and_state(
+        self, hooks: RealEvidenceHooks,
+    ) -> None:
+        from sts2_autotest.core.journeys import JourneyFailure
+
+        last_state = {
+            "screen": "EVENT",
+            "available_actions": ["choose_event_option"],
+            "event": {"options": [{"index": 0, "is_locked": False}]},
+        }
+        exc = JourneyFailure(
+            "卡在开局事件页",
+            last_state=last_state,
+            last_action="choose_event_option",
+        )
+        hooks.on_crash("c1", exc)
+
+        assert hooks._last_failure is not None
+        assert hooks._last_failure.stuck_screen == "EVENT"
+        assert hooks._last_failure.last_action == "choose_event_option"
+        assert hooks._last_failure.last_state == last_state
+
+    def test_missing_last_state_yields_none_stuck_screen(
+        self, hooks: RealEvidenceHooks,
+    ) -> None:
+        exc = ValueError("plain error without navigation attributes")
+        hooks.on_crash("c1", exc)
+
+        assert hooks._last_failure is not None
+        assert hooks._last_failure.stuck_screen is None
+        assert hooks._last_failure.last_action is None
+        assert hooks._last_failure.last_state is None
+
+
+# ── on_session_end 透传 duration_ms ─────────────────────────────
+
+
+class TestOnSessionEndDuration:
+    """Tests for duration_ms passthrough to create_pack."""
+
+    def test_passes_duration_ms_to_create_pack(
+        self, hooks: RealEvidenceHooks, fake_packager: _FakePackager,
+    ) -> None:
+        hooks.on_session_end(
+            {"passed": 1, "failed": 0, "crashed": 0, "duration_ms": 1234}
+        )
+
+        # duration_ms 必须原样透传给 create_pack，修复报告耗时恒为 0 的问题
+        assert fake_packager.last_duration_ms == 1234
+
+    def test_zero_duration_ms_passthrough(
+        self, hooks: RealEvidenceHooks, fake_packager: _FakePackager,
+    ) -> None:
+        hooks.on_session_end(
+            {"passed": 1, "failed": 0, "crashed": 0, "duration_ms": 0}
+        )
+        assert fake_packager.last_duration_ms == 0  # type: ignore[attr-defined]

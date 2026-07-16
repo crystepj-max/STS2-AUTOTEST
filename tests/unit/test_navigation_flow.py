@@ -6,6 +6,9 @@ def test_choose_progress_action_discards_potion_on_post_combat_map() -> None:
     state = {
         "screen": "MAP",
         "available_actions": ["discard_potion"],
+        "run": {
+            "potions": [{"index": 0, "occupied": True, "can_discard": True}],
+        },
         "map": {"local_vote": {"row": 0, "col": 3}, "available_nodes": []},
     }
 
@@ -101,6 +104,74 @@ def test_choose_progress_action_prefers_event_option_over_synthetic_confirm_moda
         "choose_event_option",
         {"option_index": 0},
     )
+
+
+def test_choose_progress_action_uses_cli_choose_event_when_present() -> None:
+    """cli 适配器的 choose_event(index) 必须被识别（开局 Neow 祝福页）。"""
+    state = {
+        "screen": "EVENT",
+        "available_actions": ["choose_event", "advance_dialogue"],
+        "event": {
+            "options": [
+                {"index": 0, "text_key": "OPTION_A", "is_locked": False},
+                {"index": 1, "text_key": "OPTION_B", "is_locked": False},
+            ]
+        },
+    }
+
+    assert choose_progress_action(state) == ("choose_event", {"index": 0})
+
+
+def test_choose_progress_action_event_skips_locked_options() -> None:
+    """事件选项含锁定项时，应跳过并选第一个可用项。"""
+    state = {
+        "screen": "EVENT",
+        "available_actions": ["choose_event_option"],
+        "event": {
+            "options": [
+                {"index": 0, "text_key": "LOCKED", "is_locked": True},
+                {"index": 1, "text_key": "OPTION_B", "is_locked": False},
+            ]
+        },
+    }
+
+    assert choose_progress_action(state) == (
+        "choose_event_option",
+        {"option_index": 1},
+    )
+
+
+def test_choose_progress_action_event_without_options_advances_dialogue() -> None:
+    """事件页没有可选选项（纯对话）时，推进对话而非空转。"""
+    state = {
+        "screen": "EVENT",
+        "available_actions": ["advance_dialogue"],
+        "event": {"options": []},
+    }
+
+    assert choose_progress_action(state) == ("advance_dialogue", {})
+
+
+def test_choose_progress_action_does_not_pick_advance_dialogue_on_map() -> None:
+    """MAP 屏幕即使暴露 advance_dialogue，也不能误选它而迷失在地图。"""
+    state = {
+        "screen": "MAP",
+        "available_actions": [
+            "advance_dialogue",
+            "choose_map_node",
+            "choose_map_node_by_type",
+        ],
+        "map": {
+            "available_nodes": [
+                {"index": 0, "node_type": "Monster", "state": "Travelable"},
+            ]
+        },
+    }
+
+    result = choose_progress_action(state, target_screen="COMBAT")
+    assert result is not None
+    assert result[0] in ("choose_map_node_by_type", "choose_map_node")
+    assert result[0] != "advance_dialogue"
 
 
 def test_choose_progress_action_prefers_targeted_combat_node_type() -> None:

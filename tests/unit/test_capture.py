@@ -7,9 +7,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import sts2_autotest.evidence.capture as capture_module
 from sts2_autotest.common.types import CaptureResult
 from sts2_autotest.evidence.capture import (
     ScreenCapture,
+    _export_macos_jpeg,
+    _inspect_macos_png,
+    _normalize_macos_png,
     _parse_resolution,
     _restore_window,
 )
@@ -343,6 +347,11 @@ class TestSaveScreenshot:
 
 
 class TestCapture:
+    @pytest.fixture(autouse=True)
+    def _force_legacy_monitor_capture(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """这些旧用例验证 mss 分支；macOS 窗口分支单独验证。"""
+        monkeypatch.setattr(capture_module.platform, "system", lambda: "Windows")
+
     @patch("sts2_autotest.evidence.capture.mss.mss")
     def test_success(self, mock_mss_cls: MagicMock, tmp_path: Path) -> None:
         sct = _make_mss_mock(_make_bgra_varied(), 1920, 1080)
@@ -394,10 +403,97 @@ class TestCapture:
         assert "disk full" in (result.message or "")
 
 
+class TestMacOSCapture:
+    def test_png_normalization_replaces_source_with_standard_output(self, tmp_path: Path) -> None:
+        path = tmp_path / "event.png"
+        path.write_bytes(b"source")
+
+        def fake_sips(command: list[str], **_kwargs: object) -> MagicMock:
+            Path(command[-1]).write_bytes(b"normalized" + b"\x00" * 1024)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("sts2_autotest.evidence.capture.subprocess.run", side_effect=fake_sips):
+            assert _normalize_macos_png(path) is None
+        assert path.read_bytes().startswith(b"normalized")
+        assert not (tmp_path / "event.normalized.png").exists()
+
+    def test_jpeg_normalization_requests_compatible_output(self, tmp_path: Path) -> None:
+        path = tmp_path / "event.jpg"
+        path.write_bytes(b"source")
+        command: list[str] = []
+
+        def fake_sips(args: list[str], **_kwargs: object) -> MagicMock:
+            command.extend(args)
+            Path(args[-1]).write_bytes(b"normalized" + b"\x00" * 1024)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("sts2_autotest.evidence.capture.subprocess.run", side_effect=fake_sips):
+            assert _normalize_macos_png(path) is None
+        assert "--resampleHeightWidth" in command
+        assert "jpeg" in command
+        assert path.read_bytes().startswith(b"normalized")
+
+    def test_jpeg_export_uses_window_bounded_source(self, tmp_path: Path) -> None:
+        source = tmp_path / "event.png"
+        target = tmp_path / "event.jpg"
+        source.write_bytes(b"source")
+
+        def fake_sips(args: list[str], **_kwargs: object) -> MagicMock:
+            Path(args[-1]).write_bytes(b"jpeg" + b"\x00" * 1024)
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("sts2_autotest.evidence.capture.subprocess.run", side_effect=fake_sips):
+            assert _export_macos_jpeg(source, target) is None
+        assert target.read_bytes().startswith(b"jpeg")
+
+    def test_png_normalization_reports_converter_failure(self, tmp_path: Path) -> None:
+        path = tmp_path / "event.png"
+        path.write_bytes(b"source")
+        completed = MagicMock(returncode=1, stdout="", stderr="conversion failed")
+        with patch("sts2_autotest.evidence.capture.subprocess.run", return_value=completed):
+            assert _normalize_macos_png(path) == "conversion failed"
+
+    def test_png_inspection_returns_physical_resolution_and_content(self, tmp_path: Path) -> None:
+        path = tmp_path / "event.png"
+        path.write_bytes(b"png")
+        completed = MagicMock(returncode=0, stdout="3008\t1692\t0.427000\n", stderr="")
+        with patch("sts2_autotest.evidence.capture.subprocess.run", return_value=completed):
+            assert _inspect_macos_png(path) == ((3008, 1692), 0.427, None)
+
+    def test_png_inspection_rejects_black_band(self, tmp_path: Path) -> None:
+        path = tmp_path / "black-band.png"
+        path.write_bytes(b"png")
+        completed = MagicMock(returncode=0, stdout="3008\t1692\t0.000000\n", stderr="")
+        with patch("sts2_autotest.evidence.capture.subprocess.run", return_value=completed):
+            resolution, ratio, error = _inspect_macos_png(path)
+        assert resolution == (3008, 1692)
+        assert ratio == 0.0
+        assert error == "one horizontal image band is effectively black"
+
+    def test_validation_reports_physical_resolution(self, tmp_path: Path) -> None:
+        def fake_capture(path: Path, _window_title: str) -> tuple[bool, tuple[int, int]]:
+            path.write_bytes(b"usable screenshot" + b"\x00" * 1024)
+            return True, (3008, 1692)
+
+        sc = ScreenCapture(tmp_path)
+        with patch.object(capture_module.platform, "system", return_value="Darwin"), \
+             patch("sts2_autotest.evidence.capture._capture_macos_window_png", side_effect=fake_capture):
+            result = sc.capture_with_validation("Slay the Spire 2", "event")
+        assert result.status == "ok"
+        assert result.resolution == (3008, 1692)
+        assert result.path is not None
+        assert result.path.suffix == ".jpg"
+
+
 # ── capture_with_validation (full flow) ──────────────────────
 
 
 class TestCaptureWithValidation:
+    @pytest.fixture(autouse=True)
+    def _force_legacy_monitor_capture(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """这些旧用例验证 mss 分支；macOS 窗口分支单独验证。"""
+        monkeypatch.setattr(capture_module.platform, "system", lambda: "Windows")
+
     @patch("sts2_autotest.evidence.capture.mss.mss")
     def test_valid_capture(self, mock_mss_cls: MagicMock, tmp_path: Path) -> None:
         sct = _make_mss_mock(_make_bgra_varied(num_colors=10), 1920, 1080)
@@ -679,7 +775,9 @@ class TestRealEvidenceHooks:
         mock_packager.create_pack.return_value = Path("/tmp/evidence/run_001")
         hooks = RealEvidenceHooks(mock_capture, packager=mock_packager)
         hooks.on_session_end({"passed": 5, "failed": 1, "crashed": 0, "skipped": 0})
-        mock_packager.create_pack.assert_called_once_with(run_result="failed")
+        mock_packager.create_pack.assert_called_once_with(
+            run_result="failed", duration_ms=0,
+        )
         mock_packager.export_artifact.assert_called_once_with(
             "run_001", result="failed",
         )
@@ -692,7 +790,9 @@ class TestRealEvidenceHooks:
         mock_packager.create_pack.return_value = Path("/tmp/evidence/run_002")
         hooks = RealEvidenceHooks(mock_capture, packager=mock_packager)
         hooks.on_session_end({"passed": 5, "failed": 0, "crashed": 0, "skipped": 0})
-        mock_packager.create_pack.assert_called_once_with(run_result="passed")
+        mock_packager.create_pack.assert_called_once_with(
+            run_result="passed", duration_ms=0,
+        )
         mock_packager.export_artifact.assert_called_once_with(
             "run_002", result="passed",
         )

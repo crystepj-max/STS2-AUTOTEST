@@ -127,6 +127,7 @@ def test_cli_capabilities_is_machine_readable() -> None:
     payload = json.loads(result.stdout)
     assert payload["contract_version"] == "1"
     assert payload["operations"] == [
+        "capabilities",
         "submit_run",
         "get_run",
         "cancel_run",

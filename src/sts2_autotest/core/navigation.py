@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 ActionSpec = tuple[str, dict[str, Any]]
@@ -13,7 +14,24 @@ StateGetter = Callable[[], Coroutine[Any, Any, dict[str, Any]]]
 
 
 class NavigationBlocked(Exception):
-    """导航超时或卡死。"""
+    """导航超时或卡死。
+
+    携带最后观察到的游戏状态与最近一次尝试的动作，便于上层把它转换为
+    带“卡在哪个页面 / 最后执行了什么”的失败凭证。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        last_state: dict[str, Any] | None = None,
+        last_action: str | None = None,
+        reason_code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.last_state = last_state
+        self.last_action = last_action
+        self.reason_code = reason_code
 
 
 def _first_unlocked_option(options: list[dict[str, Any]]) -> int:
@@ -103,9 +121,241 @@ def _targeted_map_action(
         and str(node.get("state", "")).upper() == "TRAVELABLE"
         and _matches(node)
     )
+    candidates.sort(key=_map_node_sort_key)
     if candidates and "choose_map_node_by_type" in actions:
-        return "choose_map_node_by_type", {"node_type": candidates[0].get("node_type")}
+        return "choose_map_node_by_type", {"node_type": _map_node_type(candidates[0])}
     return None
+
+
+def _map_node_type(node: dict[str, Any]) -> str:
+    return str(node.get("node_type") or node.get("type") or "UNKNOWN")
+
+
+def _map_node_sort_key(node: dict[str, Any]) -> tuple[int, int, int]:
+    """以实际横向坐标为第一排序依据，列表顺序只作为最后的稳定兜底。"""
+    col = node.get("col", node.get("x", node.get("column", 10**9)))
+    row = node.get("row", node.get("y", node.get("floor", 10**9)))
+    index = node.get("index", 10**9)
+    return (
+        col if isinstance(col, int) else 10**9,
+        row if isinstance(row, int) else 10**9,
+        index if isinstance(index, int) else 10**9,
+    )
+
+
+def _available_map_nodes(map_block: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = [
+        node for node in list(map_block.get("available_nodes") or [])
+        if isinstance(node, dict)
+    ]
+    if nodes:
+        return nodes
+
+    all_nodes = [
+        node for node in list(map_block.get("nodes") or [])
+        if isinstance(node, dict)
+        and str(node.get("state") or "").upper() in {"TRAVELABLE", "AVAILABLE", "CURRENT"}
+    ]
+    if all_nodes:
+        return all_nodes
+
+    travelable = map_block.get("travelable_coords") or []
+    by_coord = {
+        (node.get("col"), node.get("row")): node
+        for node in list(map_block.get("nodes") or [])
+        if isinstance(node, dict)
+    }
+    result: list[dict[str, Any]] = []
+    for coord in travelable:
+        if not isinstance(coord, dict):
+            continue
+        node = by_coord.get((coord.get("col"), coord.get("row")))
+        if node is not None:
+            result.append(node)
+        else:
+            result.append(dict(coord))
+    return result
+
+
+def _leftmost_map_action(actions: list[str], map_block: dict[str, Any]) -> ActionSpec | None:
+    nodes = sorted(_available_map_nodes(map_block), key=_map_node_sort_key)
+    if not nodes or "choose_map_node" not in actions:
+        return None
+    node = nodes[0]
+    if isinstance(node.get("index"), int):
+        return "choose_map_node", {"option_index": node["index"]}
+    if len(nodes) == 1:
+        return "choose_map_node", {"option_index": 0}
+    col = node.get("col", node.get("x"))
+    row = node.get("row", node.get("y"))
+    if isinstance(col, int) and isinstance(row, int):
+        return "choose_map_node", {"col": col, "row": row}
+    return "choose_map_node", {"option_index": 0}
+
+
+def _first_live_enemy(combat: dict[str, Any]) -> int | None:
+    for enemy in list(combat.get("enemies") or []):
+        if not isinstance(enemy, dict) or enemy.get("is_alive") is False:
+            continue
+        for key in ("combat_id", "index", "id"):
+            value = enemy.get(key)
+            if isinstance(value, int):
+                return value
+    return None
+
+
+def _basic_combat_action(state: dict[str, Any], actions: list[str]) -> ActionSpec | None:
+    combat = state.get("combat") or {}
+    hand = combat.get("hand") or []
+    if "play_card" in actions and isinstance(hand, list):
+        for card in hand:
+            if not isinstance(card, dict) or card.get("can_play") is False:
+                continue
+            card_id = card.get("id") or card.get("card_id")
+            if not isinstance(card_id, str) or not card_id:
+                continue
+            params: dict[str, Any] = {"card_id": card_id}
+            requires_target = card.get("requires_target")
+            target_type = str(card.get("target_type") or "").upper()
+            if requires_target is True or target_type in {"ANYENEMY", "ENEMY"}:
+                target = _first_live_enemy(combat)
+                if target is not None:
+                    params["target"] = target
+                else:
+                    continue
+            return "play_card", params
+    if "end_turn" in actions:
+        return "end_turn", {}
+    return None
+
+
+def _reward_card_action(state: dict[str, Any], actions: list[str]) -> ActionSpec | None:
+    reward = state.get("reward") or state.get("rewards") or {}
+    if not isinstance(reward, dict):
+        reward = {}
+    options = reward.get("card_options") or reward.get("cards") or []
+    if "reward_choose_card" in actions and isinstance(options, list) and options:
+        ranks = {"COMMON": 0, "UNCOMMON": 1, "RARE": 2, "SPECIAL": 3}
+        ranked: list[tuple[int, int, dict[str, Any]]] = []
+        for position, option in enumerate(options):
+            if not isinstance(option, dict):
+                continue
+            rarity = str(option.get("rarity") or option.get("tier") or "").upper()
+            ranked.append((ranks.get(rarity, -1), position, option))
+        if ranked:
+            rarity_rank, position, option = max(ranked, key=lambda item: (item[0], item[1]))
+            del rarity_rank
+            return "reward_choose_card", {
+                "option_index": option.get("index", position),
+            }
+    raw_rewards = reward.get("rewards") or reward.get("items") or []
+    if isinstance(raw_rewards, dict):
+        raw_rewards = raw_rewards.get("rewards") or []
+    if "reward_choose_card" in actions and isinstance(raw_rewards, list):
+        for reward_position, item in enumerate(raw_rewards):
+            if not isinstance(item, dict):
+                continue
+            reward_type = str(item.get("type") or item.get("reward_type") or "").upper()
+            if reward_type != "CARD":
+                continue
+            choices = item.get("card_choices") or item.get("cards") or []
+            if not isinstance(choices, list) or not choices:
+                continue
+            ranks = {"COMMON": 0, "UNCOMMON": 1, "RARE": 2, "SPECIAL": 3}
+            nested_ranked: list[tuple[int, int, dict[str, Any]]] = []
+            for position, option in enumerate(choices):
+                if not isinstance(option, dict):
+                    continue
+                rarity = str(option.get("rarity") or option.get("tier") or "").upper()
+                nested_ranked.append((ranks.get(rarity, -1), position, option))
+            if not nested_ranked:
+                continue
+            _, position, option = max(nested_ranked, key=lambda entry: (entry[0], entry[1]))
+            params: dict[str, Any] = {
+                "type": "card",
+                "nth": item.get("index", reward_position),
+            }
+            card_id = option.get("id") or option.get("card_id")
+            if card_id:
+                params["card_id"] = card_id
+            else:
+                params["option_index"] = option.get("index", position)
+            return "reward_choose_card", params
+    return None
+
+
+def _first_reward_type(state: dict[str, Any]) -> str | None:
+    reward = state.get("reward") or state.get("rewards") or {}
+    if not isinstance(reward, dict):
+        reward = {}
+    raw = reward.get("rewards") or reward.get("items") or []
+    if isinstance(raw, dict):
+        raw = raw.get("rewards") or []
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                value = item.get("type") or item.get("reward_type")
+                if isinstance(value, str) and value:
+                    return value.lower()
+    for key in ("gold", "relic", "potion", "special_card"):
+        if reward.get(key) not in (None, False, [], {}):
+            return key
+    return None
+
+
+def _rest_action(state: dict[str, Any], actions: list[str]) -> ActionSpec | None:
+    if "choose_rest_option" not in actions:
+        for name in ("rest", "smith", "recuperate", "proceed"):
+            if name in actions:
+                return name, {}
+        return None
+    rest = state.get("rest") or {}
+    options = rest.get("options") or rest.get("available_options") or []
+    player = (
+        (state.get("combat") or {}).get("player")
+        or state.get("player")
+        or state.get("run")
+        or {}
+    )
+    current_hp = player.get("current_hp")
+    max_hp = player.get("max_hp")
+    low_hp = isinstance(current_hp, int) and isinstance(max_hp, int) and current_hp * 2 < max_hp
+    candidates = [item for item in options if isinstance(item, dict)]
+    if candidates:
+        if low_hp:
+            selected = next(
+                (
+                    item
+                    for item in candidates
+                    if str(
+                        item.get("option_id") or item.get("id") or item.get("type") or ""
+                    ).upper()
+                    in {"REST", "HEAL", "RECOVER"}
+                ),
+                candidates[0],
+            )
+        else:
+            selected = next(
+                (
+                    item
+                    for item in candidates
+                    if str(
+                        item.get("option_id") or item.get("id") or item.get("type") or ""
+                    ).upper()
+                    in {"SMITH", "UPGRADE"}
+                ),
+                candidates[0],
+            )
+        value = selected.get("index", selected.get("option_index", 0))
+        return "choose_rest_option", {"option_index": value}
+    return "choose_rest_option", {"option_index": 0}
+
+
+def _state_fingerprint(state: dict[str, Any]) -> str:
+    """去掉读取编号后比较业务状态，避免把重复读取误判为进展。"""
+    volatile = {"state_version", "request_id", "timestamp", "updated_at"}
+    cleaned = {key: value for key, value in state.items() if key not in volatile}
+    return json.dumps(cleaned, sort_keys=True, ensure_ascii=False, default=str)
 
 
 def _detect_card_reward_no_progress(
@@ -124,11 +374,33 @@ def _detect_card_reward_no_progress(
     )
 
 
+def _combat_action_surface_incomplete(
+    state: dict[str, Any], actions: list[str]
+) -> bool:
+    """检测战斗牌面已出现但控制入口未公开出牌动作。"""
+    if str(state.get("screen") or "").upper() != "COMBAT":
+        return False
+    if "win_combat" in actions:
+        return False
+    if "play_card" in actions:
+        return False
+    combat = state.get("combat") or {}
+    player = combat.get("player") or {}
+    if not isinstance(player, dict) or not isinstance(player.get("energy"), int):
+        return False
+    if player["energy"] <= 0 or combat.get("hand"):
+        return False
+    agent_combat = ((state.get("agent_view") or {}).get("combat") or {})
+    return isinstance(agent_combat.get("draw"), list) and bool(agent_combat["draw"])
+
+
 def choose_progress_action(
     state: dict[str, Any],
     target_screen: str | None = None,
     *,
     deck_card_cursor: int = 0,
+    route_policy: str = "leftmost",
+    combat_mode: str = "traversal",
 ) -> ActionSpec | None:
     """读取游戏状态，返回下一步应执行的导航动作。
 
@@ -148,7 +420,15 @@ def choose_progress_action(
             return "abandon_run", {}
 
     if screen == "MAP" and "discard_potion" in actions:
-        return "discard_potion", {"option_index": 0}
+        potions = (state.get("run") or {}).get("potions") or state.get("potions") or []
+        for potion in potions:
+            if not isinstance(potion, dict):
+                continue
+            if potion.get("can_discard") is not True and potion.get("occupied") is not True:
+                continue
+            index = potion.get("index", potion.get("i"))
+            if isinstance(index, int):
+                return "discard_potion", {"option_index": index}
 
     if screen == "CARD_REWARD":
         # 战后卡牌/奖励选择页。STS2-Agent 真实屏幕名为 CARD_SELECTION（deck_card_select
@@ -176,11 +456,14 @@ def choose_progress_action(
             ci = deck_card_cursor % n
             idx = cards[ci].get("index", ci)
             return "select_deck_card", {"option_index": idx}
-        # 2) 卡牌奖励子界面：优先跳过
+        selected_card = _reward_card_action(state, actions)
+        if selected_card is not None:
+            return selected_card
+        # 2) 卡牌奖励子界面：无法识别候选时才跳过
         if "skip_reward_cards" in actions:
             return "skip_reward_cards", {}
         if "reward_skip_card" in actions:
-            return "reward_skip_card", {"type": "card"}
+            return "reward_skip_card", {"type": "card", "nth": 0}
         # 3) 奖励主界面：无人值守推进（收取并离开到地图）
         if "collect_rewards_and_proceed" in actions:
             return "collect_rewards_and_proceed", {}
@@ -197,6 +480,13 @@ def choose_progress_action(
         if "proceed" in actions:
             return "proceed", {}
         return None
+
+    if screen == "COMBAT":
+        if combat_mode not in {"traversal", "basic"}:
+            return None
+        if combat_mode == "traversal" and "win_combat" in actions:
+            return "win_combat", {}
+        return _basic_combat_action(state, actions)
 
     if "tri_select_skip" in actions:
         return "tri_select_skip", {}
@@ -216,38 +506,62 @@ def choose_progress_action(
     if "hand_select_card" in actions and card_id:
         return "hand_select_card", {"card_id": card_id}
 
-    event = state.get("event") or {}
-    options = event.get("options") or []
-    if "choose_event_option" in actions and isinstance(options, list):
-        return "choose_event_option", {"option_index": _first_unlocked_option(options)}
+    # EVENT 屏幕：优先处理需要选择的事件选项（开局 Neow 祝福等）。
+    # 兼容 cli 适配器的 choose_event(index) 与 agent 适配器的
+    # choose_event_option(option_index) 两种动作名；没有可选项时（纯对话）才推进对话。
+    # 整段只在 EVENT 屏幕生效——避免 MAP 等其它屏幕恰好暴露 advance_dialogue /
+    # choose_bundle 时被误选，导致导航迷失（例如开局后卡在地图进不了首战）。
+    if screen == "EVENT":
+        event = state.get("event") or {}
+        options = event.get("options") or []
+        if options:
+            if "choose_event" in actions:
+                return "choose_event", {"index": _first_unlocked_option(options)}
+            if "choose_event_option" in actions:
+                return "choose_event_option", {"option_index": _first_unlocked_option(options)}
+        if "choose_neow_blessing" in actions:
+            return "choose_neow_blessing", {}
 
-    if "advance_dialogue" in actions:
-        return "advance_dialogue", {}
+        if "advance_dialogue" in actions:
+            return "advance_dialogue", {}
 
-    # 卡包选择（Neow 开场多阶段）：选包 → 确认
-    if "choose_bundle" in actions:
-        return "choose_bundle", {"option_index": 0}
-    if "confirm_bundle" in actions:
-        return "confirm_bundle", {}
+        # 卡包选择（Neow 开场多阶段）：选包 → 确认
+        if "choose_bundle" in actions:
+            return "choose_bundle", {"option_index": 0}
+        if "confirm_bundle" in actions:
+            return "confirm_bundle", {}
 
     if screen == "CHEST":
         for ca in ("open_chest", "choose_treasure_relic", "pick_relic", "proceed"):
             if ca in actions:
-                return ca, {}
+                chest_params: dict[str, Any] = (
+                    {"option_index": 0}
+                    if ca in {"choose_treasure_relic", "pick_relic"}
+                    else {}
+                )
+                return ca, chest_params
         return None
 
     if screen == "REST":
-        # 营火：先执行一个休息选项（升级/休整/锻造），卡牌选择由上层自动处理
-        for ra in ("choose_rest_option", "rest", "smith", "tome", "recuperate"):
-            if ra in actions:
-                return ra, ({"option_index": 0} if ra == "choose_rest_option" else {})
-        if "proceed" in actions:
-            return "proceed", {}
-        return None
+        return _rest_action(state, actions)
 
     if screen in {"SHOP", "RELIC_REWARD", "BOSS_REWARD"}:
+        if screen in {"RELIC_REWARD", "BOSS_REWARD"}:
+            for name in ("relic_select", "pick_relic", "reward_claim", "relic_skip"):
+                if name in actions:
+                    reward_params: dict[str, Any] = {}
+                    if name in {"relic_select", "pick_relic"}:
+                        reward_params["option_index"] = 0
+                    elif name == "reward_claim":
+                        reward_params["type"] = _first_reward_type(state) or "relic"
+                    return name, reward_params
         if "proceed" in actions:
             return "proceed", {}
+
+    if screen == "SHOP":
+        for name in ("leave_shop", "shop_exit", "proceed"):
+            if name in actions:
+                return name, {}
 
     if screen == "MAP":
         map_block = state.get("map") or {}
@@ -256,12 +570,13 @@ def choose_progress_action(
         if map_block.get("local_vote") and not actions:
             return None
 
-        targeted = _targeted_map_action(actions, wanted, map_block)
-        if targeted is not None:
-            return targeted
-
-    if screen == "MAP" and "choose_map_node" in actions:
-        return "choose_map_node", {"option_index": 0}
+        if route_policy == "target" or wanted in {"COMBAT", "REST", "CHEST"}:
+            targeted = _targeted_map_action(actions, wanted, map_block)
+            if targeted is not None:
+                return targeted
+        leftmost = _leftmost_map_action(actions, map_block)
+        if leftmost is not None:
+            return leftmost
 
     if "confirm_modal" in actions:
         return "confirm_modal", {}
@@ -277,9 +592,13 @@ async def progress_until(
     timeout: float = 40.0,
     delay: float = 0.5,
     arrival_predicate: Callable[[dict[str, Any]], bool] | None = None,
+    route_policy: str = "leftmost",
+    combat_mode: str = "traversal",
+    recover: Callable[[], Awaitable[bool]] | None = None,
+    no_progress_timeout: float = 10.0,
 ) -> dict[str, Any]:
     """自适应推进到目标屏幕，并可额外验证目标状态已经稳定。"""
-    deadline = time.time() + timeout
+    deadline = time.monotonic() + timeout
     last_state: dict[str, Any] | None = None
     wanted = target_screen.upper()
     stuck_count = 0
@@ -291,15 +610,38 @@ async def progress_until(
     last_select_index: int | None = None
     selects_done = 0
     last_action_success = False
+    last_action: str | None = None
 
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         state = await get_state()
         last_state = state
+        screen = str(state.get("screen") or "").upper()
+        if screen in {"GAME_OVER", "VICTORY", "CRASHED"} and screen != wanted:
+            reason_code = {
+                "GAME_OVER": "COMBAT_FAILED",
+                "VICTORY": "RUN_COMPLETED",
+                "CRASHED": "GAME_CRASHED",
+            }[screen]
+            raise NavigationBlocked(
+                f"到达终止页面 {screen}，无法继续到达 {wanted}",
+                last_state=last_state,
+                last_action=last_action,
+                reason_code=reason_code,
+            )
         if (
-            str(state.get("screen") or "").upper() == wanted
+            screen == wanted
             and (arrival_predicate is None or arrival_predicate(state))
         ):
             return state
+
+        actions = list(state.get("available_actions") or [])
+        if _combat_action_surface_incomplete(state, actions):
+            raise NavigationBlocked(
+                "战斗已出现可处理牌面，但控制入口未公开 play_card，无法执行通用出牌策略",
+                last_state=last_state,
+                last_action=last_action,
+                reason_code="ACTION_SURFACE_INCOMPLETE",
+            )
 
         # 离开卡牌选择页时重置选牌游标与进度跟踪（避免影响其它屏幕或下一轮选择）。
         if str(state.get("screen") or "").upper() != "CARD_REWARD":
@@ -307,8 +649,27 @@ async def progress_until(
             last_select_index = None
             selects_done = 0
 
-        spec = choose_progress_action(state, target_screen=wanted, deck_card_cursor=deck_cursor)
+        spec = choose_progress_action(
+            state,
+            target_screen=wanted,
+            deck_card_cursor=deck_cursor,
+            route_policy=route_policy,
+            combat_mode=combat_mode,
+        )
         if spec is None:
+            map_block = state.get("map") or {}
+            if (
+                str(state.get("screen") or "").upper() == "MAP"
+                and wanted != "MAP"
+                and not bool(map_block.get("is_traveling"))
+                and "choose_map_node" not in list(state.get("available_actions") or [])
+            ):
+                raise NavigationBlocked(
+                    f"目标页面 {wanted} 在当前稳定地图不可达",
+                    last_state=last_state,
+                    last_action=last_action,
+                    reason_code="TARGET_UNREACHABLE",
+                )
             # 没有可执行动作：若仍卡在 CARD_REWARD、且已经成功选过牌却没离开 → 卡死。
             if (
                 str(state.get("screen") or "").upper() == "CARD_REWARD"
@@ -316,12 +677,16 @@ async def progress_until(
                 and last_action_success
             ):
                 raise NavigationBlocked(
-                    f"战后卡牌选择未推进：已选满不同卡但仍在 {wanted}（疑似卡死）"
+                    f"战后卡牌选择未推进：已选满不同卡但仍在 {wanted}（疑似卡死）",
+                    last_state=last_state,
+                    last_action=last_action,
+                    reason_code="NO_PROGRESS",
                 )
             await asyncio.sleep(delay)
             continue
 
         action_name, params = spec
+        last_action = action_name
         prev_screen = str(state.get("screen") or "").upper()
         result = await act(action_name, params)
         action_status = "success"
@@ -329,6 +694,14 @@ async def progress_until(
             action_status = getattr(result, "status", "success") or "success"
         success = action_status == "success"
         last_action_success = success
+
+        if not success:
+            raise NavigationBlocked(
+                f"动作 {action_name!r} 未执行成功：{getattr(result, 'detail', '') or action_status}",
+                last_state=state,
+                last_action=action_name,
+                reason_code="ACTION_FAILED",
+            )
 
         # 仅当本次确实选了一张牌才推进游标（保证下一轮选不同索引）。
         if action_name == "select_deck_card":
@@ -338,6 +711,38 @@ async def progress_until(
         await asyncio.sleep(delay)
 
         new_state = await get_state()
+        before_fingerprint = _state_fingerprint(state)
+        after_fingerprint = _state_fingerprint(new_state)
+        card_selection_progress = (
+            action_name == "select_deck_card"
+            and params.get("option_index") != last_select_index
+        )
+        if before_fingerprint == after_fingerprint and not card_selection_progress:
+            observed_until = time.monotonic() + min(
+                no_progress_timeout,
+                max(0.0, deadline - time.monotonic()),
+            )
+            recovered = False
+            while time.monotonic() < observed_until:
+                await asyncio.sleep(min(delay or 0.5, max(0.01, observed_until - time.monotonic())))
+                candidate = await get_state()
+                if _state_fingerprint(candidate) != before_fingerprint:
+                    new_state = candidate
+                    break
+            else:
+                if recover is not None and not recovered:
+                    recovered = await recover()
+                    if recovered:
+                        candidate = await get_state()
+                        if _state_fingerprint(candidate) != before_fingerprint:
+                            new_state = candidate
+                if _state_fingerprint(new_state) == before_fingerprint:
+                    raise NavigationBlocked(
+                        f"动作 {action_name!r} 返回成功但在 {no_progress_timeout:.0f} 秒内没有可观察变化",
+                        last_state=new_state,
+                        last_action=action_name,
+                        reason_code="NO_PROGRESS",
+                    )
         new_screen = str(new_state.get("screen") or "").upper()
 
         # 专项规则检查：动作返回成功但页面未离开 CARD_REWARD → 卡死信号。
@@ -361,7 +766,10 @@ async def progress_until(
         if stuck_count >= 2:
             raise NavigationBlocked(
                 f"战后卡牌选择未推进：动作 {action_name!r} 返回成功但仍在 {prev_screen}"
-                f"（疑似卡死，已连续 {stuck_count} 次）"
+                f"（疑似卡死，已连续 {stuck_count} 次）",
+                last_state=new_state,
+                last_action=action_name,
+                reason_code="NO_PROGRESS",
             )
 
         last_state = new_state
@@ -372,4 +780,9 @@ async def progress_until(
             return new_state
 
     screen = str((last_state or {}).get("screen") or "")
-    raise NavigationBlocked(f"Waiting for {target_screen} timed out, last screen: {screen}")
+    raise NavigationBlocked(
+        f"Waiting for {target_screen} timed out, last screen: {screen}",
+        last_state=last_state,
+        last_action=last_action,
+        reason_code="TIMEOUT",
+    )

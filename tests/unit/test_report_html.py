@@ -7,12 +7,18 @@ import json
 import shutil
 from pathlib import Path
 
-from sts2_autotest.report_html import build_report_html, write_html_report
+from sts2_autotest.report_html import _b64img, build_report_html, write_html_report
 
 
 _PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlH0wAAAABJRU5ErkJggg=="
 )
+
+
+def test_b64img_uses_jpeg_mime_type(tmp_path: Path) -> None:
+    image = tmp_path / "event.jpg"
+    image.write_bytes(b"jpeg")
+    assert _b64img(image).startswith("data:image/jpeg;base64,")
 
 
 def test_build_report_html_counts_blocked_failed_and_skipped(tmp_path):

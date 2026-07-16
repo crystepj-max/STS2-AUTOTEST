@@ -6,6 +6,8 @@ __test__ = False
 
 import ctypes
 import os
+import platform
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +25,297 @@ logger = get_logger("evidence.capture")
 # Win32 constants
 _SW_RESTORE = 9
 _SW_MAXIMIZE = 3
+_MACOS_MIN_BAND_CONTENT_RATIO = 0.01
+_MACOS_SRGB_PROFILE = Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc")
+
+
+def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int, int, int]] | None:
+    """Find the largest visible macOS window owned by the requested app."""
+    script = r'''
+import re
+import sys
+import Quartz
+
+def norm(value):
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+target = norm(sys.argv[1])
+windows = Quartz.CGWindowListCopyWindowInfo(
+    Quartz.kCGWindowListOptionAll,
+    Quartz.kCGNullWindowID,
+) or []
+candidates = []
+for window in windows:
+    if int(window.get(Quartz.kCGWindowLayer, 0) or 0) != 0:
+        continue
+    owner = norm(window.get(Quartz.kCGWindowOwnerName, ""))
+    name = norm(window.get(Quartz.kCGWindowName, ""))
+    if not target or not (target in owner or owner in target or target in name or name in target):
+        continue
+    bounds = window.get(Quartz.kCGWindowBounds, {}) or {}
+    width = int(round(float(bounds.get("Width", 0) or 0)))
+    height = int(round(float(bounds.get("Height", 0) or 0)))
+    window_id = int(window.get(Quartz.kCGWindowNumber, 0) or 0)
+    if window_id > 0 and width > 0 and height > 0:
+        exact = int(target == owner or target == name)
+        x = int(round(float(bounds.get("X", 0) or 0)))
+        y = int(round(float(bounds.get("Y", 0) or 0)))
+        candidates.append((exact, width * height, window_id, x, y, width, height))
+
+if candidates:
+    _, _, window_id, x, y, width, height = max(candidates)
+    print(f"{window_id}\t{x}\t{y}\t{width}\t{height}")
+'''
+    try:
+        result = subprocess.run(
+            ["python3", "-c", script, window_title],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("macOS window lookup failed: %s", exc)
+        return None
+    if result.returncode != 0:
+        logger.warning("macOS window lookup failed: %s", result.stderr.strip())
+        return None
+    fields = result.stdout.strip().split("\t")
+    if len(fields) != 5:
+        return None
+    try:
+        return int(fields[0]), tuple(int(value) for value in fields[1:5])
+    except ValueError:
+        return None
+
+
+def _inspect_macos_png(path: Path) -> tuple[tuple[int, int] | None, float | None, str | None]:
+    """Read physical PNG size and reject a frame with a black horizontal band."""
+    script = r'''
+import sys
+import Quartz
+from Foundation import NSURL
+
+path = sys.argv[1]
+source = Quartz.CGImageSourceCreateWithURL(NSURL.fileURLWithPath_(path), None)
+image = Quartz.CGImageSourceCreateImageAtIndex(source, 0, None) if source else None
+if image is None:
+    raise SystemExit(1)
+
+width = int(Quartz.CGImageGetWidth(image))
+height = int(Quartz.CGImageGetHeight(image))
+bytes_per_row = int(Quartz.CGImageGetBytesPerRow(image))
+bytes_per_pixel = max(1, int(Quartz.CGImageGetBitsPerPixel(image)) // 8)
+data = bytes(Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(image)))
+step_x = max(1, width // 64)
+step_y = max(1, height // 64)
+ratios = []
+for band in range(3):
+    start = band * height // 3
+    end = (band + 1) * height // 3
+    samples = 0
+    non_black = 0
+    for y in range(start, end, step_y):
+        row = y * bytes_per_row
+        for x in range(0, width, step_x):
+            offset = row + x * bytes_per_pixel
+            pixel = data[offset:offset + min(bytes_per_pixel, 3)]
+            samples += 1
+            if pixel and max(pixel) > 8:
+                non_black += 1
+    ratios.append(non_black / samples if samples else 0.0)
+
+print(f"{width}\t{height}\t{min(ratios):.6f}")
+'''
+    try:
+        result = subprocess.run(
+            ["python3", "-c", script, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, f"PNG inspection failed: {exc}"
+    if result.returncode != 0:
+        return None, None, result.stderr.strip() or "PNG inspection failed"
+    fields = result.stdout.strip().split("\t")
+    if len(fields) != 3:
+        return None, None, "PNG inspection returned malformed metadata"
+    try:
+        resolution = (int(fields[0]), int(fields[1]))
+        min_content_ratio = float(fields[2])
+    except ValueError:
+        return None, None, "PNG inspection returned invalid metadata"
+    if min_content_ratio < _MACOS_MIN_BAND_CONTENT_RATIO:
+        return (
+            resolution,
+            min_content_ratio,
+            "one horizontal image band is effectively black",
+        )
+    return resolution, min_content_ratio, None
+
+
+def _normalize_macos_png(path: Path) -> str | None:
+    """Rewrite screenshots to a broadly compatible image before publishing."""
+    normalized = path.with_name(f"{path.stem}.normalized{path.suffix}")
+    is_jpeg = path.suffix.lower() in {".jpg", ".jpeg"}
+    command = [
+        "/usr/bin/sips",
+        "--matchTo",
+        str(_MACOS_SRGB_PROFILE),
+        "--setProperty",
+        "dpiWidth",
+        "72",
+        "--setProperty",
+        "dpiHeight",
+        "72",
+    ]
+    if is_jpeg:
+        command.extend(
+            [
+                "--resampleHeightWidth",
+                "1080",
+                "1920",
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                "90",
+            ]
+        )
+    command.extend([str(path), "--out", str(normalized)])
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"PNG normalization failed: {exc}"
+    if result.returncode != 0 or not normalized.is_file() or normalized.stat().st_size < 1024:
+        normalized.unlink(missing_ok=True)
+        return result.stderr.strip() or "PNG normalization produced no usable file"
+    os.replace(normalized, path)
+    return None
+
+
+def _export_macos_jpeg(source: Path, target: Path) -> str | None:
+    """Publish a compatible JPEG from an already window-bounded PNG source."""
+    try:
+        result = subprocess.run(
+            [
+                "/usr/bin/sips",
+                "--resampleHeightWidth",
+                "1080",
+                "1920",
+                "-s",
+                "format",
+                "jpeg",
+                "-s",
+                "formatOptions",
+                "90",
+                str(source),
+                "--out",
+                str(target),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"JPEG export failed: {exc}"
+    if result.returncode != 0 or not target.is_file() or target.stat().st_size < 1024:
+        target.unlink(missing_ok=True)
+        return result.stderr.strip() or "JPEG export produced no usable file"
+    return None
+
+
+def _capture_macos_window_png(
+    path: Path, window_title: str
+) -> tuple[bool, tuple[int, int] | None]:
+    """Capture only the matching macOS window, never the full desktop."""
+    match = _find_macos_window(window_title)
+    if match is None:
+        return False, None
+    window_id, bounds = match
+    _x, _y, width, height = bounds
+    raw_path = path if path.suffix.lower() == ".png" else path.with_name(
+        f"{path.stem}.raw.png"
+    )
+    script = r'''
+import sys
+import Quartz
+from AppKit import NSBitmapImageRep, NSPNGFileType
+
+path = sys.argv[1]
+window_id = int(sys.argv[2])
+image = Quartz.CGWindowListCreateImage(
+    Quartz.CGRectNull,
+    Quartz.kCGWindowListOptionIncludingWindow,
+    window_id,
+    Quartz.kCGWindowImageBoundsIgnoreFraming,
+)
+if image is None:
+    raise SystemExit(1)
+bitmap = NSBitmapImageRep.alloc().initWithCGImage_(image)
+if bitmap is None:
+    raise SystemExit(1)
+png_data = bitmap.representationUsingType_properties_(NSPNGFileType, {})
+if png_data is None or not png_data.writeToFile_atomically_(path, True):
+    raise SystemExit(1)
+'''
+    try:
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            [
+                "python3",
+                "-c",
+                script,
+                str(raw_path),
+                str(window_id),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("macOS window capture failed: %s", exc)
+        return False, (width, height)
+    if result.returncode != 0 or not raw_path.is_file() or raw_path.stat().st_size < 1024:
+        logger.warning(
+            "macOS window capture produced no usable file: %s",
+            result.stderr.strip(),
+        )
+        return False, (width, height)
+    normalization_error = _normalize_macos_png(raw_path)
+    if normalization_error is not None:
+        raw_path.unlink(missing_ok=True)
+        logger.warning("macOS screenshot normalization failed: %s", normalization_error)
+        return False, (width, height)
+    if raw_path != path:
+        export_error = _export_macos_jpeg(raw_path, path)
+        raw_path.unlink(missing_ok=True)
+        if export_error is not None:
+            logger.warning("macOS screenshot JPEG export failed: %s", export_error)
+            return False, (width, height)
+    resolution, content_ratio, inspection_error = _inspect_macos_png(path)
+    if resolution is None or inspection_error is not None:
+        logger.warning(
+            "macOS screenshot rejected: %s (resolution=%s, min_band_content=%s)",
+            inspection_error or "unknown PNG metadata",
+            resolution,
+            content_ratio,
+        )
+        return False, resolution or (width, height)
+    logger.info(
+        "macOS screenshot captured from window bounds %s at physical resolution %s "
+        "(minimum band content %.3f)",
+        bounds,
+        resolution,
+        content_ratio,
+    )
+    return True, resolution
 
 
 def _restore_window(title: str) -> bool:
@@ -118,6 +411,9 @@ class ScreenCapture:
         AC5: If the window is not found (not visible, minimized, crashed),
         returns SKIPPED immediately without blocking the test.
         """
+        if platform.system() == "Darwin":
+            return self._capture_macos_with_validation(window_title, case_id)
+
         if not _restore_window(window_title):
             logger.warning(
                 "Window '%s' not found or foreground failed — "
@@ -214,11 +510,41 @@ class ScreenCapture:
         # Unreachable, but satisfies type checker
         return CaptureResult(status="error", message="Unexpected retry loop exit")  # pragma: no cover
 
+    def _capture_macos_with_validation(
+        self, window_title: str, case_id: str
+    ) -> CaptureResult:
+        """Capture and validate the actual macOS game window."""
+        for attempt in range(self._max_retries):
+            path = self._output_dir / f"{case_id}_{attempt}.jpg"
+            ok, resolution = _capture_macos_window_png(path, window_title)
+            if ok and path.stat().st_size >= self._min_file_bytes:
+                return CaptureResult(
+                    status="ok",
+                    path=path,
+                    resolution=resolution,
+                )
+            path.unlink(missing_ok=True)
+        return CaptureResult(
+            status="skipped",
+            message=f"macOS game window '{window_title}' was not available for capture",
+        )
+
     def capture(self, window_title: str, case_id: str = "unknown") -> CaptureResult:
         """Take a screenshot and save it. No validation or retry.
 
         Returns CaptureResult. If mss fails, returns SKIPPED.
         """
+        if platform.system() == "Darwin":
+            path = self._output_dir / f"{case_id}.jpg"
+            ok, resolution = _capture_macos_window_png(path, window_title)
+            if not ok:
+                path.unlink(missing_ok=True)
+                return CaptureResult(
+                    status="skipped",
+                    message=f"macOS game window '{window_title}' was not available for capture",
+                )
+            return CaptureResult(status="ok", path=path, resolution=resolution)
+
         try:
             raw = self._raw_capture()
         except OSError as exc:

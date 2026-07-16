@@ -1132,6 +1132,19 @@ class TestAgentAdapterAct:
             "command": "win",
         }
 
+    def test_abandon_run_uses_debug_die_for_safe_reset(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("abandon_run"))
+
+        assert result.status == "success"
+        assert mock._requests[0]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "die",
+        }
+
     def test_enable_travel_uses_debug_console_command(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"ok": True})

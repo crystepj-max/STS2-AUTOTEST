@@ -1,6 +1,6 @@
 """Evidence pack data models for STS2-AUTOTEST (PRD FR23, FR64)."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sts2_autotest.common.errors import FailureClassification
@@ -56,6 +56,10 @@ class FailureInfo(BaseModel):
     actual: str | None = None
     exit_code: int | None = None
     classification: FailureClassification = FailureClassification.UNKNOWN
+    # 失败留证：卡在哪个页面、最后执行了什么、当时的游戏状态快照。
+    stuck_screen: str | None = None
+    last_action: str | None = None
+    last_state: dict[str, Any] | None = None
 
 
 class RepairSuggestion(BaseModel):
