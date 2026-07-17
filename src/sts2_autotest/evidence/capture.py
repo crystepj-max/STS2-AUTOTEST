@@ -27,6 +27,75 @@ _SW_RESTORE = 9
 _SW_MAXIMIZE = 3
 _MACOS_MIN_BAND_CONTENT_RATIO = 0.01
 _MACOS_SRGB_PROFILE = Path("/System/Library/ColorSync/Profiles/sRGB Profile.icc")
+_MACOS_GAME_BUNDLE_ID = "com.megacrit.SlayTheSpire2"
+
+
+def _ensure_macos_window_onscreen(
+    window_id: int, *, timeout: float = 5.0, settle: float = 1.0
+) -> bool:
+    """确保目标 macOS 窗口处于可见（onscreen）状态。
+
+    离屏窗口（被最小化、隐藏或不在当前空间）的窗口截图只会返回系统缓存的
+    旧帧，会把滞后画面误当最新证据。窗口不可见时先激活所属应用并等待其
+    恢复渲染；激活无效则返回 False，由调用方放弃本次截图而不是产出
+    看似正常的陈旧截图。
+    """
+    script = r'''
+import sys
+import time
+import Quartz
+from AppKit import (
+    NSApplicationActivateAllWindows,
+    NSApplicationActivateIgnoringOtherApps,
+    NSRunningApplication,
+)
+
+window_id = int(sys.argv[1])
+bundle_id = sys.argv[2]
+timeout = float(sys.argv[3])
+settle = float(sys.argv[4])
+
+def onscreen():
+    windows = Quartz.CGWindowListCopyWindowInfo(
+        Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID
+    ) or []
+    for window in windows:
+        if int(window.get(Quartz.kCGWindowNumber, 0) or 0) == window_id:
+            return bool(window.get(Quartz.kCGWindowIsOnscreen))
+    return False
+
+if not onscreen():
+    apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_(bundle_id)
+    if apps:
+        apps[0].activateWithOptions_(
+            NSApplicationActivateIgnoringOtherApps | NSApplicationActivateAllWindows
+        )
+    deadline = time.time() + timeout
+    while time.time() < deadline and not onscreen():
+        time.sleep(0.25)
+if not onscreen():
+    raise SystemExit(1)
+time.sleep(settle)
+'''
+    try:
+        result = subprocess.run(
+            [
+                "python3",
+                "-c",
+                script,
+                str(window_id),
+                _MACOS_GAME_BUNDLE_ID,
+                str(timeout),
+                str(settle),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 15.0,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("macOS window onscreen check failed: %s", exc)
+        return False
+    return result.returncode == 0
 
 
 def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int, int, int]] | None:
@@ -240,6 +309,14 @@ def _capture_macos_window_png(
         return False, None
     window_id, bounds = match
     _x, _y, width, height = bounds
+    if not _ensure_macos_window_onscreen(window_id):
+        # 离屏窗口只会返回系统缓存的旧帧；宁可报告截图不可用，
+        # 也不把滞后画面当作与当前状态一致的证据。
+        logger.warning(
+            "macOS window %s stayed offscreen; refusing stale-frame capture",
+            window_id,
+        )
+        return False, (width, height)
     raw_path = path if path.suffix.lower() == ".png" else path.with_name(
         f"{path.stem}.raw.png"
     )

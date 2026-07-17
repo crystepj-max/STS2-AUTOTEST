@@ -11,6 +11,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 import uuid
+import zipfile
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -134,17 +135,36 @@ def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
         ],
         "supports_act_traversal": True,
         "route_policies": ["leftmost", "target"],
-        "combat_modes": ["traversal", "basic"],
+        "combat_modes": ["traversal", "basic", "death"],
         "combat_capabilities": {
             "traversal_fast_end_action": "win_combat",
             "traversal_fast_end_enabled": debug_actions_enabled,
             "traversal_fallback": "basic",
             "fast_end_is_development_only": True,
+            "death_mode": {
+                "target_scene": "COMBAT",
+                "end_turn_only": True,
+                "success_screen": "GAME_OVER",
+                "description": "combat_mode=death 时战斗中每回合只执行 end_turn，"
+                "直到真实 GAME_OVER；用于角色死亡测试，禁止与 win_combat 混用。",
+            },
+        },
+        "supported_journeys": [
+            "new_run", "resume_run", "first_battle", "finish_interstitials",
+            "goal_scene", "act_traversal", "card_test",
+        ],
+        "card_test": {
+            "journey": "card_test",
+            "parameter": "card_id",
+            "requires_debug_actions": True,
+            "debug_actions_enabled": debug_actions_enabled,
+            "description": "通过调试控制台把 card_id 加入手牌，验证入手并真实打出；"
+            "平台只断言通用可观察事实，具体卡牌效果由项目用例断言。",
         },
         "evidence_levels": ["none", "minimal", "full"],
         "submit_parameters": [
             "journey", "character_id", "target_scene", "route_policy",
-            "combat_mode", "timeout", "evidence", "idempotency_key",
+            "combat_mode", "timeout", "evidence", "idempotency_key", "card_id",
         ],
         "compatibility": "旧 project/suite/cases 请求继续可用；目标场景请求使用同一任务入口。",
     }
@@ -175,6 +195,8 @@ def _request_argv(args: dict[str, Any], run_id: str, *, mode: str = "new") -> li
         argv.extend(["--route-policy", str(args["route_policy"])])
     if args.get("combat_mode"):
         argv.extend(["--combat-mode", str(args["combat_mode"])])
+    if args.get("card_id"):
+        argv.extend(["--card-id", str(args["card_id"])])
     if args.get("character_id"):
         argv.extend(["--character-id", str(args["character_id"])])
     if args.get("timeout") is not None:
@@ -196,7 +218,7 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
     if target_scene and not journey:
         journey = "goal_scene"
     adapter = args.get("adapter")
-    if adapter is None and (target_scene or journey in {"goal_scene", "act_traversal"}):
+    if adapter is None and (target_scene or journey in {"goal_scene", "act_traversal", "card_test"}):
         adapter = "agent"
     request_args = {**args, "adapter": adapter} if adapter else args
     request = RunRequest(
@@ -216,6 +238,7 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
             **({"target_scene": target_scene} if target_scene else {}),
             **({"route_policy": args["route_policy"]} if args.get("route_policy") else {}),
             **({"combat_mode": args["combat_mode"]} if args.get("combat_mode") else {}),
+            **({"card_id": args["card_id"]} if args.get("card_id") else {}),
         },
     )
     record = store.create(request)
@@ -247,14 +270,19 @@ def handle_submit_run(args: dict[str, Any]) -> dict[str, Any]:
         raise McpError(INVALID_PARAMS, f"Unsupported target_scene: {args['target_scene']}")
     if args.get("route_policy", "leftmost") not in {"leftmost", "target"}:
         raise McpError(INVALID_PARAMS, "route_policy must be leftmost or target")
-    if args.get("combat_mode", "traversal") not in {"traversal", "basic"}:
-        raise McpError(INVALID_PARAMS, "combat_mode must be traversal or basic")
+    if args.get("combat_mode", "traversal") not in {"traversal", "basic", "death"}:
+        raise McpError(INVALID_PARAMS, "combat_mode must be traversal, basic, or death")
     journey = args.get("journey")
     if journey and journey not in {
         "new_run", "resume_run", "first_battle", "finish_interstitials",
-        "goal_scene", "act_traversal",
+        "goal_scene", "act_traversal", "card_test",
     }:
         raise McpError(INVALID_PARAMS, f"Unsupported journey: {journey}")
+    if journey == "card_test":
+        if args.get("target_scene"):
+            raise McpError(INVALID_PARAMS, "card_test does not take target_scene")
+        if not str(args.get("card_id") or "").strip():
+            raise McpError(INVALID_PARAMS, "card_test requires a non-empty card_id")
     if journey == "act_traversal" and args.get("target_scene") not in (None, "NEXT_ACT", "next_act"):
         raise McpError(INVALID_PARAMS, "act_traversal target_scene must be NEXT_ACT")
     if spec_dir:
@@ -294,6 +322,7 @@ def handle_resume_run(args: dict[str, Any]) -> dict[str, Any]:
             "target_scene": record.request.metadata.get("target_scene"),
             "route_policy": record.request.metadata.get("route_policy", "leftmost"),
             "combat_mode": record.request.metadata.get("combat_mode", "traversal"),
+            "card_id": record.request.metadata.get("card_id"),
             "evidence": record.request.evidence,
         },
         mode="resume",
@@ -475,54 +504,237 @@ def run_tests_in_dir(
     }
 
 
-def read_run_report(run_id: str) -> dict[str, Any]:
-    """Read a past run report from the output directory.
-
-    Wrapped at module level for testability.
-    """
-    record = _run_store().load(run_id)
-    report_dir = Path(record.evidence_dir) if record and record.evidence_dir else Path("tests/output") / run_id
-    summary_path = report_dir / "summary.json"
-    summary: dict[str, Any] = {}
-    if summary_path.is_file():
-        try:
-            loaded = json.loads(summary_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                summary = loaded
-        except (OSError, ValueError):
-            summary = {}
+def _report_roots(run_id: str, record: Any) -> list[Path]:
+    candidates: list[Path] = []
     if record is not None:
-        run_summary = serialize_record(record)
-    else:
-        run_summary = {"run_id": run_id, "status": "NOT_FOUND"}
-    artifact_path = (
-        summary.get("artifact_path")
-        or (record.result.get("artifact_path") if record else None)
-        or str(report_dir / "artifacts" / f"{run_id}.zip")
-    )
-    failure = summary.get("failure")
-    if not isinstance(failure, dict) and record is not None:
-        failure = record.result.get("failure")
+        for raw in (
+            record.evidence_dir,
+            record.result.get("evidence_dir") if isinstance(record.result, dict) else None,
+        ):
+            if raw:
+                candidates.append(Path(str(raw)).expanduser())
+    evidence_root = Path(
+        os.environ.get("STS2_AUTOTEST_EVIDENCE_DIR", "tests/output")
+    ).expanduser()
+    candidates.extend([evidence_root / run_id, Path("tests/output") / run_id])
+    result: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        resolved = candidate if candidate.is_absolute() else Path.cwd() / candidate
+        key = str(resolved.resolve())
+        if key not in seen:
+            seen.add(key)
+            result.append(resolved)
+    return result
 
-    def read_json_file(name: str) -> dict[str, Any] | None:
-        path = report_dir / "reports" / name
+
+def _artifact_candidates(run_id: str, record: Any, roots: list[Path]) -> list[Path]:
+    raw_paths: list[str] = []
+    if record is not None:
+        if isinstance(record.result, dict) and record.result.get("artifact_path"):
+            raw_paths.append(str(record.result["artifact_path"]))
+    for root in roots:
+        summary_path = root / "summary.json"
+        if summary_path.is_file():
+            try:
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                if isinstance(summary, dict) and summary.get("artifact_path"):
+                    raw_paths.append(str(summary["artifact_path"]))
+            except (OSError, ValueError):
+                pass
+        raw_paths.extend(str(path) for path in (root.parent / "artifacts").glob(f"{run_id}_*.zip"))
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if path.is_file():
+            resolved = path.resolve()
+            if str(resolved) not in seen:
+                seen.add(str(resolved))
+                candidates.append(resolved)
+    return sorted(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _read_report_json(
+    roots: list[Path], artifact: Path | None, name: str,
+) -> tuple[dict[str, Any] | None, Path | None]:
+    for root in roots:
+        path = root / "reports" / name
         if not path.is_file():
-            return None
+            continue
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return None
-        return loaded if isinstance(loaded, dict) else None
+            continue
+        if isinstance(loaded, dict):
+            return loaded, path.resolve()
+    if artifact is not None:
+        try:
+            with zipfile.ZipFile(artifact) as archive:
+                raw = archive.read(f"reports/{name}")
+            loaded = json.loads(raw.decode("utf-8"))
+            if isinstance(loaded, dict):
+                return loaded, None
+        except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+            pass
+    return None, None
+
+
+def _compact_failure(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact = {
+        key: value[key]
+        for key in (
+            "type", "message", "classification", "exit_code", "stuck_screen",
+            "last_action", "reason_code", "reason", "status_trajectory",
+        )
+        if key in value
+    }
+    if isinstance(value.get("last_state"), dict):
+        compact["last_state_summary"] = {
+            "screen": value["last_state"].get("screen"),
+            "available_actions": value["last_state"].get("available_actions", []),
+        }
+    return compact
+
+
+def _compact_result_payload(value: dict[str, Any]) -> dict[str, Any]:
+    """剔除可能巨大的嵌入状态（journey_evidence、dict 形态的 last/final_state），
+    保留标量 final_state 等关键结果字段。"""
+    compact: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "journey_evidence":
+            continue
+        if key in {"last_state", "final_state"} and isinstance(item, dict):
+            continue
+        compact[key] = item
+    if isinstance(compact.get("failure"), dict):
+        compact["failure"] = _compact_failure(compact["failure"])
+    return compact
+
+
+def _compact_trace(value: Any, path: Path | None, artifact: Path | None) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    operations = value.get("operations")
+    map_route = value.get("map_route")
+    return {
+        "journey": value.get("journey"),
+        "target_scene": value.get("target_scene"),
+        "scene_trajectory": value.get("scene_trajectory", []),
+        "rooms": value.get("rooms", []),
+        "duration_ms": value.get("duration_ms"),
+        "operation_count": len(operations) if isinstance(operations, list) else 0,
+        "map_route_count": len(map_route) if isinstance(map_route, list) else 0,
+        "path": str(path) if path is not None else None,
+        "archive_member": "reports/journey-trace.json" if artifact is not None and path is None else None,
+    }
+
+
+def read_run_report(run_id: str) -> dict[str, Any]:
+    """从持久目录或真实证据压缩包读取精简报告。"""
+    record = _run_store().load(run_id)
+    roots = _report_roots(run_id, record)
+    report_dir = next((root for root in roots if root.is_dir()), None)
+    artifact_candidates = _artifact_candidates(run_id, record, roots)
+    artifact = artifact_candidates[-1] if artifact_candidates else None
+
+    summary: dict[str, Any] = {}
+    summary_path: Path | None = None
+    for root in roots:
+        path = root / "summary.json"
+        if not path.is_file():
+            continue
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(loaded, dict):
+            summary = loaded
+            summary_path = path.resolve()
+            break
+    if not summary and artifact is not None:
+        try:
+            with zipfile.ZipFile(artifact) as archive:
+                loaded = json.loads(archive.read("summary.json").decode("utf-8"))
+            if isinstance(loaded, dict):
+                summary = loaded
+        except (OSError, KeyError, ValueError, zipfile.BadZipFile):
+            pass
+
+    if record is not None:
+        run_summary = serialize_record(record)
+        raw_result = run_summary.get("result")
+        if isinstance(raw_result, dict):
+            compact_result = _compact_result_payload(raw_result)
+            report_trace_path = (
+                str(report_dir / "reports" / "journey-trace.json")
+                if report_dir is not None and (report_dir / "reports" / "journey-trace.json").is_file()
+                else None
+            )
+            compact_result["journey_trace_path"] = (
+                report_trace_path or compact_result.get("journey_trace_path")
+            )
+            run_summary["result"] = compact_result
+    else:
+        run_summary = {"run_id": run_id, "status": "NOT_FOUND"}
+
+    manifest, manifest_path = _read_report_json(roots, artifact, "evidence-manifest.json")
+    trace, trace_path = _read_report_json(roots, artifact, "journey-trace.json")
+    journey_failure, failure_path = _read_report_json(roots, artifact, "journey-failure.json")
+    run_result, run_result_path = _read_report_json(roots, artifact, "run-result.json")
+    failure = _compact_failure(summary.get("failure"))
+    if failure is None and record is not None:
+        failure = _compact_failure(record.result.get("failure"))
+
+    compact_summary = dict(summary) if summary else dict(run_summary)
+    if isinstance(compact_summary.get("failure"), dict):
+        compact_summary["failure"] = _compact_failure(compact_summary["failure"])
+    compact_run_result = None
+    if isinstance(run_result, dict):
+        compact_run_result = _compact_result_payload(run_result)
+
+    report_paths = {
+        "summary": str(summary_path) if summary_path is not None else None,
+        "evidence_manifest": str(manifest_path) if manifest_path is not None else None,
+        "journey_trace": str(trace_path) if trace_path is not None else None,
+        "journey_failure": str(failure_path) if failure_path is not None else None,
+        "run_result": str(run_result_path) if run_result_path is not None else None,
+        "human_report": (
+            str((report_dir / "summary.md").resolve())
+            if report_dir is not None and (report_dir / "summary.md").is_file()
+            else None
+        ),
+    }
+    artifact_status = {
+        "exists": artifact is not None,
+        "path": str(artifact) if artifact is not None else None,
+        "readable": False,
+    }
+    if artifact is not None:
+        try:
+            with zipfile.ZipFile(artifact) as archive:
+                archive.testzip()
+            artifact_status["readable"] = True
+        except (OSError, zipfile.BadZipFile):
+            artifact_status["readable"] = False
 
     return {
-        "summary": summary or run_summary,
+        "summary": compact_summary,
         "run": run_summary,
         "progress": (record.progress if record is not None else {}),
-        "failures": [failure] if isinstance(failure, dict) else [],
-        "evidence_manifest": read_json_file("evidence-manifest.json"),
-        "journey_trace": read_json_file("journey-trace.json"),
-        "journey_failure": read_json_file("journey-failure.json"),
-        "evidence_pack_url": artifact_path,
+        "failures": [failure] if failure else [],
+        "evidence_manifest": manifest,
+        "journey_trace": _compact_trace(trace, trace_path, artifact),
+        "journey_failure": _compact_failure(journey_failure),
+        "run_result": compact_run_result,
+        "report_paths": report_paths,
+        "evidence_dir": str(report_dir.resolve()) if report_dir is not None else None,
+        "evidence_pack_url": str(artifact) if artifact is not None else None,
+        "artifact_status": artifact_status,
     }
 
 
@@ -671,10 +883,11 @@ class ToolRegistry:
                                 "type": "string",
                                 "enum": [
                                     "new_run", "resume_run", "first_battle", "finish_interstitials",
-                                    "goal_scene", "act_traversal",
+                                    "goal_scene", "act_traversal", "card_test",
                                 ],
                             },
                             "character_id": {"type": "string"},
+                            "card_id": {"type": "string"},
                             "target_scene": {
                                 "type": "string",
                                 "enum": [
@@ -683,7 +896,7 @@ class ToolRegistry:
                                 ],
                             },
                             "route_policy": {"type": "string", "enum": ["leftmost", "target"]},
-                            "combat_mode": {"type": "string", "enum": ["traversal", "basic"]},
+                            "combat_mode": {"type": "string", "enum": ["traversal", "basic", "death"]},
                             "evidence": {"type": "string", "enum": ["none", "minimal", "full"]},
                             "idempotency_key": {"type": "string"},
                         },

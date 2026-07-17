@@ -129,6 +129,7 @@ class RealEvidenceHooks:
         self._last_failure: FailureInfo | None = None
         self._captured_screenshots: list[Path] = []
         self._captured_logs: list[Path] = []
+        self._last_run_result = "unknown"
 
     def on_case_start(self, case_id: str) -> None:
         logger.debug("Case %s started", case_id)
@@ -263,6 +264,7 @@ class RealEvidenceHooks:
                 if (failed + crashed) > 0
                 else "passed"
             )
+            self._last_run_result = run_result
             # 真实耗时由调用方透传，避免报告里的 duration_ms 恒为 0。
             try:
                 duration_ms = int(summary.get("duration_ms", 0) or 0)
@@ -297,6 +299,20 @@ class RealEvidenceHooks:
                 logger.warning("Artifact export failed (non-blocking)", exc_info=True)
             self._captured_screenshots.clear()
             self._captured_logs.clear()
+
+    def refresh_artifact(self) -> Path | None:
+        """在最终报告写入后重新封存，确保压缩包包含最终清单。"""
+        if self._packager is None or not self._pack_id:
+            return None
+        export = getattr(self._packager, "export_artifact", None)
+        if not callable(export):
+            return None
+        try:
+            result = export(self._pack_id, result=self._last_run_result)
+        except Exception:
+            logger.warning("Final artifact refresh failed", exc_info=True)
+            return None
+        return Path(result) if result is not None else None
 
     def capture_state(self, case_id: str, state: dict[str, Any]) -> None:
         """为关键场景保留一张游戏窗口截图。"""

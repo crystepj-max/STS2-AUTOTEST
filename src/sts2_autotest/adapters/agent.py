@@ -667,22 +667,43 @@ class AgentAdapter:
             if not screen or screen == "MAP":
                 return initial
             if screen == "CARD_SELECTION":
+                selection = state.get("selection") or {}
+                if str(selection.get("kind", "")).lower() in {
+                    "deck_card_select",
+                    "deck_upgrade_select",
+                }:
+                    # 牌库选牌由上层导航按不同索引逐张推进；这里不能在
+                    # 事件动作的收尾阶段重复点击同一张卡。
+                    return initial
                 payload = {"action": "select_deck_card", "option_index": 0}
             elif screen in {"REWARD", "CARD_REWARD", "RELIC_REWARD"}:
                 payload = {"action": "collect_rewards_and_proceed"}
             elif screen == "EVENT":
                 event = state.get("event") or {}
                 if not event.get("is_finished"):
-                    await asyncio.sleep(0.01)
-                    continue
-                proceed = next(
-                    (
-                        option
-                        for option in event.get("options", [])
-                        if isinstance(option, dict) and option.get("is_proceed")
-                    ),
-                    None,
-                )
+                    # Neow 的未完成页面是祝福选择，不能重复点击同一选项。
+                    # 普通事件的未完成页面仍有下一步可选项，应继续选择第一个
+                    # 未锁定选项，否则会把真实事件误判为过场未稳定。
+                    if str(event.get("event_id", "")).upper() == "NEOW":
+                        await asyncio.sleep(0.01)
+                        continue
+                    proceed = next(
+                        (
+                            option
+                            for option in event.get("options", [])
+                            if isinstance(option, dict) and not option.get("is_locked")
+                        ),
+                        None,
+                    )
+                else:
+                    proceed = next(
+                        (
+                            option
+                            for option in event.get("options", [])
+                            if isinstance(option, dict) and option.get("is_proceed")
+                        ),
+                        None,
+                    )
                 if not isinstance(proceed, dict):
                     return initial
                 payload = {
@@ -727,7 +748,27 @@ class AgentAdapter:
         # Use continue_run as the saved-run signal so we do not try abandon_run on
         # a clean main menu and return success without opening character select.
         if "continue_run" in available and "abandon_run" in available:
-            abandon_result = await self.act("abandon_run")
+            # 在主菜单清理存档必须调用游戏菜单动作。调试模式下，公开的
+            # abandon_run 会被映射为战斗内的 die 控制台命令，只适合运行中
+            # 的地图/战斗复位，不能用于主菜单存档清理。
+            if self.debug_actions:
+                try:
+                    abandon_data = await self._request(
+                        "POST", self._act_path, {"action": "abandon_run"}
+                    )
+                    abandon_result = (
+                        ActionResult(status="success", state_changed=True)
+                        if abandon_data.get("ok", False)
+                        else ActionResult(
+                            status="failure",
+                            state_changed=False,
+                            detail=abandon_data.get("error", "Unknown error"),
+                        )
+                    )
+                except STS2Error as exc:
+                    abandon_result = self._action_error(exc)
+            else:
+                abandon_result = await self.act("abandon_run")
             if abandon_result.status == "success":
                 try:
                     available = await self.get_available_actions()

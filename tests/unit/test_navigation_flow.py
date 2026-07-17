@@ -152,6 +152,38 @@ def test_choose_progress_action_event_without_options_advances_dialogue() -> Non
     assert choose_progress_action(state) == ("advance_dialogue", {})
 
 
+def test_choose_progress_action_handles_bundle_selection() -> None:
+    state = {
+        "screen": "BUNDLE_SELECTION",
+        "available_actions": ["choose_bundle"],
+        "bundles": [{"index": 0}, {"index": 1}],
+    }
+
+    assert choose_progress_action(state) == (
+        "choose_bundle",
+        {"option_index": 0},
+    )
+
+
+def test_choose_progress_action_skips_disabled_rest_option() -> None:
+    state = {
+        "screen": "REST",
+        "available_actions": ["choose_rest_option"],
+        "run": {"current_hp": 80, "max_hp": 80},
+        "rest": {
+            "options": [
+                {"index": 0, "option_id": "HEAL", "is_enabled": True},
+                {"index": 1, "option_id": "SMITH", "is_enabled": False},
+            ]
+        },
+    }
+
+    assert choose_progress_action(state) == (
+        "choose_rest_option",
+        {"option_index": 0},
+    )
+
+
 def test_choose_progress_action_does_not_pick_advance_dialogue_on_map() -> None:
     """MAP 屏幕即使暴露 advance_dialogue，也不能误选它而迷失在地图。"""
     state = {

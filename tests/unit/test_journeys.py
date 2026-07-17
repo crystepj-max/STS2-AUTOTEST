@@ -15,6 +15,8 @@ class _State:
     available_actions: list[str]
     event: dict | None = None
     map: dict | None = None
+    in_combat: bool = False
+    combat: dict | None = None
 
     def model_dump(self) -> dict:
         return {
@@ -22,6 +24,8 @@ class _State:
             "available_actions": list(self.available_actions),
             "event": self.event,
             "map": self.map,
+            "in_combat": self.in_combat,
+            "combat": self.combat,
         }
 
 
@@ -121,6 +125,28 @@ def test_reset_from_card_reward_collects_and_returns_to_main_menu() -> None:
     assert result["screen"] == "MAIN_MENU"
 
 
+def test_reset_from_event_resolves_first_unlocked_option_before_abandoning() -> None:
+    adapter = _Adapter()
+    adapter.state = _State(
+        "EVENT",
+        ["choose_event_option"],
+        event={"options": [{"index": 0, "is_locked": False}]},
+    )
+
+    async def act(action: str, params: dict | None = None) -> ActionResult:
+        if action in {"choose_event", "choose_event_option"}:
+            adapter.state = _State("MAP", ["abandon_run"])
+        elif action == "abandon_run":
+            adapter.state = _State("MAIN_MENU", ["start_new_run"])
+        return ActionResult(status="success", state_changed=True)
+
+    adapter.act = act  # type: ignore[method-assign]
+
+    result = asyncio.run(GenericJourneys(adapter).reset_to_main_menu())
+
+    assert result["screen"] == "MAIN_MENU"
+
+
 def test_reset_from_map_uses_debug_abandon_fallback_when_no_normal_action() -> None:
     adapter = _Adapter()
     adapter.state = _State("MAP", ["choose_map_node"])
@@ -130,6 +156,22 @@ def test_reset_from_map_uses_debug_abandon_fallback_when_no_normal_action() -> N
         if action == "abandon_run":
             adapter.state = _State("GAME_OVER", ["return_to_main_menu"])
         elif action == "return_to_main_menu":
+            adapter.state = _State("MAIN_MENU", ["start_new_run"])
+        return ActionResult(status="success", state_changed=True)
+
+    adapter.act = act  # type: ignore[method-assign]
+
+    result = asyncio.run(GenericJourneys(adapter).reset_to_main_menu())
+
+    assert result["screen"] == "MAIN_MENU"
+
+
+def test_reset_from_map_tries_unadvertised_abandon_before_debug_capability() -> None:
+    adapter = _Adapter()
+    adapter.state = _State("MAP", ["choose_map_node"])
+
+    async def act(action: str, params: dict | None = None) -> ActionResult:
+        if action == "abandon_run":
             adapter.state = _State("MAIN_MENU", ["start_new_run"])
         return ActionResult(status="success", state_changed=True)
 
@@ -174,7 +216,12 @@ class _TrajectoryAdapter:
                 map={"is_traveling": False, "available_nodes": [{"index": 0, "node_type": "Monster"}]},
             )
         elif action == "choose_map_node":
-            self.state = _State("COMBAT", ["end_turn"])
+            self.state = _State(
+                "COMBAT",
+                ["end_turn"],
+                in_combat=True,
+                combat={"enemies": [{"index": 0, "is_alive": True}]},
+            )
         return ActionResult(status="success", state_changed=True)
 
 

@@ -90,7 +90,7 @@ autotest run --journey first_battle --character-id IRONCLAD --detach
 - `resume_run`
 - `get_report`
 
-`submit_run` 可以额外指定 `journey`：`new_run`、`resume_run`、`first_battle`、`finish_interstitials`、`goal_scene` 或 `act_traversal`。这些旅程只负责通用游戏流程；角色、卡牌、遗物和数值预期仍由项目用例负责。
+`submit_run` 可以额外指定 `journey`：`new_run`、`resume_run`、`first_battle`、`finish_interstitials`、`goal_scene`、`act_traversal` 或 `card_test`。这些旅程只负责通用游戏流程；角色、卡牌、遗物和数值预期仍由项目用例负责。
 
 ## 4.1 目标场景执行
 
@@ -112,6 +112,11 @@ autotest run --journey first_battle --character-id IRONCLAD --detach
 支持的目标场景为 `MAIN_MENU`、`CHARACTER_SELECT`、`MAP`、`EVENT`、`COMBAT`、`REST`、`SHOP`、`CHEST`、`CARD_REWARD` 和 `NEXT_ACT`。`act_traversal` 只是把统一目标执行器的目标设为 `NEXT_ACT`，不会拥有另一套房间处理逻辑。
 
 任务执行遵循“读取状态 → 执行一个操作 → 重新读取 → 验证可观察变化”的循环。地图路线、战斗、事件、奖励、营火、商店和宝箱均按独立公共规则处理。`combat_mode=traversal` 在当前环境公开 `win_combat` 时优先使用平台级快速结束命令；该命令仅用于通路验证，且仍必须确认战斗页面离开、敌人清空并进入奖励或地图。未公开该能力时回退到角色无关的基础战斗。操作返回成功但状态没有变化时，平台最多进行短时观察和一次连接恢复，然后以 `FAILED_PLATFORM` 留证终止。
+
+## 4.2 死亡测试与卡牌专测
+
+- 死亡测试：`target_scene=COMBAT` 且 `combat_mode=death`。进入真实战斗后每回合只执行 `end_turn`，绝不出牌或使用 `win_combat`，直到游戏真实进入 `GAME_OVER` 才算 `PASSED`；报告中的操作序列和血量变化证明角色被怪物击杀。
+- 卡牌专测：`journey=card_test`，必须携带非空 `card_id`（运行时控制台格式）。平台通过调试控制台把该牌加入手牌，验证卡牌确实入手、真实打出且产生可观察状态变化。平台只断言这些通用事实；具体卡牌效果由项目用例基于报告中的前后状态 JSON 断言。当前环境未开启调试能力时以 `FAILED_PLATFORM` 留证终止。
 
 运行中的 `get_run` 至少返回 `current_chapter`、`current_floor`、`current_screen`、`target_scene`、`rooms_processed`、`room_types`、`last_action`、`last_updated_at`、`steps`、`recovering` 和 `last_observed_change`。目标完成必须由场景、地图稳定性或章节变化等状态证据确认，不能由操作返回值单独确认。
 

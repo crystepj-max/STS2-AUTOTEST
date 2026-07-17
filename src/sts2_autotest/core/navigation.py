@@ -209,7 +209,12 @@ def _basic_combat_action(state: dict[str, Any], actions: list[str]) -> ActionSpe
     hand = combat.get("hand") or []
     if "play_card" in actions and isinstance(hand, list):
         for card in hand:
-            if not isinstance(card, dict) or card.get("can_play") is False:
+            if (
+                not isinstance(card, dict)
+                or card.get("can_play") is False
+                or card.get("playable") is False
+                or card.get("is_playable") is False
+            ):
                 continue
             card_id = card.get("id") or card.get("card_id")
             if not isinstance(card_id, str) or not card_id:
@@ -322,6 +327,15 @@ def _rest_action(state: dict[str, Any], actions: list[str]) -> ActionSpec | None
     low_hp = isinstance(current_hp, int) and isinstance(max_hp, int) and current_hp * 2 < max_hp
     candidates = [item for item in options if isinstance(item, dict)]
     if candidates:
+        candidates = [
+            item
+            for item in candidates
+            if item.get("is_enabled") is not False
+            and item.get("enabled") is not False
+            and item.get("disabled") is not True
+        ]
+        if not candidates:
+            return None
         if low_hp:
             selected = next(
                 (
@@ -392,6 +406,25 @@ def _combat_action_surface_incomplete(
         return False
     agent_combat = ((state.get("agent_view") or {}).get("combat") or {})
     return isinstance(agent_combat.get("draw"), list) and bool(agent_combat["draw"])
+
+
+def _is_real_combat_state(state: dict[str, Any]) -> bool:
+    """只有存在真实战斗数据和战斗控制入口时，才算已进入战斗。"""
+    if str(state.get("screen") or "").upper() != "COMBAT":
+        return False
+    if state.get("in_combat") is not True:
+        return False
+    combat = state.get("combat")
+    if not isinstance(combat, dict):
+        return False
+    enemies = combat.get("enemies")
+    if not isinstance(enemies, list) or not any(
+        isinstance(enemy, dict) and enemy.get("is_alive") is not False
+        for enemy in enemies
+    ):
+        return False
+    actions = list(state.get("available_actions") or [])
+    return any(action in actions for action in ("play_card", "end_turn", "win_combat"))
 
 
 def choose_progress_action(
@@ -482,6 +515,12 @@ def choose_progress_action(
         return None
 
     if screen == "COMBAT":
+        if combat_mode == "death":
+            # 死亡测试：只结束玩家回合，绝不出牌或使用快速结束，
+            # 直到角色被怪物击杀（由上层把 GAME_OVER 作为成功终态）。
+            if "end_turn" in actions:
+                return "end_turn", {}
+            return None
         if combat_mode not in {"traversal", "basic"}:
             return None
         if combat_mode == "traversal" and "win_combat" in actions:
@@ -525,7 +564,9 @@ def choose_progress_action(
         if "advance_dialogue" in actions:
             return "advance_dialogue", {}
 
-        # 卡包选择（Neow 开场多阶段）：选包 → 确认
+
+    if screen == "BUNDLE_SELECTION":
+        # 卡包选择页：无人值守时选择第一个卡包，再由下一轮处理确认页。
         if "choose_bundle" in actions:
             return "choose_bundle", {"option_index": 0}
         if "confirm_bundle" in actions:
@@ -611,11 +652,14 @@ async def progress_until(
     selects_done = 0
     last_action_success = False
     last_action: str | None = None
+    pseudo_combat_seen = False
 
     while time.monotonic() < deadline:
         state = await get_state()
         last_state = state
         screen = str(state.get("screen") or "").upper()
+        if screen == "COMBAT" and not _is_real_combat_state(state):
+            pseudo_combat_seen = True
         if screen in {"GAME_OVER", "VICTORY", "CRASHED"} and screen != wanted:
             reason_code = {
                 "GAME_OVER": "COMBAT_FAILED",
@@ -630,6 +674,7 @@ async def progress_until(
             )
         if (
             screen == wanted
+            and (wanted != "COMBAT" or _is_real_combat_state(state))
             and (arrival_predicate is None or arrival_predicate(state))
         ):
             return state
@@ -775,11 +820,19 @@ async def progress_until(
         last_state = new_state
         if (
             new_screen == wanted
+            and (wanted != "COMBAT" or _is_real_combat_state(new_state))
             and (arrival_predicate is None or arrival_predicate(new_state))
         ):
             return new_state
 
     screen = str((last_state or {}).get("screen") or "")
+    if wanted == "COMBAT" and pseudo_combat_seen:
+        raise NavigationBlocked(
+            "观察到 COMBAT 页面但未形成真实战斗：缺少 in_combat、敌人或战斗动作",
+            last_state=last_state,
+            last_action=last_action,
+            reason_code="TRANSITION",
+        )
     raise NavigationBlocked(
         f"Waiting for {target_screen} timed out, last screen: {screen}",
         last_state=last_state,

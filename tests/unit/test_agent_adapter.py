@@ -499,6 +499,58 @@ class TestAgentAdapterAct:
         assert mock._requests[3]["kwargs"]["json"] == {"action": "confirm_modal"}
         assert mock._requests[5]["kwargs"]["json"] == {"action": "open_character_select"}
 
+    def test_debug_start_new_run_uses_menu_abandon_not_console_die(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "continue_run"},
+                        {"name": "abandon_run"},
+                        {"name": "open_timeline"},
+                    ]
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "confirm_modal"},
+                        {"name": "dismiss_modal"},
+                    ]
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "actions": [
+                        {"name": "open_character_select"},
+                        {"name": "open_timeline"},
+                    ]
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("start_new_run"))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {"action": "abandon_run"}
+        assert mock._requests[1]["kwargs"]["json"].get("command") is None
+        assert mock._requests[3]["kwargs"]["json"] == {"action": "confirm_modal"}
+        assert mock._requests[5]["kwargs"]["json"] == {"action": "open_character_select"}
+
     def test_choose_event_maps_to_choose_event_option(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(
@@ -601,6 +653,70 @@ class TestAgentAdapterAct:
             "action": "choose_event_option",
             "option_index": 0,
         }
+
+    def test_choose_event_advances_unfinished_non_neow_event(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "TABLET_OF_TRUTH"}}},
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "EVENT",
+                    "event": {
+                        "event_id": "TABLET_OF_TRUTH",
+                        "is_finished": False,
+                        "options": [
+                            {"index": 0, "is_locked": False, "is_proceed": False},
+                            {"index": 1, "is_locked": True, "is_proceed": False},
+                        ],
+                    },
+                },
+            },
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAP"}})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert mock._requests[3]["kwargs"]["json"] == {
+            "action": "choose_event_option",
+            "option_index": 0,
+        }
+
+    def test_choose_event_leaves_deck_upgrade_selection_to_navigation(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {"ok": True, "data": {"screen": "EVENT", "event": {"event_id": "ACT_TWO_EVENT"}}},
+        )
+        mock.add_response(200, {"ok": True})
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "CARD_SELECTION",
+                    "selection": {
+                        "kind": "deck_upgrade_select",
+                        "cards": [{"index": 0}],
+                        "max_select": 0,
+                    },
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        assert len(mock._requests) == 3
 
     def test_choose_event_neow_auto_advances_card_selection_then_proceed(self) -> None:
         mock = MockAsyncClient()

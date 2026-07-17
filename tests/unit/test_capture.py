@@ -854,3 +854,37 @@ class TestCaptureScreenshotHandler:
 
         # Should not raise, just log warning
         capture_screenshot(orch, "test-case")
+
+
+# ── macOS 离屏窗口陈旧帧防护 ──
+
+
+class TestMacOSOffscreenGuard:
+    def test_onscreen_check_passes_window_id_and_bundle_id(self) -> None:
+        from sts2_autotest.evidence.capture import _ensure_macos_window_onscreen
+
+        completed = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("sts2_autotest.evidence.capture.subprocess.run", return_value=completed) as run:
+            assert _ensure_macos_window_onscreen(1231) is True
+        argv = run.call_args.args[0]
+        assert "1231" in argv
+        assert "com.megacrit.SlayTheSpire2" in argv
+
+    def test_onscreen_check_fails_when_window_stays_offscreen(self) -> None:
+        from sts2_autotest.evidence.capture import _ensure_macos_window_onscreen
+
+        completed = MagicMock(returncode=1, stdout="", stderr="")
+        with patch("sts2_autotest.evidence.capture.subprocess.run", return_value=completed):
+            assert _ensure_macos_window_onscreen(1231) is False
+
+    def test_capture_refuses_stale_frame_for_offscreen_window(self, tmp_path: Path) -> None:
+        import sts2_autotest.evidence.capture as capture
+
+        target = tmp_path / "event.jpg"
+        with patch.object(capture, "_find_macos_window", return_value=(1231, (0, 0, 1504, 846))), \
+             patch.object(capture, "_ensure_macos_window_onscreen", return_value=False):
+            ok, resolution = capture._capture_macos_window_png(target, "Slay the Spire 2")
+        # 离屏窗口宁可截图不可用，也不产出与当前状态不一致的陈旧画面
+        assert ok is False
+        assert resolution == (1504, 846)
+        assert not target.exists()

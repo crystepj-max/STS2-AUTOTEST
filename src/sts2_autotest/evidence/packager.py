@@ -181,7 +181,9 @@ class EvidencePackager:
                 "Failed to generate repair suggestions for %s", pack_id, exc_info=True,
             )
 
-        self._enforce_retention()
+        # 保留刚创建的任务；任务编号可能使用连字符而旧任务使用下划线，
+        # 仅按名称排序时会把“刚创建的任务”误判为最旧并立即删除。
+        self._enforce_retention(exclude_pack_id=pack_id)
 
         logger.info("Evidence pack created: %s", pack_dir)
         return pack_dir
@@ -399,13 +401,14 @@ class EvidencePackager:
 
     # ── internal ────────────────────────────────────────────
 
-    def _enforce_retention(self) -> None:
+    def _enforce_retention(self, *, exclude_pack_id: str | None = None) -> None:
         """Remove oldest packs exceeding retention limit."""
         packs = self.list_packs()
-        if len(packs) <= self._retention:
+        removable = [pack_id for pack_id in packs if pack_id != exclude_pack_id]
+        if len(packs) <= self._retention or not removable:
             return
 
-        to_remove = packs[: len(packs) - self._retention]
+        to_remove = removable[: max(0, len(packs) - self._retention)]
         for pack_id in to_remove:
             pack_dir = self._evidence_dir / pack_id
             try:
@@ -434,8 +437,10 @@ class EvidencePackager:
         output_dir = self._evidence_dir / "artifacts"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        base_name = str(output_dir / f"{pack_id}_{result}_{timestamp}")
+        # 同一任务可能在最终清单写入后再次封存。使用稳定文件名让清单、summary
+        # 和压缩包始终指向同一个实际文件，不保留“旧压缩包仍被报告引用”的窗口。
+        base_name = str(output_dir / f"{pack_id}_{result}")
+        result_path = Path(f"{base_name}.zip")
 
         # Generate JUnit XML inside the pack before archiving
         junit_path = pack_dir / "reports" / "junit.xml"
@@ -447,22 +452,21 @@ class EvidencePackager:
             except OSError:
                 logger.warning("Failed to write JUnit XML for %s", pack_id)
 
+        # 压缩包需要包含自身的真实路径；先写入 summary，再执行封存。
+        if summary is not None:
+            updated = summary.model_copy(update={
+                "artifact_path": str(result_path),
+            })
+            self._write_json(pack_dir / "summary.json", updated.model_dump(mode="json"))
+            self._generate_report_for(pack_id, updated)
+
         try:
             zip_path = shutil.make_archive(
                 base_name, "zip", root_dir=str(pack_dir),
                 base_dir=".",
             )
             logger.info("Artifact exported: %s", zip_path)
-            result_path = Path(zip_path)
-
-            # Update summary.json with artifact_path
-            if summary is not None:
-                updated = summary.model_copy(update={
-                    "artifact_path": str(result_path),
-                })
-                self._write_json(pack_dir / "summary.json", updated.model_dump(mode="json"))
-
-            return result_path
+            return Path(zip_path)
         except OSError as exc:
             logger.warning("Failed to create artifact ZIP for %s: %s", pack_id, exc)
             self._last_artifact_error = str(exc)

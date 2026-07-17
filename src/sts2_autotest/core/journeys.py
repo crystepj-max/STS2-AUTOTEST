@@ -5,14 +5,19 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
-from sts2_autotest.core.navigation import NavigationBlocked, progress_until
+from sts2_autotest.core.navigation import (
+    NavigationBlocked,
+    _first_live_enemy,
+    progress_until,
+)
 
 
 class JourneyFailure(RuntimeError):
@@ -34,7 +39,7 @@ class JourneyFailure(RuntimeError):
 
 StatePredicate = Callable[[dict[str, Any]], bool]
 ProgressCallback = Callable[[dict[str, Any]], None]
-ObservationCallback = Callable[[dict[str, Any]], None]
+ObservationCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 TARGET_SCENES = frozenset({
     "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT", "REST",
@@ -134,7 +139,10 @@ class GenericJourneys:
                 "state": payload,
             })
             if self._observation_callback is not None:
-                self._observation_callback(payload)
+                callback_result = self._observation_callback(payload)
+                # 截图等观察者可能需要在采集前等待状态稳定，允许异步回调。
+                if inspect.isawaitable(callback_result):
+                    await callback_result
         self._last_snapshot = payload
         self._publish_progress()
         return payload
@@ -233,7 +241,48 @@ class GenericJourneys:
     @staticmethod
     def _map_is_stable(state: dict[str, Any]) -> bool:
         map_block = state.get("map") or {}
-        return not bool(map_block.get("is_traveling"))
+        return (
+            isinstance(map_block, dict)
+            and not bool(map_block.get("is_traveling"))
+            and not bool(map_block.get("local_vote"))
+        )
+
+    @staticmethod
+    def _active_event(state: dict[str, Any]) -> bool:
+        event = state.get("event")
+        if not isinstance(event, dict) or not event:
+            return False
+        if event.get("is_finished") is True or event.get("finished") is True:
+            return False
+        return bool(
+            event.get("event_id")
+            or event.get("id")
+            or event.get("options")
+            or event.get("available_options")
+        )
+
+    def _next_act_event(self, state: dict[str, Any], initial_chapter: int) -> bool:
+        return (
+            str(state.get("screen") or "").upper() == "EVENT"
+            and (_extract_chapter(state) or 0) > initial_chapter
+            and self._active_event(state)
+        )
+
+    def _next_act_map(self, state: dict[str, Any], initial_chapter: int) -> bool:
+        if str(state.get("screen") or "").upper() != "MAP":
+            return False
+        if (_extract_chapter(state) or 0) <= initial_chapter:
+            return False
+        if not self._map_is_stable(state) or self._active_event(state):
+            return False
+        reward = state.get("reward")
+        if isinstance(reward, dict) and reward:
+            return False
+        actions = set(state.get("available_actions") or [])
+        return not actions.intersection({
+            "choose_event", "choose_event_option", "advance_dialogue",
+            "collect_rewards_and_proceed", "claim_reward", "proceed",
+        })
 
     async def reset_to_main_menu(self) -> dict[str, Any]:
         """清理可处理的残留页面并回到主菜单。"""
@@ -279,16 +328,42 @@ class GenericJourneys:
                 if reward_action is not None:
                     await self._act_confirmed(reward_action)
                     continue
-            if screen == "COMBAT":
-                # 战斗页通常只公开出牌/结束回合；复位是独立的安全恢复动作，
-                # 直接请求放弃旧局并在下一轮确认回到主菜单。
-                result = await self._execute_action("abandon_run")
-                if getattr(result, "status", "failure") != "success":
-                    raise JourneyFailure(
-                        "Cannot abandon COMBAT run: "
-                        f"{getattr(result, 'detail', '')}"
+            if screen == "EVENT":
+                event = state.get("event") or {}
+                options = event.get("options") if isinstance(event, dict) else None
+                if isinstance(options, list) and options:
+                    option_index = next(
+                        (
+                            option.get("index", index)
+                            for index, option in enumerate(options)
+                            if isinstance(option, dict)
+                            and not option.get("is_locked", False)
+                            and not option.get("locked", False)
+                        ),
+                        None,
                     )
-                continue
+                    if option_index is not None:
+                        event_action = (
+                            "choose_event"
+                            if "choose_event" in actions
+                            else "choose_event_option"
+                            if "choose_event_option" in actions
+                            else "choose_neow_blessing"
+                            if "choose_neow_blessing" in actions
+                            else None
+                        )
+                        if event_action is not None:
+                            await self._act_confirmed(
+                                event_action,
+                                {"index": option_index, "option_index": option_index},
+                            )
+                            continue
+            if screen in {"MAP", "COMBAT", "SHOP", "REST", "CHEST", "EVENT"}:
+                # 游戏运行页通常只公开当前页面动作；复位是独立的安全恢复动作，
+                # 即使状态接口没有列出，也尝试一次放弃旧局，再由下一轮确认结果。
+                result = await self._execute_action("abandon_run")
+                if getattr(result, "status", "failure") == "success":
+                    continue
             capabilities = getattr(self.adapter, "capabilities", None)
             if bool(getattr(capabilities, "supports_debug_actions", False)):
                 result = await self._execute_action("abandon_run")
@@ -405,6 +480,8 @@ class GenericJourneys:
                 character_id,
                 target_screen=target,
             )
+        if target == "COMBAT" and combat_mode == "death":
+            return await self.death_test(character_id)
         if target == "NEXT_ACT":
             initial = await self.start_new_run(character_id, target_screen="MAP")
             initial_chapter = _extract_chapter(initial)
@@ -414,11 +491,17 @@ class GenericJourneys:
                     last_state=initial,
                     last_action=None,
                 )
+            await self.resolve_until(
+                "EVENT",
+                arrival_predicate=lambda state: self._next_act_event(
+                    state, initial_chapter
+                ),
+                timeout=self.timeout,
+            )
             return await self.resolve_until(
                 "MAP",
-                arrival_predicate=lambda state: (
-                    self._map_is_stable(state)
-                    and (_extract_chapter(state) or 0) > initial_chapter
+                arrival_predicate=lambda state: self._next_act_map(
+                    state, initial_chapter
                 ),
                 timeout=self.timeout,
             )
@@ -448,6 +531,85 @@ class GenericJourneys:
         self._trajectory = []
         await self.start_new_run(character_id)
         return await self.resolve_until("COMBAT")
+
+    async def death_test(self, character_id: str) -> dict[str, Any]:
+        """角色死亡测试：进入真实战斗后每回合只结束回合，直到 GAME_OVER。
+
+        成功终态是真实 GAME_OVER 页面；旅程证据中的操作序列必须只包含
+        end_turn（由 combat_mode="death" 的导航规则保证），以此证明角色是
+        被怪物击杀，而不是被平台快速结束或误判的过渡态。
+        """
+        self.combat_mode = "death"
+        await self.start_new_run(character_id, target_screen="COMBAT")
+        return await self.resolve_until("GAME_OVER", timeout=self.timeout)
+
+    @staticmethod
+    def _find_hand_card(state: dict[str, Any], card_id: str) -> dict[str, Any] | None:
+        """在当前战斗手牌中查找指定卡牌。
+
+        只做 ID 规范化匹配（与适配器出牌解析同一口径），不包含任何
+        具体卡牌名称或效果分支。
+        """
+        combat = state.get("combat") or {}
+        hand = combat.get("hand") or []
+        if not isinstance(hand, list):
+            return None
+        requested = card_id.split(":")[-1].upper()
+        for card in hand:
+            if not isinstance(card, dict):
+                continue
+            runtime_id = str(card.get("card_id") or card.get("id") or "")
+            if not runtime_id:
+                continue
+            if runtime_id.upper() == card_id.upper() or runtime_id.upper().endswith(requested):
+                return card
+        return None
+
+    async def card_test(self, character_id: str, card_id: str) -> dict[str, Any]:
+        """卡牌专测：把指定卡牌加入手牌，验证入手并真实打出。
+
+        平台只断言通用可观察事实：give_card 成功、卡牌进入手牌、
+        play_card 成功且产生可观察状态变化。卡牌的具体效果断言由
+        项目用例基于报告中的前后状态 JSON 完成，平台不写卡牌规则。
+        """
+        card_id = card_id.strip()
+        if not card_id:
+            raise JourneyFailure("card_test 需要非空 card_id")
+        capabilities = getattr(self.adapter, "capabilities", None)
+        if not bool(getattr(capabilities, "supports_debug_actions", False)):
+            raise JourneyFailure(
+                "card_test 需要适配器调试能力（give_card），当前环境未开启",
+                reason_code="DEBUG_ACTIONS_UNAVAILABLE",
+            )
+        # 接近战斗阶段禁用 win_combat：测试需要战斗保持存活才能把牌打出，
+        # basic 模式在过渡态不会执行任何战斗动作，只会等待真实战斗成形。
+        self.combat_mode = "basic"
+        await self.start_new_run(character_id, target_screen="COMBAT")
+        await self._act_confirmed("give_card", {"card_id": card_id})
+        state = self._last_snapshot or await self.snapshot()
+        card = self._find_hand_card(state, card_id)
+        if card is None:
+            raise JourneyFailure(
+                f"give_card 返回成功但手牌中未找到 {card_id!r}（假成功信号）",
+                last_state=state,
+                last_action="give_card",
+                reason_code="NO_PROGRESS",
+            )
+        play_params: dict[str, Any] = {"card_id": card_id}
+        requires_target = card.get("requires_target")
+        target_type = str(card.get("target_type") or "").upper()
+        if requires_target is True or target_type in {"ANYENEMY", "ENEMY"}:
+            target = _first_live_enemy(state.get("combat") or {})
+            if target is None:
+                raise JourneyFailure(
+                    f"卡牌 {card_id!r} 需要目标但战斗中没有存活敌人",
+                    last_state=state,
+                    last_action="give_card",
+                    reason_code="TARGET_UNREACHABLE",
+                )
+            play_params["target"] = target
+        await self._act_confirmed("play_card", play_params)
+        return self._last_snapshot or await self.snapshot()
 
     async def finish_interstitials(self) -> dict[str, Any]:
         """处理当前事件、卡包或战后奖励，直到稳定回到地图。"""

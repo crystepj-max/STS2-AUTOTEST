@@ -120,6 +120,8 @@ autotest report latest
 
 如果 `latest` 不存在，命令会列出当前 evidence 目录下可用的 run ID。
 
+跨 Agent 或需要脱离当前终端运行的任务，应使用持久任务入口，完整契约见 [`docs/unified-run-contract.md`](unified-run-contract.md)。
+
 ## 自然语言测试工作流
 
 1. 编写 `specs/cases/*.md` 或 `specs/suites/*.md`
@@ -265,9 +267,60 @@ autotest run --failed
 autotest run --all --timeout 60
 ```
 
-MVP 中，`run` 会创建 `CliModAdapter` 与 `TestOrchestrator`，并将传入的 case ID 或 suite 名交给编排器执行。当前 orchestrator 的默认用例执行逻辑主要验证游戏可响应性与可用动作；更复杂的业务断言建议通过 pytest/DSL 编写。
+前台运行适合本地快速验证；需要跨 Agent 协作、断线后继续或避免重复启动时，应改用下方的持久任务入口。
 
-### 6.3 `autotest report`
+### 6.3 持久任务与跨 Agent 共用入口
+
+先查看当前可用的任务状态和目标场景：
+
+```powershell
+autotest capabilities --json
+```
+
+提交后台任务并保留返回的 `run_id`：
+
+```powershell
+autotest run --project gawain --suite m1-m7 --detach --idempotency-key gawain-m1-m7-20260716
+```
+
+查询、取消、恢复和读取报告：
+
+```powershell
+autotest status <run_id> --json
+autotest cancel <run_id>
+autotest resume <run_id>
+autotest report <run_id>
+```
+
+同一个幂等键重复提交时，平台应返回原任务，不重复启动游戏。控制端断开不代表任务失败，应先用 `run_id` 查询原任务。
+
+通用目标场景示例：
+
+```powershell
+autotest run --journey act_traversal --target-scene NEXT_ACT `
+  --character-id IRONCLAD --detach `
+  --idempotency-key ironclad-next-act-20260716
+```
+
+死亡测试（战斗中每回合只结束回合，直到真实 `GAME_OVER`）：
+
+```powershell
+autotest run --journey goal_scene --target-scene COMBAT `
+  --combat-mode death --character-id IRONCLAD --detach `
+  --idempotency-key ironclad-death-20260717
+```
+
+卡牌专测（调试控制台把指定牌加入手牌并真实打出，需调试能力）：
+
+```powershell
+autotest run --journey card_test --card-id DEFEND_IRONCLAD `
+  --character-id IRONCLAD --detach `
+  --idempotency-key ironclad-card-defend-20260717
+```
+
+目标场景、MCP 六个稳定入口和外部 Agent 验收边界见 [`docs/cross-agent-acceptance.md`](cross-agent-acceptance.md)。
+
+### 6.4 `autotest report`
 
 查看指定运行的 `summary.json`：
 
@@ -289,7 +342,7 @@ autotest report
 
 如果找不到对应运行，命令会列出 evidence 目录下可用的运行目录。
 
-### 6.4 `autotest serve` / `serve-mcp`（B17 / B11）
+### 6.5 `autotest serve` / `serve-mcp`（B17 / B11）
 
 `autotest serve` 启动健康检查 HTTP 端点（默认 `127.0.0.1:8766`），提供 `/health`、`/health/live`、`/health/ready`，供监控或 CI 探活：
 
@@ -303,7 +356,7 @@ autotest serve --host 0.0.0.0 --port 8766
 autotest serve-mcp --port 8090
 ```
 
-### 6.5 `autotest agent-test`
+### 6.6 `autotest agent-test`
 
 一键执行完整 Test Agent 工作流（构建 → 本地化检查 → 部署 → 启动游戏 → 冒烟 → 报告），用于对某个 MOD 项目做端到端验证：
 
@@ -313,7 +366,7 @@ autotest agent-test --mod-project <MOD 目录> --task-id <任务标识> --infra-
 
 也可通过 `--test-plan <YAML>` 从测试计划文件读取参数。常用开关：`--skip-deploy`（跳过部署）、`--skip-launch-game`（跳过启动游戏）、`--skip-game-smoke`（跳过游戏内冒烟）。退出码：`0=PASSED`、`1=FAILED`、`2=BLOCKED`。
 
-### 6.6 `autotest gen-report`
+### 6.7 `autotest gen-report`
 
 将测试运行结果生成 HTML 报告：
 
@@ -910,7 +963,7 @@ autotest doctor --json
 
 ## 19. MVP 边界
 
-- 当前默认只启用 CLI adapter；Agent adapter 仍为 Beta/预留配置。
+- 当前默认只启用 CLI adapter；Agent adapter 和跨 Agent 统一任务入口已可用，但具体客户端的真实环境验收仍需逐一补齐。
 - 真实游戏测试依赖游戏窗口和 STS2-Cli-Mod 的运行状态，不适合在无桌面会话的普通 CI runner 中直接执行。
 - `autotest run` 的套件/失败重跑入口已经存在，但完整测试发现、套件目录约定和历史失败索引仍需要后续版本增强。
 - 证据系统能力已具备，但 CLI 默认 orchestrator 使用的是基础 evidence hooks；需要在自定义运行器中注入 `RealEvidenceHooks` 才能完整启用自动截图、日志和打包流程。

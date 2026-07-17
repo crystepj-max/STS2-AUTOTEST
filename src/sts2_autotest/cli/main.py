@@ -10,10 +10,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import platform
 import shutil
 import time
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from typing import Any, Callable, Literal, Sequence, cast
 
@@ -85,7 +87,7 @@ def _create_parser() -> Any:
         "--journey",
         choices=[
             "new_run", "resume_run", "first_battle", "finish_interstitials",
-            "goal_scene", "act_traversal",
+            "goal_scene", "act_traversal", "card_test",
         ],
         help="Run one reusable game journey instead of a project case suite",
     )
@@ -93,6 +95,11 @@ def _create_parser() -> Any:
         "--character-id",
         default="IRONCLAD",
         help="Character for new_run/first_battle",
+    )
+    run.add_argument(
+        "--card-id",
+        default=None,
+        help="card_test 旅程要验证的卡牌 ID（运行时控制台格式）",
     )
     run.add_argument(
         "--target-scene",
@@ -111,7 +118,7 @@ def _create_parser() -> Any:
     )
     run.add_argument(
         "--combat-mode",
-        choices=["traversal", "basic"],
+        choices=["traversal", "basic", "death"],
         default="traversal",
         help="战斗处理规则",
     )
@@ -1034,7 +1041,7 @@ def run_cmd(args: Any) -> int:
             store,
             internal_run_id,
             exit_code=rc,
-            result=result_payload,
+            result=_compact_persistent_result(result_payload, run_evidence_dir),
             evidence_dir=str(run_evidence_dir if run_evidence_dir.exists() else evidence_root),
         )
         return rc
@@ -1081,6 +1088,28 @@ def _write_journey_failure(
         pass
 
 
+def _compact_persistent_result(payload: dict[str, Any], evidence_dir: Path) -> dict[str, Any]:
+    """任务记录只保存摘要；完整状态轨迹留在证据文件中。"""
+    compact = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"journey_evidence", "last_state"}
+    }
+    if "journey_evidence" in payload:
+        compact["journey_trace_path"] = str(
+            (evidence_dir / "reports" / "journey-trace.json").resolve()
+        )
+    failure = compact.get("failure")
+    if isinstance(failure, dict) and isinstance(failure.get("last_state"), dict):
+        failure = dict(failure)
+        failure.pop("last_state", None)
+        failure["last_state_path"] = str(
+            (evidence_dir / "reports" / "journey-failure.json").resolve()
+        )
+        compact["failure"] = failure
+    return compact
+
+
 def _write_journey_evidence(
     evidence_root: Path,
     run_id: str | None,
@@ -1088,6 +1117,7 @@ def _write_journey_evidence(
     journey: str,
     target_scene: str,
     evidence: dict[str, Any],
+    duration_ms: int | None = None,
 ) -> None:
     """把通用旅程的场景、操作、地图和证据清单写成机器可读文件。"""
     if not run_id:
@@ -1095,39 +1125,172 @@ def _write_journey_evidence(
     report_dir = evidence_root / run_id / "reports"
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
+        trace_evidence = dict(evidence)
+        if duration_ms is not None:
+            trace_evidence["duration_ms"] = duration_ms
         trace = {
             "journey": journey,
             "target_scene": target_scene,
-            **evidence,
+            **trace_evidence,
         }
         (report_dir / "journey-trace.json").write_text(
             json.dumps(trace, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         root = evidence_root / run_id
-        screenshot_count = len(list((root / "screenshots").glob("*"))) if (root / "screenshots").is_dir() else 0
-        log_count = len(list((root / "logs").glob("*"))) if (root / "logs").is_dir() else 0
+        screenshot_paths = sorted(
+            path for path in (root / "screenshots").glob("*")
+            if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg"}
+        ) if (root / "screenshots").is_dir() else []
+        log_paths = sorted(
+            path for path in (root / "logs").glob("*")
+            if path.is_file() and path.suffix.lower() == ".log"
+        ) if (root / "logs").is_dir() else []
+        screenshot_count = len(screenshot_paths)
+        log_count = len(log_paths)
         files = [
             str(path.relative_to(root))
             for path in sorted(root.rglob("*"))
             if path.is_file()
         ]
+        declared_files = [
+            "summary.json",
+            "summary.md",
+            "reports/run-result.json",
+            "reports/journey-trace.json",
+            "reports/evidence-manifest.json",
+            "reports/junit.xml",
+        ]
+        missing_files = [name for name in declared_files if not (root / name).is_file()]
+
+        def image_dimensions(path: Path) -> tuple[int, int] | None:
+            try:
+                with path.open("rb") as handle:
+                    data = handle.read(1024 * 1024)
+            except OSError:
+                return None
+            if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+                return (
+                    int.from_bytes(data[16:20], "big"),
+                    int.from_bytes(data[20:24], "big"),
+                )
+            if not data.startswith(b"\xff\xd8"):
+                return None
+            offset = 2
+            while offset + 9 < len(data):
+                if data[offset] != 0xFF:
+                    offset += 1
+                    continue
+                while offset < len(data) and data[offset] == 0xFF:
+                    offset += 1
+                if offset >= len(data):
+                    break
+                marker = data[offset]
+                offset += 1
+                if marker in {0xD8, 0xD9}:
+                    continue
+                if offset + 2 > len(data):
+                    break
+                segment_length = int.from_bytes(data[offset:offset + 2], "big")
+                if segment_length < 2 or offset + segment_length > len(data):
+                    break
+                if marker in {
+                    0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                    0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF,
+                } and segment_length >= 7:
+                    height = int.from_bytes(data[offset + 3:offset + 5], "big")
+                    width = int.from_bytes(data[offset + 5:offset + 7], "big")
+                    return width, height
+                offset += segment_length
+            return None
+
+        screenshot_details = []
+        for path in screenshot_paths:
+            dimensions = image_dimensions(path)
+            screenshot_details.append({
+                "path": str(path.relative_to(root)),
+                "format": path.suffix.lower().lstrip("."),
+                "width": dimensions[0] if dimensions else None,
+                "height": dimensions[1] if dimensions else None,
+                "bytes": path.stat().st_size,
+            })
+        log_details = [
+            {
+                "path": str(path.relative_to(root)),
+                "bytes": path.stat().st_size,
+            }
+            for path in log_paths
+        ]
+
+        artifact_candidates = sorted(
+            path for path in (evidence_root / "artifacts").glob(f"{run_id}_*.zip")
+            if path.is_file()
+        ) if (evidence_root / "artifacts").is_dir() else []
+        artifact_path = artifact_candidates[-1].resolve() if artifact_candidates else None
+        archive_counts: dict[str, Any] = {"status": "unavailable"}
+        if artifact_path is not None:
+            try:
+                with zipfile.ZipFile(artifact_path) as archive:
+                    archive_screenshots = sum(
+                        name.startswith("screenshots/")
+                        and Path(name).suffix.lower() in {".png", ".jpg", ".jpeg"}
+                        for name in archive.namelist()
+                    )
+                    archive_logs = sum(
+                        name.startswith("logs/") and Path(name).suffix.lower() == ".log"
+                        for name in archive.namelist()
+                    )
+                archive_counts = {
+                    "status": "verified",
+                    "path": str(artifact_path),
+                    "screenshot_count": archive_screenshots,
+                    "log_count": archive_logs,
+                    "counts_match": (
+                        archive_screenshots == screenshot_count
+                        and archive_logs == log_count
+                    ),
+                }
+                if not archive_counts["counts_match"]:
+                    archive_counts["status"] = "mismatch"
+            except (OSError, zipfile.BadZipFile) as exc:
+                archive_counts = {
+                    "status": "unreadable",
+                    "path": str(artifact_path),
+                    "reason": str(exc),
+                }
+
+        if platform.system() == "Darwin":
+            log_source_candidates = [
+                Path.home() / "Library/Application Support/SlayTheSpire2/logs",
+                Path.home() / "Library/Application Support/Godot/app_userdata/Slay the Spire 2/logs",
+            ]
+        elif platform.system() == "Windows":
+            log_source_candidates = [
+                Path(os.environ.get("APPDATA", "")) / "Godot/app_userdata/Slay the Spire 2/logs",
+            ]
+        else:
+            log_source_candidates = [
+                Path.home() / ".local/share/godot/app_userdata/Slay the Spire 2/logs",
+            ]
+        log_source = os.environ.get("STS2_GODOT_LOG_DIR") or next(
+            (str(path) for path in log_source_candidates if path.is_dir()),
+            str(log_source_candidates[0]),
+        )
         (report_dir / "evidence-manifest.json").write_text(
             json.dumps(
                 {
-                    "declared": [
-                        "reports/run-result.json",
-                        "reports/journey-trace.json",
-                        "reports/evidence-manifest.json",
-                        "summary.json",
-                        "summary.md",
-                        "screenshots/",
-                        "logs/",
-                    ],
+                    "evidence_root": str(root.resolve()),
+                    "declared": declared_files,
                     "existing_files": files,
+                    "missing_files": missing_files,
                     "evidence_level": os.environ.get("STS2_AUTOTEST_EVIDENCE", "full"),
                     "screenshot_count": screenshot_count,
                     "log_count": log_count,
+                    "screenshots": screenshot_details,
+                    "logs": log_details,
+                    "log_source": log_source,
+                    "artifact_path": str(artifact_path) if artifact_path else None,
+                    "archive": archive_counts,
                     "capture_status": {
                         "screenshots": (
                             {"status": "available", "count": screenshot_count}
@@ -1158,6 +1321,41 @@ def _write_journey_evidence(
         pass
 
 
+async def _wait_for_stable_api_state(
+    adapter: GameAdapterProtocol,
+    initial: dict[str, Any],
+    *,
+    timeout: float = 4.0,
+    interval: float = 0.5,
+    settle: float = 0.5,
+) -> dict[str, Any]:
+    """截图前等待 API 状态连续一致，并给窗口渲染留出 settle 时间。
+
+    游戏画面切换滞后于状态接口（曾出现第二章 MAP 截图仍显示卡牌选择
+    界面）；连续两次读取指纹一致后再等一个 settle 间隔，可显著降低
+    截图拍到上一页的概率。超时仍未稳定时用最后一次读取，不阻塞任务。
+    """
+    from sts2_autotest.core.journeys import _fingerprint
+
+    latest = initial
+    previous_fp = _fingerprint(initial)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval)
+        try:
+            payload = (await adapter.get_state()).model_dump()
+            payload["available_actions"] = await adapter.get_available_actions()
+        except Exception:
+            break
+        latest = payload
+        current_fp = _fingerprint(payload)
+        if current_fp == previous_fp:
+            break
+        previous_fp = current_fp
+    await asyncio.sleep(settle)
+    return latest
+
+
 def _run_journey_foreground(
     adapter: GameAdapterProtocol,
     *,
@@ -1168,10 +1366,15 @@ def _run_journey_foreground(
     target_scene: str | None = None,
     route_policy: str = "leftmost",
     combat_mode: str = "traversal",
+    card_id: str | None = None,
 ) -> int:
     """执行平台提供的通用游戏旅程。"""
     from sts2_autotest.common.errors import STS2Error
-    from sts2_autotest.core.journeys import GenericJourneys, JourneyFailure, _extract_chapter
+    from sts2_autotest.core.journeys import (
+        GenericJourneys,
+        JourneyFailure,
+        _extract_chapter,
+    )
     from sts2_autotest.core.evidence_hooks import build_evidence_hooks
     from sts2_autotest.core.action_model import TestResult
 
@@ -1182,18 +1385,19 @@ def _run_journey_foreground(
     evidence = build_evidence_hooks(evidence_root, pack_id=run_id)
     evidence.on_case_start(case_id)
 
-    def capture_key_state(state: dict[str, Any]) -> None:
+    async def capture_key_state(state: dict[str, Any]) -> None:
         screen = str(state.get("screen") or "").upper()
         chapter = _extract_chapter(state)
-        if screen in {"EVENT", "COMBAT", "CARD_REWARD"} or (
+        if screen in {"EVENT", "COMBAT", "CARD_REWARD", "GAME_OVER"} or (
             screen == "MAP" and chapter == 2
         ):
             capture_state = getattr(evidence, "capture_state", None)
             if callable(capture_state):
+                stable_state = await _wait_for_stable_api_state(adapter, state)
                 safe_case_id = case_id.replace(":", "_")
                 capture_state(
                     f"{safe_case_id}_{screen}_{int(time.monotonic() * 1000)}",
-                    state,
+                    stable_state,
                 )
 
     def write_result(
@@ -1221,6 +1425,30 @@ def _run_journey_foreground(
                 encoding="utf-8",
             )
         except OSError:
+            pass
+
+    def persist_artifact_path() -> None:
+        """把已生成的实际压缩包路径写回任务结果，拒绝伪造默认路径。"""
+        if not run_id:
+            return
+        candidates = sorted(
+            path for path in (evidence_root / "artifacts").glob(f"{run_id}_*.zip")
+            if path.is_file()
+        ) if (evidence_root / "artifacts").is_dir() else []
+        if not candidates:
+            return
+        result_path = evidence_root / run_id / "reports" / "run-result.json"
+        try:
+            payload = json.loads(result_path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return
+            payload["artifact_path"] = str(candidates[-1].resolve())
+            payload["evidence_pack_url"] = str(candidates[-1].resolve())
+            result_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except (OSError, ValueError, TypeError):
             pass
 
     started = time.monotonic()
@@ -1267,6 +1495,12 @@ def _run_journey_foreground(
             result = loop.run_until_complete(runner.resume_run())
         elif journey == "first_battle":
             result = loop.run_until_complete(runner.enter_first_battle(character_id=character_id))
+        elif journey == "card_test":
+            if not card_id:
+                raise JourneyFailure("card_test 旅程需要 --card-id 参数")
+            result = loop.run_until_complete(
+                runner.card_test(character_id, card_id)
+            )
         elif journey in {"goal_scene", "act_traversal"} or target_scene:
             result = loop.run_until_complete(
                 runner.execute_target(
@@ -1280,14 +1514,36 @@ def _run_journey_foreground(
             result = loop.run_until_complete(runner.finish_interstitials())
 
         duration_ms = int((time.monotonic() - started) * 1000)
+        # 终态视觉凭证：API 状态可能先于画面翻页（曾出现第二章 MAP 命名截图
+        # 仍显示事件页）。旅程结束后不再有任何操作，延长 settle 让渲染追上，
+        # 保证至少一张截图与最终状态一致。凭证失败不影响任务结果。
+        capture_final = getattr(evidence, "capture_state", None)
+        if callable(capture_final):
+            try:
+                stable_final = loop.run_until_complete(
+                    _wait_for_stable_api_state(
+                        adapter, result, timeout=6.0, interval=0.5, settle=2.5
+                    )
+                )
+                safe_case_id = case_id.replace(":", "_")
+                final_screen = str(stable_final.get("screen") or "UNKNOWN").upper()
+                capture_final(
+                    f"{safe_case_id}_FINAL_{final_screen}_{int(time.monotonic() * 1000)}",
+                    stable_final,
+                )
+            except Exception as exc:
+                print(f"[autotest] WARNING: final-state screenshot failed (non-blocking): {exc}")
         trajectory = list(runner.trajectory)
+        journey_evidence = runner.evidence
+        journey_evidence["duration_ms"] = duration_ms
         evidence.on_case_end(TestResult(case_id, "pass", json.dumps(result, ensure_ascii=False)))
         _write_journey_evidence(
             evidence_root,
             run_id,
             journey=journey,
             target_scene=resolved_target,
-            evidence=runner.evidence,
+            evidence=journey_evidence,
+            duration_ms=duration_ms,
         )
         write_result(
             "PASSED",
@@ -1296,7 +1552,7 @@ def _run_journey_foreground(
                 "status_trajectory": trajectory,
                 "final_state": result.get("screen"),
                 "target_scene": resolved_target,
-                "journey_evidence": runner.evidence,
+                "journey_evidence": journey_evidence,
                 "evidence_dir": str(evidence_root / run_id) if run_id else None,
             },
         )
@@ -1304,13 +1560,18 @@ def _run_journey_foreground(
             "total": 1, "passed": 1, "failed": 0, "crashed": 0, "skipped": 0,
             "duration_ms": duration_ms,
         })
+        persist_artifact_path()
         _write_journey_evidence(
             evidence_root,
             run_id,
             journey=journey,
             target_scene=resolved_target,
-            evidence=runner.evidence,
+            evidence=journey_evidence,
+            duration_ms=duration_ms,
         )
+        refresh_artifact = getattr(evidence, "refresh_artifact", None)
+        if callable(refresh_artifact):
+            refresh_artifact()
         print(json.dumps({"journey": journey, "status": "PASSED", "state": result}, ensure_ascii=False))
         return 0
     except (STS2Error, JourneyFailure) as exc:
@@ -1343,6 +1604,8 @@ def _run_journey_foreground(
             signal in str(exc).lower() for signal in environment_signals
         )
         status = "BLOCKED_ENVIRONMENT" if is_environment_blocked else "FAILED_PLATFORM"
+        journey_evidence = runner.evidence if runner is not None else {}
+        journey_evidence["duration_ms"] = duration_ms
         evidence.on_crash(case_id, exc)
         evidence.on_case_end(TestResult(case_id, "crash", str(exc)))
         _write_journey_evidence(
@@ -1350,7 +1613,8 @@ def _run_journey_foreground(
             run_id,
             journey=journey,
             target_scene=resolved_target,
-            evidence=runner.evidence if runner is not None else {},
+            evidence=journey_evidence,
+            duration_ms=duration_ms,
         )
         write_result(
             status,
@@ -1360,7 +1624,7 @@ def _run_journey_foreground(
                 "status_trajectory": trajectory,
                 "failure": failure,
                 "target_scene": resolved_target,
-                "journey_evidence": runner.evidence if runner is not None else {},
+                "journey_evidence": journey_evidence,
                 "evidence_dir": str(evidence_root / run_id) if run_id else None,
             },
         )
@@ -1371,13 +1635,18 @@ def _run_journey_foreground(
             "duration_ms": duration_ms,
             "status": status,
         })
+        persist_artifact_path()
         _write_journey_evidence(
             evidence_root,
             run_id,
             journey=journey,
             target_scene=resolved_target,
-            evidence=runner.evidence if runner is not None else {},
+            evidence=journey_evidence,
+            duration_ms=duration_ms,
         )
+        refresh_artifact = getattr(evidence, "refresh_artifact", None)
+        if callable(refresh_artifact):
+            refresh_artifact()
         print(json.dumps({"journey": journey, "status": status, "message": str(exc)}, ensure_ascii=False))
         return 1
     except Exception as exc:
@@ -1432,6 +1701,8 @@ def _run_cmd_foreground(args: Any) -> int:
             journey_kwargs["route_policy"] = args.route_policy
         if getattr(args, "combat_mode", "traversal") != "traversal":
             journey_kwargs["combat_mode"] = args.combat_mode
+        if getattr(args, "card_id", None):
+            journey_kwargs["card_id"] = args.card_id
         return _run_journey_foreground(
             adapter,
             **journey_kwargs,

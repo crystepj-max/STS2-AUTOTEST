@@ -320,3 +320,91 @@ class TestRunPipeline:
         assert "test_result" in result
 
         fake_path.unlink()
+
+
+class TestDeathAndCardTestContract:
+    """combat_mode=death 与 journey=card_test 的公共契约检查。"""
+
+    def test_capabilities_expose_death_mode_and_card_test(self):
+        result = ToolRegistry().dispatch("capabilities", {})
+        assert "death" in result["combat_modes"]
+        death_mode = result["combat_capabilities"]["death_mode"]
+        assert death_mode["end_turn_only"] is True
+        assert death_mode["success_screen"] == "GAME_OVER"
+        assert "card_test" in result["supported_journeys"]
+        assert result["card_test"]["requires_debug_actions"] is True
+        assert "card_id" in result["submit_parameters"]
+
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_submit_accepts_death_combat_mode(self, mock_worker, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        handle_submit_run({
+            "journey": "goal_scene",
+            "character_id": "IRONCLAD",
+            "target_scene": "COMBAT",
+            "combat_mode": "death",
+            "timeout": 600,
+            "evidence": "full",
+            "idempotency_key": "death-mode-contract-1",
+        })
+
+        argv = mock_worker.call_args.args[2]
+        assert argv[argv.index("--combat-mode") + 1] == "death"
+
+    def test_submit_rejects_card_test_without_card_id(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        with pytest.raises(McpError, match="card_id"):
+            handle_submit_run({"journey": "card_test", "character_id": "IRONCLAD"})
+
+    def test_submit_rejects_card_test_with_target_scene(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        with pytest.raises(McpError, match="target_scene"):
+            handle_submit_run({
+                "journey": "card_test",
+                "character_id": "IRONCLAD",
+                "card_id": "STRIKE",
+                "target_scene": "COMBAT",
+            })
+
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_submit_card_test_passes_card_id_to_worker(self, mock_worker, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        handle_submit_run({
+            "journey": "card_test",
+            "character_id": "IRONCLAD",
+            "card_id": "STRIKE",
+            "timeout": 120,
+            "evidence": "full",
+            "idempotency_key": "card-test-contract-1",
+        })
+
+        argv = mock_worker.call_args.args[2]
+        assert argv[argv.index("--journey") + 1] == "card_test"
+        assert argv[argv.index("--card-id") + 1] == "STRIKE"
+        # card_test 依赖调试控制台（give_card），必须默认走 agent 适配器，
+        # 否则 worker 会退化成 cli 适配器并误报调试能力不可用。
+        assert argv[argv.index("--adapter") + 1] == "agent"
+
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_resume_run_preserves_card_id(self, mock_worker, monkeypatch, tmp_path):
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_tools import handle_resume_run, handle_submit_run
+
+        original = handle_submit_run({
+            "journey": "card_test",
+            "character_id": "IRONCLAD",
+            "card_id": "STRIKE",
+            "idempotency_key": "card-test-resume-1",
+        })
+        resumed = handle_resume_run({"run_id": original["run_id"]})
+
+        argv = resumed["request"]["argv"]
+        assert argv[argv.index("--card-id") + 1] == "STRIKE"
