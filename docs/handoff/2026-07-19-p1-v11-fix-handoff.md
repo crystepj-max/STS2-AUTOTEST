@@ -219,6 +219,6 @@ PASSED / SECOND 连续任务取消）重新取证。执行者为 Claude Code。
    V11 复核复现项，已补 10 条失败路径单测 `tests/unit/test_p1_v11_acceptance.py`）。
    V11j 真实证据复核通过（ORIG 331.9KB、SECOND 330.7KB，均 1920×1080）。
 4. **整理提交（完成）**：P1 完整工作（V10+V11+P1.1）作为一个连贯提交入库
-   （提交号见版本库记录，标题「feat: 完成 P1 跨 Agent 通用性验收
-   （V11i+V11j PASSED）」）；本地配置（.env）、工具目录、缓存与大体型探针
-   截图未入库。未推送。
+   （`10f26e5`，标题「feat: 完成 P1 跨 Agent 通用性验收
+   （V11i+V11j PASSED）」）。本地配置（.env）、工具目录、缓存与大体型探针
+   截图未入库；提交已推送至 `origin/main`，当前本地 `main` 与远端一致。
