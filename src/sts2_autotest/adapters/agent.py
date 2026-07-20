@@ -24,7 +24,7 @@ from typing import Any, Literal, Protocol
 
 import httpx
 
-from sts2_autotest.adapters.base import ActionResult, HealthStatus
+from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthStatus
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
@@ -196,6 +196,19 @@ class AgentAdapter:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=self.timeout, trust_env=False)
         return self._client
+
+    def reset_http_client(self) -> None:
+        """丢弃缓存的 httpx 客户端，迫使下次请求在调用方当前事件循环上重建连接。
+
+        背景：环境预检（_run_environment_precheck）会在独立的临时事件循环上经本
+        适配器发起 HTTP 请求，随后关闭该循环。若不丢弃，复用的连接会绑定到已关闭
+        的循环，导致后续旅程在响应关闭阶段抛出 "Event loop is closed"。丢弃后下一
+        次 _get_client() 会在旅程自身的事件循环上创建全新连接。
+
+        注意：直接丢弃引用即可，不要 await aclose()——旧连接的循环已关闭，aclose
+        本身也会抛出 "Event loop is closed"。引用释放后由垃圾回收处理底层资源。
+        """
+        self._client = None
 
     def _get_mcp_client(self) -> AgentMcpClientProtocol:
         """Lazy-init MCP client."""
@@ -929,6 +942,44 @@ class AgentAdapter:
             status="failure",
             state_changed=False,
             detail=data.get("error", "Unknown error"),
+        )
+
+    async def verify_debug_actions(self) -> DebugVerification:
+        """非破坏性验证调试控制台是否真实可用。
+
+        探测顺序：健康检查（控制入口就绪）→ 调试控制台 help（无副作用命令）。
+        绝不执行结束战斗等破坏性命令。
+        """
+        checked_at = datetime.now(timezone.utc).isoformat()
+        if not self.debug_actions:
+            return DebugVerification(
+                configured=False,
+                verified=False,
+                reason="NOT_CONFIGURED",
+                checked_at=checked_at,
+            )
+        health = await self.health_check()
+        if not health.healthy:
+            return DebugVerification(
+                configured=True,
+                verified=False,
+                reason="GAME_CONTROL_UNAVAILABLE",
+                checked_at=checked_at,
+            )
+        # 非破坏性探测：help 只列出可用命令，不改变游戏进度。
+        probe = await self._run_debug_console_command("help")
+        if probe.status == "success":
+            return DebugVerification(
+                configured=True,
+                verified=True,
+                reason=None,
+                checked_at=checked_at,
+            )
+        return DebugVerification(
+            configured=True,
+            verified=False,
+            reason="DEBUG_CONSOLE_UNAVAILABLE",
+            checked_at=checked_at,
         )
 
     async def get_magic_web_layer(self) -> int | None:

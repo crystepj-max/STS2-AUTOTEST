@@ -96,6 +96,8 @@ class TestOrchestrator:
         lock_path: str | None = None,
         lifecycle: Any = None,
         status_callback: Callable[[str], None] | None = None,
+        gui_probe: Callable[[], bool] | None = None,
+        max_restart_budget: int = 3,
     ) -> None:
         self.adapter = adapter
         self.state_engine = state_engine or StateEngine()
@@ -115,6 +117,11 @@ class TestOrchestrator:
         self._failure_history: list[FailureRecord] = []
         self._last_results: list[TestResult] = []
         self._watchdog: Watchdog | None = None
+        # 修复五-B：环境事故止损。gui_probe 由能访问截图能力的上层注入；
+        # 环境事故（GUI 会话崩溃等）时会话止损为 BLOCKED_ENVIRONMENT 而非重启。
+        self._gui_probe = gui_probe
+        self._max_restart_budget = max_restart_budget
+        self._environment_incident_reason: str = ""
         self._last_valid_state: GameState | None = None
         self._strict_validation = strict_validation
         self._primary_adapter_failures: int = 0
@@ -503,6 +510,9 @@ class TestOrchestrator:
             adapter_pid=adapter_pid,
             heartbeat_timeout=self._heartbeat_timeout,
             on_zombie=self._on_watchdog_zombie,
+            gui_probe=self._gui_probe,
+            on_environment_incident=self._on_environment_incident,
+            max_restart_budget=self._max_restart_budget,
         )
         await self._watchdog.start_monitoring()
 
@@ -868,6 +878,21 @@ class TestOrchestrator:
         self._session_status = SessionStatus.ZOMBIE
         self._crashed = True
         self.evidence.on_crash("__watchdog__", Exception(f"Zombie: {reason}"))
+
+    def _on_environment_incident(self, incident_reason: str) -> None:
+        """修复五-B：watchdog 判定为环境事故时的止损回调。
+
+        环境事故（图形会话崩溃 / 重启预算耗尽）不是产品缺陷，也不应触发重启。
+        记录事故原因供上层把任务判为 BLOCKED_ENVIRONMENT；不置 _crashed。
+        """
+        logger.critical("Environment incident, stopping cleanly: %s", incident_reason)
+        self._session_status = SessionStatus.TERMINATED
+        self._environment_incident_reason = incident_reason
+
+    @property
+    def environment_incident_reason(self) -> str:
+        """环境事故原因（EnvironmentIncidentReason 值），未发生则空串。"""
+        return self._environment_incident_reason
 
     # ── wait until actionable ───────────────────────────────
 

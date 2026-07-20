@@ -12,7 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, HealthStatus
+from sts2_autotest.adapters.base import (
+    ActionResult,
+    DebugVerification,
+    GameAdapterProtocol,
+    HealthStatus,
+)
 from sts2_autotest.adapters.cli_mod import CliModAdapter
 from sts2_autotest.common.errors import STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
@@ -191,7 +196,9 @@ class TestGetAvailableActions:
             "grid_card_select": {"cards": [{"card_id": "STRIKE_IRONCLAD"}]},
         })
         result = _run(adapter.get_available_actions())
-        assert "return_to_menu" in result
+        # GRID_CARD_SELECT 属局内模态，return_to_menu 不可用（CLI 仅支持 GAME_OVER/
+        # VICTORY），已从动作表移除。
+        assert "return_to_menu" not in result
         assert "start_new_run" in result
         assert "select_character" in result
         assert "embark" in result
@@ -301,7 +308,11 @@ class TestAct:
         adapter._cached_state = GameState(screen=GameScreen.EVENT)
         adapter._cache_stale = False
 
-        for action in ("return_to_menu", "start_new_run", "select_character", "embark"):
+        # 仅 start_new_run / select_character / embark 在局内（EVENT）属"已满足"
+        # 的空操作成功。return_to_menu 不再被当作无操作：CLI 仅支持 GAME_OVER/
+        # VICTORY，局内调用必须真实下发（修复「reported success but produced no
+        # observable state change」），故不纳入此处 no-op 断言。
+        for action in ("start_new_run", "select_character", "embark"):
             result = _run(adapter.act(action))
             assert result.status == "success"
 
@@ -582,17 +593,27 @@ class TestProtocolCompliance:
     def test_isinstance_check(self, adapter: CliModAdapter) -> None:
         assert isinstance(adapter, GameAdapterProtocol)
 
-    def test_has_all_seven_methods(self) -> None:
+    def test_has_all_eight_methods(self) -> None:
         expected = {
             "health_check", "get_state", "get_available_actions",
             "act", "wait_until_actionable", "capture_bug_snapshot",
-            "cleanup",
+            "cleanup", "verify_debug_actions",
         }
         actual = {
             name for name in dir(CliModAdapter)
             if not name.startswith("_") and callable(getattr(CliModAdapter, name, None))
         }
         assert expected <= actual
+
+    def test_verify_debug_actions_reports_not_supported(
+        self, adapter: CliModAdapter
+    ) -> None:
+        """CliMod 无调试控制台，调试能力应诚实报告未支持。"""
+        result = _run(adapter.verify_debug_actions())
+        assert result.configured is False
+        assert result.verified is False
+        assert result.reason == "NOT_SUPPORTED"
+        assert result.checked_at is not None
 
 
 class TestErrorClassification:
@@ -679,6 +700,9 @@ class TestMockReplaceability:
 
         async def cleanup(self) -> None:
             pass
+
+        async def verify_debug_actions(self) -> Any:
+            return DebugVerification(configured=False, verified=False)
 
     def test_mock_passes_protocol_check(self) -> None:
         mock = self.MockAdapter()

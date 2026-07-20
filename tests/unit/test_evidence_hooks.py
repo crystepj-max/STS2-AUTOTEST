@@ -58,6 +58,7 @@ class _FakePackager:
         return Path("/tmp/pack")
 
     def export_artifact(self, pack_id: str, result: str = "unknown") -> object:
+        self.last_export_result = result
         return None
 
     def list_packs(self) -> list[object]:
@@ -349,3 +350,35 @@ class TestOnSessionEndDuration:
             {"passed": 1, "failed": 0, "crashed": 0, "duration_ms": 0}
         )
         assert fake_packager.last_duration_ms == 0  # type: ignore[attr-defined]
+
+
+# ── on_session_end 取消/阻塞映射（P0#1）─────────────────────────
+
+
+class TestOnSessionEndCancelAndBlockMapping:
+    """P0#1：取消/阻塞任务绝不能误报为通过。
+
+    旧逻辑只按 failed/crashed 数量判断，0 失败 + 0 跳过的取消任务会被错误
+    回落成 passed，导致 get_report 与压缩包命名都写成 passed。
+    """
+
+    def test_cancelled_status_maps_to_cancelled_result(
+        self, hooks: RealEvidenceHooks, fake_packager: _FakePackager,
+    ) -> None:
+        # 0 失败 + 0 跳过，但显式声明 CANCELLED —— 旧逻辑会错误回落成 passed。
+        hooks.on_session_end({
+            "total": 1, "passed": 0, "failed": 0, "crashed": 0, "skipped": 1,
+            "duration_ms": 5, "status": "CANCELLED",
+        })
+        assert fake_packager.last_run_result == "cancelled"
+        # 压缩包命名后缀必须与结果一致（*_cancelled.zip）
+        assert fake_packager.last_export_result == "cancelled"
+
+    def test_blocked_status_maps_to_blocked_result(
+        self, hooks: RealEvidenceHooks, fake_packager: _FakePackager,
+    ) -> None:
+        hooks.on_session_end({
+            "total": 1, "passed": 0, "failed": 0, "crashed": 0, "skipped": 1,
+            "duration_ms": 5, "status": "BLOCKED_ENVIRONMENT",
+        })
+        assert fake_packager.last_run_result == "blocked"

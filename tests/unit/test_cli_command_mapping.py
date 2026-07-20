@@ -98,7 +98,9 @@ class TestScreenToActions:
 
     def test_map_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.MAP)
-        assert "return_to_menu" in actions
+        # sts2 CLI 的 return_to_menu 仅支持 GAME_OVER/VICTORY 屏——局内页面
+        # 不再广告该动作；回主菜单由 reset_to_main_menu / 受控重启兜底（P1 决策）。
+        assert "return_to_menu" not in actions
         assert "start_new_run" in actions
         assert "select_character" in actions
         assert "embark" in actions
@@ -109,7 +111,7 @@ class TestScreenToActions:
 
     def test_combat_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.COMBAT)
-        assert "return_to_menu" in actions
+        assert "return_to_menu" not in actions  # 同上：仅 GAME_OVER/VICTORY 屏支持
         assert "start_new_run" in actions
         assert "select_character" in actions
         assert "embark" in actions
@@ -135,7 +137,7 @@ class TestScreenToActions:
 
     def test_event_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.EVENT)
-        assert "return_to_menu" in actions
+        assert "return_to_menu" not in actions  # 同上：仅 GAME_OVER/VICTORY 屏支持
         assert "start_new_run" in actions
         assert "select_character" in actions
         assert "embark" in actions

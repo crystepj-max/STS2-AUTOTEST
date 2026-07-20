@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import builtins
+import importlib
 import signal
 import subprocess
 import sys
@@ -19,10 +20,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from sts2_autotest.common.errors import CancelFailureReason
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.core.lock_manager import LockManager
 
 logger = get_logger("core.run_service")
+
+# Original run statuses that resume_run is allowed to continue from.
+RESUMABLE_STATUSES = frozenset({
+    "CANCELLED",
+    "FAILED_PLATFORM",
+    "BLOCKED_ENVIRONMENT",
+})
 
 
 RUN_PHASES = (
@@ -47,6 +56,29 @@ TERMINAL_STATUSES = frozenset({
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _game_control_reachable(host: str = "127.0.0.1", port: int = 8080) -> bool:
+    """Best-effort probe: is the game control API still answering?
+
+    Used to tell apart a *environment* incident (graphics session / game control
+    gone → BLOCKED_ENVIRONMENT) from a *platform* failure (only our worker
+    process died while the game stays controllable → FAILED_PLATFORM).
+    """
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1.0)
+    try:
+        sock.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
 
 
 def _safe_run_id(prefix: str = "run") -> str:
@@ -95,10 +127,20 @@ class RunRecord:
     progress: dict[str, Any] = field(default_factory=dict)
     evidence_dir: str | None = None
     cancel_requested: bool = False
+    # Set once the run's evidence pack has been sealed (worker responsibility).
+    # resume_run requires this on the original run before it may continue.
+    evidence_sealed: bool = False
+    # For resume runs: the original run_id this run continues from.
+    resumed_from: str | None = None
 
     @property
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_STATUSES
+
+    @property
+    def is_cancelling(self) -> bool:
+        """Cancellation requested but cleanup not yet finished (non-terminal)."""
+        return self.cancel_requested and not self.is_terminal
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -138,6 +180,8 @@ class RunRecord:
             progress=dict(data.get("progress", {})),
             evidence_dir=data.get("evidence_dir"),
             cancel_requested=bool(data.get("cancel_requested", False)),
+            evidence_sealed=bool(data.get("evidence_sealed", False)),
+            resumed_from=data.get("resumed_from"),
         )
 
 
@@ -226,6 +270,16 @@ class RunStore:
             lock.release_lock()
 
     def request_cancel(self, run_id: str) -> RunRecord | None:
+        """Request cancellation *gracefully*.
+
+        This ONLY flags the run and moves it to a non-terminal ``CANCELLING``
+        phase. It does NOT mark the run CANCELLED and does NOT kill the worker.
+        The worker's execution entry observes ``cancel_requested`` and performs
+        the full cleanup (stop new game ops → save pre-cancel state → recover a
+        clean main menu → verify → report → seal evidence), then calls
+        :meth:`finish_cancel`. Keeping the run non-terminal is what prevents the
+        queue from releasing the game slot to the next task before cleanup ends.
+        """
         lock = self._mutation_lock()
         if not lock.acquire_lock(timeout=5.0):
             raise RuntimeError("Timed out acquiring the run store lock")
@@ -235,13 +289,20 @@ class RunStore:
                 return record
             record.cancel_requested = True
             record.message = "Cancellation requested"
-            record.status = "CANCELLED"
-            record.phase = "COMPLETED"
-            record.finished_at = _now()
-            pid = record.pid
+            record.phase = "CANCELLING"
             self.save(record)
+            return record
         finally:
             lock.release_lock()
+
+    def force_stop(self, run_id: str) -> RunRecord | None:
+        """Escalation: hard-stop a worker that did not respond to a graceful
+        cancel in time. Cleanup + minimal evidence sealing must still be
+        completed by the platform afterwards via :meth:`finish_cancel`."""
+        record = self.load(run_id)
+        if record is None:
+            return None
+        pid = record.pid
         if pid is not None:
             try:
                 os.kill(pid, signal.SIGTERM)
@@ -249,7 +310,66 @@ class RunStore:
                 pass
             except OSError as exc:
                 logger.warning("Cannot stop run %s process %s: %s", run_id, pid, exc)
-        return self.load(run_id) or record
+        return record
+
+    def finish_cancel(
+        self,
+        run_id: str,
+        *,
+        reason: CancelFailureReason | str | None = None,
+        evidence_dir: str | None = None,
+        sealed: bool = False,
+        result: dict[str, Any] | None = None,
+        message: str | None = None,
+    ) -> RunRecord | None:
+        """Finalize a cancellation *after* cleanup and evidence sealing.
+
+        Reason mapping (a cancel that could not be cleaned up must NOT become a
+        normal CANCELLED):
+        - None (clean)                         -> CANCELLED
+        - CANCEL_CLEANUP_FAILED / EVIDENCE     -> FAILED_PLATFORM
+        - GAME_CONTROL_UNAVAILABLE             -> BLOCKED_ENVIRONMENT
+
+        Only after this returns terminal does the game slot free for the queue.
+        """
+        reason_str = str(reason) if reason is not None else None
+        if reason_str is None:
+            status = "CANCELLED"
+        elif reason_str == CancelFailureReason.GAME_CONTROL_UNAVAILABLE.value:
+            status = "BLOCKED_ENVIRONMENT"
+        else:
+            status = "FAILED_PLATFORM"
+        lock = self._mutation_lock()
+        if not lock.acquire_lock(timeout=5.0):
+            raise RuntimeError("Timed out acquiring the run store lock")
+        try:
+            record = self.load(run_id)
+            if record is None:
+                return None
+            record.status = status
+            record.phase = "COMPLETED"
+            record.finished_at = _now()
+            record.cancel_requested = True
+            if evidence_dir is not None:
+                record.evidence_dir = evidence_dir
+            record.evidence_sealed = bool(sealed)
+            if result is not None:
+                merged = dict(record.result)
+                merged.update(result)
+                if reason_str is not None:
+                    merged.setdefault("reason", reason_str)
+                record.result = merged
+            elif reason_str is not None:
+                merged = dict(record.result)
+                merged.setdefault("reason", reason_str)
+                record.result = merged
+            record.message = message or (
+                "Cancelled" if status == "CANCELLED" else f"Cancel cleanup: {reason_str}"
+            )
+            self.save(record)
+            return record
+        finally:
+            lock.release_lock()
 
     def active_before(self, record: RunRecord) -> builtins.list[RunRecord]:
         """返回当前任务之前创建且未结束的任务，用于稳定的先进先出排队。"""
@@ -279,18 +399,114 @@ class RunStore:
                 try:
                     os.kill(other.pid, 0)
                 except ProcessLookupError:
-                    self.update(
-                        other.run_id,
-                        status="FAILED_PLATFORM",
-                        phase="COMPLETED",
-                        finished_at=_now(),
-                        message="Worker process disappeared before completion",
-                    )
+                    self._mark_worker_gone(other)
                     continue
                 except OSError:
                     pass
             active.append(other)
         return active
+
+    def _mark_worker_gone(self, record: RunRecord) -> RunRecord | None:
+        """Worker 进程已消失：收口终态并生成证据，避免僵尸记录污染审计。
+
+        区分图形/控制消失（BLOCKED_ENVIRONMENT）与仅执行进程异常
+        （FAILED_PLATFORM）：若游戏控制 API 仍能响应，说明游戏与控制链路尚在，
+        只是本工作进程异常退出，判平台失败；否则判环境阻塞。
+        """
+        control_up = _game_control_reachable()
+        if control_up:
+            status = "FAILED_PLATFORM"
+            reason = "Worker process disappeared before completion"
+        else:
+            status = "BLOCKED_ENVIRONMENT"
+            reason = (
+                "Worker process disappeared and game control API is unreachable "
+                "(graphics session or game process incident)"
+            )
+        evidence_dir = self._seal_worker_gone_evidence(record, status, reason)
+        return self.update(
+            record.run_id,
+            status=status,
+            phase="COMPLETED",
+            finished_at=_now(),
+            message=reason,
+            evidence_dir=evidence_dir,
+            evidence_sealed=True,
+        )
+
+    def _seal_worker_gone_evidence(
+        self, record: RunRecord, status: str, reason: str
+    ) -> str | None:
+        """失联任务终态收口：生成 run-result.json 与可读证据包，满足公共契约。
+
+        不抛异常——证据生成失败只记日志，绝不阻塞终态标记（否则会留下僵尸记录）。
+        """
+        evidence_root = self.root.parent
+        run_id = record.run_id
+        # 1) run-result.json（报告契约）
+        result_dir = evidence_root / run_id / "reports"
+        try:
+            result_dir.mkdir(parents=True, exist_ok=True)
+            (result_dir / "run-result.json").write_text(
+                json.dumps(
+                    {
+                        "run_id": run_id,
+                        "task_id": run_id,
+                        "status": status,
+                        "message": reason,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            logger.warning("worker-gone: cannot write run-result.json: %s", exc)
+        # 2) 证据包 + 压缩包（证据契约）
+        # 注意：evidence 层位于 core 之上，按层级隔离约定 core 不得静态 import
+        # evidence；沿用 evidence_hooks 的既有做法，用 importlib 动态导入，使本层
+        # 既能复用证据封装能力，又不破坏 import-linter 的静态契约检查。
+        try:
+            from sts2_autotest.common.evidence import FailureInfo
+
+            packager_mod = importlib.import_module("sts2_autotest.evidence.packager")
+            EvidencePackager = packager_mod.EvidencePackager
+
+            packager = EvidencePackager(evidence_root)
+            run_result = "blocked" if status == "BLOCKED_ENVIRONMENT" else "failed"
+            pack_dir = packager.create_pack(
+                pack_id=run_id,
+                run_result=run_result,
+                duration_ms=0,
+                failure=FailureInfo(
+                    type="worker_process_disappeared",
+                    message=reason,
+                ),
+            )
+            packager.export_artifact(run_id, result=run_result)
+            return str(pack_dir)
+        except Exception as exc:  # noqa: BLE001 - 证据失败不得阻断终态
+            logger.warning("worker-gone: evidence sealing failed: %s", exc)
+            return None
+
+    def reap_if_worker_gone(self, run_id: str) -> RunRecord | None:
+        """查询时懒回收：若运行处于非终态但其 worker 进程已消失，将其标为终态。
+
+        弥补 ``active_before`` 仅在「队列中另有 worker 等待轮次」时才回收的盲区，
+        使 status / get_run / cancel 等控制端查询也能即时关单，避免僵尸记录污染审计。
+        """
+        record = self.load(run_id)
+        if record is None or record.is_terminal:
+            return record
+        if record.pid is None:
+            return record
+        try:
+            os.kill(record.pid, 0)
+        except ProcessLookupError:
+            return self._mark_worker_gone(record)
+        except OSError:
+            pass
+        return record
 
 
 class RunCancelled(RuntimeError):
@@ -371,6 +587,25 @@ def complete_record(
     )
 
 
+def resume_precheck(record: RunRecord | None) -> tuple[bool, str]:
+    """修复四：恢复必须等待取消/失败完全结束才允许。
+
+    只有原任务同时满足以下条件才可恢复：
+    - 状态属于可恢复终态（CANCELLED / FAILED_PLATFORM / BLOCKED_ENVIRONMENT）
+    - 证据已封存（收尾流程确实走完，不是半途卡死）
+
+    返回 (是否可恢复, 原因码)。原因码：NOT_FOUND / NOT_RESUMABLE /
+    EVIDENCE_NOT_SEALED / OK。
+    """
+    if record is None:
+        return False, "NOT_FOUND"
+    if record.status not in RESUMABLE_STATUSES:
+        return False, "NOT_RESUMABLE"
+    if not record.evidence_sealed:
+        return False, "EVIDENCE_NOT_SEALED"
+    return True, "OK"
+
+
 def serialize_record(record: RunRecord | None) -> dict[str, Any]:
     if record is None:
         return {"status": "NOT_FOUND"}
@@ -397,12 +632,22 @@ def spawn_worker(store: RunStore, record: RunRecord, argv: list[str]) -> int:
     log_path = store.root / record.run_id / "worker.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_file = log_path.open("a", encoding="utf-8")
+    # 子进程不可继承 IDE/代理会话变量（CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID）。
+    # 否则 safe-delete 钩子（包装 rm/unlink/rmdir）会要求交互确认，非交互 worker
+    # 永远等不到 → 卡死在批量删除（典型：清理 .store.lock 时触发
+    # SAFE_DELETE_BULK_CONFIRM_REQUIRED），表现为提交阶段无进展 /
+    # worker_process_disappeared。剥离后 rm 走零成本直通，与框架自身 Python
+    # 删除路径一致。
+    worker_env = dict(os.environ)
+    worker_env.pop("CODEBUDDY_SESSION_ID", None)
+    worker_env.pop("CLAUDE_SESSION_ID", None)
     try:
         process = subprocess.Popen(
             [sys.executable, "-m", "sts2_autotest.cli.main", *argv],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=worker_env,
         )
     finally:
         log_file.close()

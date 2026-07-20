@@ -1789,3 +1789,51 @@ class TestProtocolCompliance:
         assert hasattr(adapter, "wait_until_actionable")
         assert hasattr(adapter, "capture_bug_snapshot")
         assert hasattr(adapter, "cleanup")
+        assert hasattr(adapter, "verify_debug_actions")
+
+
+class TestVerifyDebugActions:
+    """修复二：调试能力必须经非破坏性探测真实验证，而非只按配置声明。"""
+
+    def test_not_configured_reports_unverified(self) -> None:
+        adapter = AgentAdapter(debug_actions=False)
+        result = _run(adapter.verify_debug_actions())
+        assert result.configured is False
+        assert result.verified is False
+        assert result.reason == "NOT_CONFIGURED"
+        assert result.checked_at is not None
+
+    def test_control_unavailable_when_health_fails(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(500, {"status": "error"})  # health_check -> unhealthy
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+        result = _run(adapter.verify_debug_actions())
+        assert result.configured is True
+        assert result.verified is False
+        assert result.reason == "GAME_CONTROL_UNAVAILABLE"
+
+    def test_verified_via_non_destructive_help_probe(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"status": "ok"})  # health_check
+        # 非破坏性探测：debug console help 成功
+        mock.add_response(200, {"ok": True, "data": {"message": "commands: win, die, ..."}})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+        result = _run(adapter.verify_debug_actions())
+        assert result.configured is True
+        assert result.verified is True
+        assert result.reason is None
+        # 探测绝不能用结束战斗命令
+        probe_calls = [r for r in mock._requests if r["method"] == "POST"]
+        assert probe_calls, "expected a non-destructive probe POST"
+        sent = probe_calls[-1]["kwargs"].get("json", {})
+        assert sent.get("command") not in {"win", "win_combat"}
+
+    def test_probe_failure_reports_console_unavailable(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"status": "ok"})  # health ok
+        mock.add_response(200, {"ok": False, "error": "unknown command"})  # help fails
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+        result = _run(adapter.verify_debug_actions())
+        assert result.configured is True
+        assert result.verified is False
+        assert result.reason == "DEBUG_CONSOLE_UNAVAILABLE"

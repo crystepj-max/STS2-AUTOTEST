@@ -17,6 +17,7 @@ class TestGameScreen:
             "MAIN_MENU", "CHARACTER_SELECT", "MAP", "COMBAT", "SHOP", "REST",
             "EVENT", "CHEST", "BUNDLE_SELECTION", "BOSS_REWARD", "CARD_REWARD",
             "RELIC_REWARD", "GAME_OVER", "VICTORY", "CRASHED", "UNKNOWN",
+            "TRI_SELECT",
         }
         actual = {s.name for s in GameScreen}
         assert expected == actual

@@ -128,7 +128,7 @@ class SummaryJson(BaseModel):
 
 | # | 条件 | title | category | confidence |
 |---|------|-------|----------|------------|
-| 1 | `type == "crash_error"` | 游戏进程异常退出，检查最近修改的 C# 代码是否有未处理异常 | `code_fix` | 0.50 |
+| 1 | `type == "crash_error"` | 游戏进程异常退出，检查本次修改的 C# 代码是否有未处理异常 | `code_fix` | 0.50 |
 | 2 | `type == "adapter_error"` + message 含 `version_mismatch` | 适配器与游戏/BaseLib 版本不兼容，更新 BaseLib 或 CLI Mod | `config_change` | 0.60 |
 | 3 | `type == "timeout_error"` | 操作超时，检查 Mod 初始化代码是否有死循环或资源阻塞 | `code_fix` | 0.45 |
 | 4 | `type == "assertion_error"` | 状态转换断言失败 | `code_fix` | 0.55 |

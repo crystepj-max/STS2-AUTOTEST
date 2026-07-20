@@ -1,0 +1,12 @@
+=== 步骤1: _ensure_clean_main_menu（当前应为干净菜单） ===
+  [帧 00:01:36] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+  [帧 00:01:36] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+  [帧 00:01:36] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+  [帧 00:01:37] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+  [帧 00:01:39] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+=== _ensure_clean_main_menu → True，耗时 2.5s ===
+=== 步骤2: _run_environment_precheck ===
+  [帧 00:01:47] screen=UNKNOWN has_save=None actions=[]
+  [帧 00:01:50] screen=MAIN_MENU has_save=None actions=[]
+  [帧 00:01:50] screen=MAIN_MENU has_save=None actions=[]
+=== _run_environment_precheck → reason=None，耗时 11.0s ===

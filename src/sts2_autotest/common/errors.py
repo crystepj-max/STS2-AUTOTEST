@@ -39,6 +39,52 @@ class AdapterErrorSubType(StrEnum):
     VERSION_MISMATCH = "version_mismatch"
 
 
+# Canonical terminal run status string for environment blockage. Kept as a
+# module constant so CLI / MCP / run_service share one spelling (previously
+# duplicated as a bare string literal in several places).
+BLOCKED_ENVIRONMENT = "BLOCKED_ENVIRONMENT"
+
+
+class EnvironmentBlockReason(StrEnum):
+    """Why a run could not start (or continue) due to the local environment.
+
+    All of these classify a run as ``BLOCKED_ENVIRONMENT`` — never as a
+    product/platform failure. A refused connection to the game control API
+    (8080) is an environment block, not an "unknown" failure.
+    """
+
+    GAME_CONTROL_UNAVAILABLE = "GAME_CONTROL_UNAVAILABLE"
+    GAME_START_FAILED = "GAME_START_FAILED"
+    GAME_PROCESS_STALE = "GAME_PROCESS_STALE"
+    GAME_READINESS_TIMEOUT = "GAME_READINESS_TIMEOUT"
+    GUI_SESSION_UNAVAILABLE = "GUI_SESSION_UNAVAILABLE"
+
+
+class EnvironmentIncidentReason(StrEnum):
+    """Why a *running* task was stopped by the environment watchdog.
+
+    Raised only after the environment was observed healthy and then degraded
+    (e.g. macOS WindowServer crash) — used to stop cleanly instead of looping
+    restarts.
+    """
+
+    WINDOWSERVER_UNHEALTHY = "WINDOWSERVER_UNHEALTHY"
+    GUI_SESSION_UNAVAILABLE = "GUI_SESSION_UNAVAILABLE"
+    GAME_CONTROL_LOST = "GAME_CONTROL_LOST"
+
+
+class CancelFailureReason(StrEnum):
+    """Why cancellation cleanup did not reach a clean CANCELLED state.
+
+    A cancel request that cannot be cleaned up must NOT be reported as a
+    normal ``CANCELLED`` — it maps to FAILED_PLATFORM / BLOCKED_ENVIRONMENT.
+    """
+
+    CANCEL_CLEANUP_FAILED = "CANCEL_CLEANUP_FAILED"
+    CANCEL_EVIDENCE_FAILED = "CANCEL_EVIDENCE_FAILED"
+    GAME_CONTROL_UNAVAILABLE = "GAME_CONTROL_UNAVAILABLE"
+
+
 class STS2Error(Exception):
     """Base exception for all STS2-AUTOTEST errors.
 

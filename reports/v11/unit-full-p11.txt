@@ -1,0 +1,8 @@
+    class TestAgentRunner:
+
+src/sts2_autotest/core/test_agent_runner.py:706
+  /Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/src/sts2_autotest/core/test_agent_runner.py:706: PytestCollectionWarning: cannot collect test class 'TestAgentRunner' because it has a __init__ constructor (from: tests/unit/test_smoke_card_validation.py)
+    class TestAgentRunner:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1683 passed, 2 warnings in 492.04s (0:08:12)

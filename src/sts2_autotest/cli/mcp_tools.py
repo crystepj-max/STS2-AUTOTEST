@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import json
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import xml.etree.ElementTree as ET
 import uuid
@@ -110,11 +112,73 @@ def _required_run_id(args: dict[str, Any]) -> str:
     return run_id
 
 
-def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
-    """返回跨 Agent 能力协商结果。"""
-    debug_actions_enabled = os.environ.get(
+# 能力探测超时（秒）——游戏未起时快速返回未就绪，绝不阻塞能力协商。
+_CAPABILITIES_PROBE_TIMEOUT = float(
+    os.environ.get("STS2_CAPABILITIES_PROBE_TIMEOUT", "8")
+)
+
+
+def _probe_runtime_capabilities() -> dict[str, Any]:
+    """非破坏性地探测真实运行能力（游戏控制 + 调试控制台）。
+
+    在独立线程内运行异步探测，避免与 MCP 事件循环冲突；游戏未启动或控制入口
+    不可达时快速返回未就绪，绝不抛错、绝不阻塞主流程。探测只用无副作用命令
+    （health + 调试控制台 help），严禁执行任何改变游戏进度的命令。
+    """
+    configured = os.environ.get(
         "STS2_ADAPTER__AGENT__DEBUG_ACTIONS", "false"
     ).lower() in {"true", "1", "yes", "on"}
+    result: dict[str, Any] = {
+        "game_control_ready": False,
+        "debug_actions_configured": configured,
+        "debug_actions_verified": False,
+        "debug_actions_reason": "GAME_CONTROL_UNAVAILABLE",
+        "runtime_capabilities_checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def _worker() -> None:
+        try:
+            # 游戏控制入口（8080）与调试控制台都由 AgentAdapter 承载。
+            from sts2_autotest.cli.main import _create_adapter
+
+            adapter = _create_adapter("agent")
+        except Exception:
+            return
+
+        async def _probe() -> None:
+            try:
+                health = await adapter.health_check()
+                result["game_control_ready"] = bool(getattr(health, "healthy", False))
+                verification = await adapter.verify_debug_actions()
+                result["debug_actions_configured"] = bool(verification.configured)
+                result["debug_actions_verified"] = bool(verification.verified)
+                result["debug_actions_reason"] = verification.reason
+                if verification.checked_at:
+                    result["runtime_capabilities_checked_at"] = verification.checked_at
+            finally:
+                try:
+                    await adapter.cleanup()
+                except Exception:
+                    pass
+
+        try:
+            asyncio.run(_probe())
+        except Exception:
+            pass
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    worker.join(timeout=_CAPABILITIES_PROBE_TIMEOUT)
+    return result
+
+
+def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
+    """返回跨 Agent 能力协商结果——能力字段反映真实运行状态（修复二）。"""
+    runtime = _probe_runtime_capabilities()
+    # 快速结束战斗需"配置要求启用" AND "实际探测确认可用"双真。
+    fast_end_ready = bool(
+        runtime["debug_actions_configured"] and runtime["debug_actions_verified"]
+    )
     return {
         "service": "sts2-autotest",
         "contract_version": "1",
@@ -129,6 +193,12 @@ def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
         "transports": ["mcp_http", "cli_json"],
         "single_game_instance": True,
         "goal_scene_execution": True,
+        # 真实运行能力（非仅配置声明）——供 Agent 判断是否可用。
+        "game_control_ready": runtime["game_control_ready"],
+        "debug_actions_configured": runtime["debug_actions_configured"],
+        "debug_actions_verified": runtime["debug_actions_verified"],
+        "debug_actions_reason": runtime["debug_actions_reason"],
+        "runtime_capabilities_checked_at": runtime["runtime_capabilities_checked_at"],
         "supported_target_scene": [
             "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT",
             "REST", "SHOP", "CHEST", "CARD_REWARD", "NEXT_ACT",
@@ -138,7 +208,7 @@ def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
         "combat_modes": ["traversal", "basic", "death"],
         "combat_capabilities": {
             "traversal_fast_end_action": "win_combat",
-            "traversal_fast_end_enabled": debug_actions_enabled,
+            "traversal_fast_end_enabled": fast_end_ready,
             "traversal_fallback": "basic",
             "fast_end_is_development_only": True,
             "death_mode": {
@@ -157,7 +227,7 @@ def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
             "journey": "card_test",
             "parameter": "card_id",
             "requires_debug_actions": True,
-            "debug_actions_enabled": debug_actions_enabled,
+            "debug_actions_enabled": fast_end_ready,
             "description": "通过调试控制台把 card_id 加入手牌，验证入手并真实打出；"
             "平台只断言通用可观察事实，具体卡牌效果由项目用例断言。",
         },
@@ -246,6 +316,10 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
         return serialize_record(record)
     request.argv = _request_argv(request_args, record.run_id, mode=mode)
     store.update(record.run_id, request=request)
+    # 修复四：恢复任务在新 run_id 上显式记录它继承自哪个原任务。
+    resumed_from = (metadata or {}).get("resumed_from")
+    if resumed_from:
+        store.update(record.run_id, resumed_from=str(resumed_from))
     try:
         spawn_worker(store, record, request.argv)
     except OSError as exc:
@@ -296,7 +370,9 @@ def handle_submit_run(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_get_run(args: dict[str, Any]) -> dict[str, Any]:
     run_id = _required_run_id(args)
-    return serialize_record(_run_store().load(run_id))
+    store = _run_store()
+    store.reap_if_worker_gone(run_id)
+    return serialize_record(store.load(run_id))
 
 
 def handle_cancel_run(args: dict[str, Any]) -> dict[str, Any]:
@@ -305,10 +381,20 @@ def handle_cancel_run(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_resume_run(args: dict[str, Any]) -> dict[str, Any]:
+    from sts2_autotest.core.run_service import resume_precheck
+
     run_id = _required_run_id(args)
     record = _run_store().load(run_id)
     if record is None:
         raise McpError(INVALID_PARAMS, f"Unknown run_id: {run_id}")
+    # 修复四：恢复必须等待原任务的取消/失败完全结束（终态 + 证据已封存）。
+    ok, reason = resume_precheck(record)
+    if not ok:
+        raise McpError(
+            INVALID_PARAMS,
+            f"Run {run_id} cannot be resumed (status={record.status}, "
+            f"evidence_sealed={record.evidence_sealed}): {reason}",
+        )
     return _submit_persistent_run(
         {
             "project": record.request.project,

@@ -6,6 +6,7 @@ import pytest
 
 from sts2_autotest.adapters.base import (
     ActionResult,
+    DebugVerification,
     GameAdapterProtocol,
     HealthStatus,
 )
@@ -62,7 +63,7 @@ class TestGameAdapterProtocol:
         assert isinstance(GameAdapterProtocol, type)
 
     def test_mock_satisfies_protocol(self) -> None:
-        """A class with all 7 async methods satisfies the Protocol."""
+        """A class with all 8 async methods satisfies the Protocol."""
 
         class MockAdapter:
             async def health_check(self) -> HealthStatus:
@@ -85,6 +86,9 @@ class TestGameAdapterProtocol:
 
             async def cleanup(self) -> None:
                 pass
+
+            async def verify_debug_actions(self) -> DebugVerification:
+                return DebugVerification(configured=False, verified=False)
 
         mock = MockAdapter()
         assert isinstance(mock, GameAdapterProtocol)

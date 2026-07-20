@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import time
@@ -35,6 +36,25 @@ class JourneyFailure(RuntimeError):
         self.last_state = last_state
         self.last_action = last_action
         self.reason_code = reason_code
+
+
+class JourneyCancelled(RuntimeError):
+    """收到取消请求：旅程在发起下一步游戏操作前主动停止。
+
+    携带取消前的状态快照，供上层收尾（保存取消前状态→恢复主菜单→封存证据）。
+    这不是失败，调用方应走取消收尾流程而非恢复策略。
+    """
+
+    def __init__(
+        self,
+        message: str = "Journey cancelled by request",
+        *,
+        last_state: dict[str, Any] | None = None,
+        last_action: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.last_state = last_state
+        self.last_action = last_action
 
 
 StatePredicate = Callable[[dict[str, Any]], bool]
@@ -102,6 +122,7 @@ class GenericJourneys:
         combat_mode: str = "traversal",
         progress_callback: ProgressCallback | None = None,
         observation_callback: ObservationCallback | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> None:
         self.adapter = adapter
         self.timeout = timeout
@@ -110,6 +131,11 @@ class GenericJourneys:
         self.combat_mode = combat_mode
         self._progress_callback = progress_callback
         self._observation_callback = observation_callback
+        self._cancel_check = cancel_check
+        # 取消收尾阶段（reset_to_main_menu）需要执行"回主菜单"的清理动作，而
+        # 此时 cancel_requested 仍为 True；若该检查继续生效，清理动作会被自身取消
+        # 拦截，导致永远回不到主菜单。收尾期间置此标志抑制取消检查。
+        self._cancel_suppressed = False
         self._trajectory: list[str] = []
         self._scene_trace: list[dict[str, Any]] = []
         self._operations: list[dict[str, Any]] = []
@@ -185,7 +211,23 @@ class GenericJourneys:
         }
         self._progress_callback(payload)
 
+    def _raise_if_cancelled(self) -> None:
+        """在发起下一步游戏操作前检查取消请求。一旦观察到取消，立即停止新的
+        游戏操作并抛出 JourneyCancelled，交由上层做统一收尾。
+
+        取消收尾（reset_to_main_menu）期间 _cancel_suppressed 为 True，此时不再
+        拦截——否则清理动作会被自身仍在生效的取消请求拦死，永远回不到主菜单。
+        """
+        if getattr(self, "_cancel_suppressed", False):
+            return
+        if self._cancel_check is not None and self._cancel_check():
+            raise JourneyCancelled(
+                last_state=self._last_snapshot,
+                last_action=self._last_action,
+            )
+
     async def _execute_action(self, action: str, params: dict[str, Any] | None = None) -> Any:
+        self._raise_if_cancelled()
         before = self._last_snapshot or await self.snapshot()
         started = time.monotonic()
         result = await self.adapter.act(action, params or {})
@@ -286,63 +328,68 @@ class GenericJourneys:
 
     async def reset_to_main_menu(self) -> dict[str, Any]:
         """清理可处理的残留页面并回到主菜单。"""
-        for _ in range(8):
-            state = await self.snapshot()
-            screen = str(state.get("screen") or "").upper()
-            if screen == "MAIN_MENU":
-                return state
-            actions = list(state.get("available_actions") or [])
-            return_action = next(
-                (
-                    name
-                    for name in ("return_to_menu", "return_to_main_menu")
-                    if name in actions
-                ),
-                None,
-            )
-            if return_action is not None:
-                await self._act_confirmed(return_action)
-                continue
-            if "abandon_run" in actions:
-                await self._act_confirmed("abandon_run")
-                continue
-            if "confirm_modal" in actions:
-                await self._act_confirmed("confirm_modal")
-                continue
-            if "close_main_menu_submenu" in actions:
-                await self._act_confirmed("close_main_menu_submenu")
-                continue
-            if screen == "CARD_REWARD":
-                reward_action = next(
+        # 收尾阶段需要实际执行回主菜单的动作；抑制取消检查，避免被自身仍在生效
+        # 的取消请求拦死（见 _raise_if_cancelled）。
+        self._cancel_suppressed = True
+        try:
+            for _ in range(8):
+                state = await self.snapshot()
+                screen = str(state.get("screen") or "").upper()
+                if screen == "MAIN_MENU":
+                    return state
+                actions = list(state.get("available_actions") or [])
+                return_action = next(
                     (
                         name
-                        for name in (
-                            "collect_rewards_and_proceed",
-                            "resolve_rewards",
-                            "proceed",
-                        )
+                        for name in ("return_to_menu", "return_to_main_menu")
                         if name in actions
                     ),
                     None,
                 )
-                if reward_action is not None:
-                    await self._act_confirmed(reward_action)
+                if return_action is not None:
+                    await self._act_confirmed(return_action)
                     continue
-            if screen == "EVENT":
-                event = state.get("event") or {}
-                options = event.get("options") if isinstance(event, dict) else None
-                if isinstance(options, list) and options:
-                    option_index = next(
+                if "abandon_run" in actions:
+                    await self._act_confirmed("abandon_run")
+                    continue
+                if "confirm_modal" in actions:
+                    await self._act_confirmed("confirm_modal")
+                    continue
+                if "close_main_menu_submenu" in actions:
+                    await self._act_confirmed("close_main_menu_submenu")
+                    continue
+                if screen == "CARD_REWARD":
+                    reward_action = next(
                         (
-                            option.get("index", index)
-                            for index, option in enumerate(options)
-                            if isinstance(option, dict)
-                            and not option.get("is_locked", False)
-                            and not option.get("locked", False)
+                            name
+                            for name in (
+                                "collect_rewards_and_proceed",
+                                "resolve_rewards",
+                                "proceed",
+                            )
+                            if name in actions
                         ),
                         None,
                     )
-                    if option_index is not None:
+                    if reward_action is not None:
+                        await self._act_confirmed(reward_action)
+                        continue
+                if screen == "EVENT":
+                    event = state.get("event") or {}
+                    options = event.get("options") if isinstance(event, dict) else None
+                    event_action = None
+                    option_index = None
+                    if isinstance(options, list) and options:
+                        option_index = next(
+                            (
+                                option.get("index", index)
+                                for index, option in enumerate(options)
+                                if isinstance(option, dict)
+                                and not option.get("is_locked", False)
+                                and not option.get("locked", False)
+                            ),
+                            None,
+                        )
                         event_action = (
                             "choose_event"
                             if "choose_event" in actions
@@ -352,24 +399,40 @@ class GenericJourneys:
                             if "choose_neow_blessing" in actions
                             else None
                         )
-                        if event_action is not None:
-                            await self._act_confirmed(
-                                event_action,
-                                {"index": option_index, "option_index": option_index},
-                            )
-                            continue
-            if screen in {"MAP", "COMBAT", "SHOP", "REST", "CHEST", "EVENT"}:
-                # 游戏运行页通常只公开当前页面动作；复位是独立的安全恢复动作，
-                # 即使状态接口没有列出，也尝试一次放弃旧局，再由下一轮确认结果。
-                result = await self._execute_action("abandon_run")
-                if getattr(result, "status", "failure") == "success":
-                    continue
-            capabilities = getattr(self.adapter, "capabilities", None)
-            if bool(getattr(capabilities, "supports_debug_actions", False)):
-                result = await self._execute_action("abandon_run")
-                if getattr(result, "status", "failure") == "success":
-                    continue
-            raise JourneyFailure(f"Cannot reset {screen} to MAIN_MENU: {actions}")
+                    else:
+                        # 状态未枚举选项时（如 Neow 祝福），只要可用动作里含选择项
+                        # 就直接选第一个推进，避免卡在事件页无法回主菜单。
+                        event_action = next(
+                            (
+                                a for a in (
+                                    "choose_event",
+                                    "choose_event_option",
+                                    "choose_neow_blessing",
+                                ) if a in actions
+                            ),
+                            None,
+                        )
+                        option_index = 0 if event_action is not None else None
+                    if event_action is not None and option_index is not None:
+                        await self._act_confirmed(
+                            event_action,
+                            {"index": option_index, "option_index": option_index},
+                        )
+                        continue
+                if screen in {"MAP", "COMBAT", "SHOP", "REST", "CHEST", "EVENT"}:
+                    # 游戏运行页通常只公开当前页面动作；复位是独立的安全恢复动作，
+                    # 即使状态接口没有列出，也尝试一次放弃旧局，再由下一轮确认结果。
+                    result = await self._execute_action("abandon_run")
+                    if getattr(result, "status", "failure") == "success":
+                        continue
+                capabilities = getattr(self.adapter, "capabilities", None)
+                if bool(getattr(capabilities, "supports_debug_actions", False)):
+                    result = await self._execute_action("abandon_run")
+                    if getattr(result, "status", "failure") == "success":
+                        continue
+                raise JourneyFailure(f"Cannot reset {screen} to MAIN_MENU: {actions}")
+        finally:
+            self._cancel_suppressed = False
         raise JourneyFailure("Reset to MAIN_MENU exceeded the safe step limit")
 
     async def resolve_until(
@@ -417,13 +480,24 @@ class GenericJourneys:
         """从主菜单创建新局，并按目标停在开局场景或稳定地图。"""
         target_screen = target_screen.upper()
         state = await self.reset_to_main_menu()
+        self._raise_if_cancelled()
         if target_screen == "MAIN_MENU":
             return state
-        actions = list(state.get("available_actions") or [])
-        start_action = next(
-            (name for name in ("start_new_run", "new_run", "open_character_select") if name in actions),
-            None,
-        )
+        # 主菜单画面可能已到达但动作尚未就绪（例如受控重启后游戏刚回到主菜单的
+        # 初始化阶段，available_actions 暂为空）。等待 start_new_run 类动作可用，
+        # 避免连续任务在重启后立即开新局时误判失败（审查结论 #6 相关）。
+        start_action = None
+        actions: list[str] = []
+        for _ in range(30):
+            actions = list(state.get("available_actions") or [])
+            start_action = next(
+                (name for name in ("start_new_run", "new_run", "open_character_select") if name in actions),
+                None,
+            )
+            if start_action is not None:
+                break
+            await asyncio.sleep(1.0)
+            state = await self.snapshot()
         if start_action is None:
             raise JourneyFailure(f"New run is unavailable on MAIN_MENU: {actions}")
         await self._act_confirmed(start_action)

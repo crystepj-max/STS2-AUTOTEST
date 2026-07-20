@@ -153,16 +153,69 @@ def test_choose_progress_action_event_without_options_advances_dialogue() -> Non
 
 
 def test_choose_progress_action_handles_bundle_selection() -> None:
+    # 卡包选择页：真实 CLI 动作是 bundle_select <index>（预览）+ bundle_confirm（确认）。
     state = {
         "screen": "BUNDLE_SELECTION",
-        "available_actions": ["choose_bundle"],
-        "bundles": [{"index": 0}, {"index": 1}],
+        "available_actions": ["bundle_select", "bundle_confirm", "bundle_cancel"],
+        "bundle_select": {"bundles": [{"index": 0}, {"index": 1}]},
     }
 
     assert choose_progress_action(state) == (
-        "choose_bundle",
-        {"option_index": 0},
+        "bundle_select",
+        {"index": 0},
     )
+
+
+def test_choose_progress_action_bundle_selection_confirm_only() -> None:
+    # 已预览过卡包、只剩确认动作时，推进 bundle_confirm。
+    state = {
+        "screen": "BUNDLE_SELECTION",
+        "available_actions": ["bundle_confirm", "bundle_cancel"],
+        "bundle_select": {"bundles": [{"index": 0}]},
+    }
+
+    assert choose_progress_action(state) == ("bundle_confirm", {})
+
+
+def test_choose_progress_action_handles_tri_select() -> None:
+    # 三选一卡牌事件屏：真实 CLI 动作是 tri_select_card <card_ids>（选一张）。
+    # 导航器默认选第一张卡（tri_select.cards[0].card_id）向 MAP 推进。
+    state = {
+        "screen": "TRI_SELECT",
+        "available_actions": ["tri_select_card", "tri_select_skip"],
+        "tri_select": {
+            "selection_type": "unknown",
+            "min_select": 0,
+            "max_select": 1,
+            "can_skip": True,
+            "cards": [
+                {"index": 0, "card_id": "STRATAGEM"},
+                {"index": 1, "card_id": "PANACHE"},
+            ],
+        },
+    }
+
+    assert choose_progress_action(state) == (
+        "tri_select_card",
+        {"card_id": "STRATAGEM"},
+    )
+
+
+def test_choose_progress_action_tri_select_skip_when_no_cards() -> None:
+    # 三选一屏无可选项时，回退到 tri_select_skip（若允许）。
+    state = {
+        "screen": "TRI_SELECT",
+        "available_actions": ["tri_select_skip"],
+        "tri_select": {
+            "selection_type": "unknown",
+            "min_select": 0,
+            "max_select": 1,
+            "can_skip": True,
+            "cards": [],
+        },
+    }
+
+    assert choose_progress_action(state) == ("tri_select_skip", {})
 
 
 def test_choose_progress_action_skips_disabled_rest_option() -> None:

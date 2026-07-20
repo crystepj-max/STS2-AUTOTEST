@@ -128,7 +128,7 @@ RepairReport {
 
 MVP 覆盖最常见的 5-8 种崩溃模式：
 
-1. `crash_error + exit_code != 0` → "游戏进程异常退出，检查最近修改的 C# 代码是否有未处理异常"
+1. `crash_error + exit_code != 0` → "游戏进程异常退出，检查本次修改的 C# 代码是否有未处理异常"
 2. `adapter_error + version_mismatch` → "适配器版本与游戏版本不兼容，更新 BaseLib 或 CLI Mod"
 3. `timeout_error + game_state==LOADING` → "游戏加载超时，检查 Mod 初始化代码是否有死循环"
 4. `assertion_error + expected_screen != actual_screen` → "状态转换断言失败：预期 {expected}，实际 {actual}"

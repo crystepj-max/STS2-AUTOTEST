@@ -409,7 +409,22 @@ class SteamController:
             appid_path.write_text(expected, encoding="utf-8")
 
     def _terminate_game(self, deadline: float | None = None) -> None:
-        self._terminate_process(self._game_pid, self.game_exe, "Game", deadline)
+        """终止游戏进程。
+
+        优先终止控制器自己拉起的实例（``self._game_pid``）；若该 PID 缺失或已退出，
+        回退到按进程名发现并终止所有运行中的游戏实例。这样当游戏由 Steam 自行拉起
+        （而非经 ``start_game``）时，``stop_game`` 也能真正结束它，而不是空操作。
+        这正是取消收尾「受控重启」能否生效的前提。
+        """
+        pids: set[int] = set()
+        if self._game_pid is not None:
+            pids.add(self._game_pid)
+        try:
+            pids |= self._find_game_pids()
+        except Exception:
+            pass
+        for pid in pids:
+            self._terminate_process(pid, self.game_exe, "Game", deadline)
         self._game_pid = None
 
     def _terminate_process(

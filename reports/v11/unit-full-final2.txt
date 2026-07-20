@@ -1,0 +1,8 @@
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_cli_command_mapping.py::TestScreenToActions::test_map_actions
+FAILED tests/unit/test_cli_command_mapping.py::TestScreenToActions::test_combat_actions
+FAILED tests/unit/test_cli_command_mapping.py::TestScreenToActions::test_event_actions
+FAILED tests/unit/test_common_state.py::TestGameScreen::test_has_all_required_states
+FAILED tests/unit/test_lifecycle.py::test_ensure_game_up_launches_when_down
+5 failed, 1678 passed, 2 warnings in 484.59s (0:08:04)

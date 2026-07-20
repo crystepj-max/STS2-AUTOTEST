@@ -4,7 +4,7 @@
 
 ## 项目概览
 
-STS2-AUTOTEST 是一个面向杀戮尖塔 2（Slay the Spire 2）Mod 的端到端自动化测试编排框架。它填补了游戏控制工具（STS2-Cli-Mod、STS2-Agent）与测试执行之间的空白——提供状态管理、动作编排、断言 DSL、证据采集、适配器抽象和自然语言测试规格流水线。
+STS2-AUTOTEST 是面向杀戮尖塔 2 Mod 的端到端自动化测试编排框架，连接游戏控制工具与测试执行，并提供证据、规格流水线和客户端无关的统一任务入口。
 
 Python >=3.11，主要运行平台 Windows 11，开发可在 macOS 上进行。src-layout 结构，hatchling 构建后端。当前处于 Beta 阶段。
 
@@ -116,7 +116,7 @@ src/sts2_autotest/
 │   ├── loader.py    # 配置加载器（YAML + dotenv）
 │   └── errors.py    # ConfigValidationError
 ├── cli/             # CLI 入口层
-│   ├── main.py          # autotest run/review/compile/doctor/report/queue/progress/agent-test/serve/serve-mcp/gen-report 十一个子命令
+│   ├── main.py          # autotest 命令入口：任务、规格、报告、服务与截图分析
 │   ├── health_server.py # B17 健康检查 HTTP 端点（stdlib asyncio：/health、/health/live、/health/ready）
 │   ├── mcp_server.py     # B11 MCP 测试服务（serve-mcp）
 │   ├── mcp_protocol.py   # MCP 协议处理
@@ -138,12 +138,14 @@ src/sts2_autotest/
 - **B19 集成测试**：分层 CLI-only + requires_game 测试
 - **Epic10 技术债**：hooks 泄漏修复、缓存竞态修复、start_session 补齐检查点
 - **B10 修复建议**：`repair_advisor.py`，crash 证据 → 结构化修复建议（L1 规则引擎 + L2 栈解析 + L3 异常分析），集成进 EvidencePackager
-- **B11 CI/CD**：GitHub Actions 工作流（pr / push-to-main / game-integration / nightly 四套）+ JUnit XML + `serve-mcp` MCP 测试服务 + 自托管 Mac Runner 脚本
+- **B11 CI/CD**：GitHub Actions、JUnit XML、`serve-mcp` 和自托管 Runner 脚本
 - **B13 桌面通知**：`notifier.py`，Windows / macOS 运行完成通知
-- **B17 Health Check HTTP**：`cli/health_server.py`，纯 stdlib asyncio，提供 `/health`、`/health/live`、`/health/ready`
+- **B17 Health Check HTTP**：`cli/health_server.py` 提供 `/health`、`/health/live`、`/health/ready`
 - **HTML 报告 + 观测性**：`report_html.py`（`gen-report` 生成 HTML 报告）、证据包记录 autotest 版本、平台兼容性阻断在报告中可见
+- **跨 Agent 统一运行契约**：CLI/MCP 共用持久任务入口，支持幂等提交、状态查询、取消、恢复和报告读取。
+- **通用目标场景执行**：以 `target_scene`、路线规则、战斗模式和证据级别驱动公共场景；整章遍历只是目标场景组合。
 
-**测试覆盖：** ~1,279 个单元测试、~27 个集成测试、端到端冒烟测试。共 ~15,600 行源代码。
+**验证基线：** 数量和真实验收以 [`docs/cross-agent-acceptance.md`](docs/cross-agent-acceptance.md) 及最新产物为准；本文件不维护数量快照。
 
 **待实现（Beta 后续）：**
 

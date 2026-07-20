@@ -1,0 +1,9 @@
+[v11 20:16:27] capabilities operations=['capabilities', 'submit_run', 'get_run', 'cancel_run', 'resume_run', 'get_report']
+[v11 20:16:28] ORIG 提交: run-20260719-121628-17fd94a8
+[v11 20:16:28] 幂等重复提交: run-20260719-121628-17fd94a8（应与 ORIG 相同）
+[v11 20:18:36] ORIG 终态: FAILED_PLATFORM
+[v11 20:18:36] RESUME 提交: run-20260719-121836-a2bc87e9（resumed_from 应=run-20260719-121628-17fd94a8）
+[v11 20:19:43] RESUME 终态: PASSED
+[v11 20:19:43] SECOND 提交: run-20260719-121943-03c1a6cc
+[v11 20:21:56] SECOND 终态: FAILED_PLATFORM
+[v11 20:22:02] V11_PASS=False 未通过项=['orig_terminal_cancelled', 'orig_clean_main_menu', 'orig_final_state_no_saved_run', 'resume_started_from_clean_menu', 'second_terminal_cancelled', 'second_clean_main_menu', 'second_final_state_no_saved_run', 'second_started_from_clean_menu']

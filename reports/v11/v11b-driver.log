@@ -1,0 +1,5 @@
+[v11 20:44:33] capabilities operations=['capabilities', 'submit_run', 'get_run', 'cancel_run', 'resume_run', 'get_report']
+[v11 20:44:34] ORIG 提交: run-20260719-124434-f4f2fb08
+[v11 20:44:35] 幂等重复提交: run-20260719-124434-f4f2fb08（应与 ORIG 相同）
+[v11 20:47:55] ORIG 终态: FAILED_PLATFORM
+[v11 20:47:55] RESUME 提交: run-20260719-124755-c0d810eb（resumed_from 应=run-20260719-124434-f4f2fb08）

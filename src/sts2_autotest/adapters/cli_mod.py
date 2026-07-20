@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from sts2_autotest.adapters.base import ActionResult, HealthStatus
+from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthStatus
 from sts2_autotest.adapters.discovery import discover_sts2_cli
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
@@ -51,6 +51,14 @@ _SCREEN_MAP: dict[str, GameScreen] = {
     # 防御性：STS2-Agent / 新版本可能以 CARD_SELECTION 上报战后选牌子界面
     "CARD_SELECTION": GameScreen.CARD_REWARD,
     "RELIC_REWARD": GameScreen.RELIC_REWARD,
+    # 卡包选择页（Scroll Boxes 遗物触发）：CLI 可能以这些名字直接上报。
+    # 与 _get_state_sync 的数据驱动重映射（UNKNOWN + bundle_select 载荷）形成双保险。
+    "BUNDLE_SELECTION": GameScreen.BUNDLE_SELECTION,
+    "BUNDLE_SELECT": GameScreen.BUNDLE_SELECTION,
+    "CONFIRM_BUNDLE": GameScreen.BUNDLE_SELECTION,
+    # 三选一卡牌事件屏（tri_select_card / tri_select_skip）。CLI 直接以
+    # "TRI_SELECT" 上报；不映射会让导航器看到 UNKNOWN + 空动作而空转超时。
+    "TRI_SELECT": GameScreen.TRI_SELECT,
     "GAME_OVER": GameScreen.GAME_OVER,
     "VICTORY": GameScreen.VICTORY,
 }
@@ -273,6 +281,21 @@ class CliModAdapter:
         self._cache_stale = True
         self._available_actions_cache = None
 
+    async def verify_debug_actions(self) -> DebugVerification:
+        """CliMod 路径不暴露调试控制台，因此调试能力永远 NOT_SUPPORTED。
+
+        快速结束战斗（win_combat）等调试命令只通过 AgentAdapter 的 HTTP 调试
+        控制台执行；CliMod 走 sts2 CLI 子进程，没有 run_console_command 通道。
+        诚实地报告"未支持"，避免只按配置声明能力。此探测无副作用。
+        """
+        checked_at = datetime.now(timezone.utc).isoformat()
+        return DebugVerification(
+            configured=False,
+            verified=False,
+            reason="NOT_SUPPORTED",
+            checked_at=checked_at,
+        )
+
     # ── synchronous internals (wrapped by asyncio.to_thread) ──
 
     def _health_check_sync(self) -> HealthStatus:
@@ -319,6 +342,35 @@ class CliModAdapter:
         screen_raw = data.get("screen", "UNKNOWN")
         screen = self._map_screen(screen_raw)
 
+        # Data-driven remap for screens whose raw name is not (yet) in _SCREEN_MAP.
+        # The game reports the bundle-picker (Scroll Boxes relic) with a screen
+        # name that maps to UNKNOWN, but the payload carries a ``bundle_select``
+        # block with the available bundles. Without this remap the navigator sees
+        # UNKNOWN + no actions and stalls until the journey timeout (observed:
+        # a 10-minute silent hang after ``choose_event`` led into a bundle pick).
+        if screen == GameScreen.UNKNOWN:
+            bundle_block = data.get("bundle_select")
+            if isinstance(bundle_block, dict) and bundle_block.get("bundles"):
+                logger.warning(
+                    "remapped unmapped screen %r -> BUNDLE_SELECTION "
+                    "(bundle_select present)",
+                    screen_raw,
+                )
+                screen = GameScreen.BUNDLE_SELECTION
+            else:
+                tri_block = data.get("tri_select")
+                if isinstance(tri_block, dict) and tri_block.get("cards"):
+                    logger.warning(
+                        "remapped unmapped screen %r -> TRI_SELECT "
+                        "(tri_select present)",
+                        screen_raw,
+                    )
+                    screen = GameScreen.TRI_SELECT
+                else:
+                    # Surface the raw screen name so future unmapped screens can be
+                    # diagnosed instead of silently degrading to UNKNOWN.
+                    logger.warning("unmapped game screen name: %r", screen_raw)
+
         # Build GameState with screen + extra fields from CLI
         state = GameState(screen=screen, **_filter_state_extra(data))
         # Don't cache UNKNOWN — the settle loop needs fresh state on every poll
@@ -352,10 +404,15 @@ class CliModAdapter:
         # return_to_menu is a setup recovery step that is already satisfied.
         if action == "probe":
             return ActionResult(status="success", state_changed=False)
-        if action in {"return_to_menu", "start_new_run", "select_character", "embark"}:
+        if action in {"start_new_run", "select_character", "embark"}:
             cur = self._cached_state
             if cur is not None and cur.screen in {GameScreen.EVENT, GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return ActionResult(status="success", state_changed=False)
+        # 注：return_to_menu 不再在此短路为「空操作成功」。sts2 CLI 的
+        # return_to_menu 仅支持 GAME_OVER/VICTORY 屏；局内（EVENT/MAP/COMBAT/
+        # CARD_REWARD）若被当作可用动作调用，必须真正下发 CLI 并由上层
+        # reset_to_main_menu 的受控重启兜底处理，不能再假报成功（修复：
+        # 「reported success but produced no observable state change」）。
         if action == "advance_dialogue" and self._cached_state is not None:
             cur = self._cached_state
             if cur.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
@@ -406,6 +463,18 @@ class CliModAdapter:
         if action == "enter_combat" and self._cached_state is not None:
             if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return ActionResult(status="success", state_changed=False)
+        if action == "bundle_select":
+            # Bundle picker (Scroll Boxes relic) is a two-step CLI flow:
+            # ``bundle_select <index>`` previews, ``bundle_confirm`` commits.
+            # Collapse it into one deterministic compound so the stateless
+            # navigator does not need to remember the preview step.
+            idx = 0
+            if args and args.get("index") is not None:
+                try:
+                    idx = int(args["index"])
+                except (TypeError, ValueError):
+                    idx = 0
+            return self._bundle_select_and_confirm_sync(idx)
         if action == "combat_basic_policy":
             return self._combat_basic_policy_sync()
         if action == "skip_card_reward":
@@ -483,6 +552,34 @@ class CliModAdapter:
             if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
                 return ActionResult(status="timeout", state_changed=False, detail=exc.message)
             return ActionResult(status="failure", state_changed=False, detail=exc.message)
+
+    def _bundle_select_and_confirm_sync(self, index: int) -> ActionResult:
+        """Preview then confirm a bundle (Scroll Boxes relic picker).
+
+        The CLI exposes this as two commands — ``bundle_select <index>`` to
+        preview and ``bundle_confirm`` to commit. We run both so a single
+        framework action fully resolves the BUNDLE_SELECTION screen and the
+        game advances (typically back to MAP/EVENT), instead of leaving the
+        navigator stuck on a half-picked bundle.
+        """
+        try:
+            raw = self._run_cli("bundle_select", str(index))
+            self._parse_response(raw)
+            self._cache_stale = True
+            self._available_actions_cache = None
+            # Give the preview a moment to register, then confirm.
+            time.sleep(0.3)
+            raw2 = self._run_cli("bundle_confirm")
+            self._parse_response(raw2)
+            self._cache_stale = True
+            self._available_actions_cache = None
+            return ActionResult(status="success", state_changed=True)
+        except STS2Error as exc:
+            self._cache_stale = True
+            self._available_actions_cache = None
+            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+                return ActionResult(status="timeout", state_changed=True, detail=exc.message)
+            return ActionResult(status="failure", state_changed=True, detail=exc.message)
 
     def _combat_basic_policy_sync(self) -> ActionResult:
         deadline = time.monotonic() + min(self.timeout, 60.0)
@@ -690,15 +787,16 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
     _ACTIONS: dict[GameScreen, list[str]] = {
         GameScreen.MAIN_MENU: ["start_new_run", "new_run", "continue_run", "abandon_run", "choose_game_mode", "probe", "return_to_menu"],
         GameScreen.CHARACTER_SELECT: ["select_character", "set_ascension", "embark", "probe"],
-        GameScreen.MAP: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_map_node", "proceed", "choose_event", "advance_dialogue", "probe"],
-        GameScreen.COMBAT: ["return_to_menu", "start_new_run", "select_character", "embark", "enter_combat", "choose_map_node", "choose_event", "advance_dialogue", "combat_basic_policy", "give_card", "play_card", "end_turn", "use_potion", "probe"],
+        GameScreen.MAP: ["start_new_run", "select_character", "embark", "choose_map_node", "proceed", "choose_event", "advance_dialogue", "probe"],
+        GameScreen.COMBAT: ["start_new_run", "select_character", "embark", "enter_combat", "choose_map_node", "choose_event", "advance_dialogue", "combat_basic_policy", "give_card", "play_card", "end_turn", "use_potion", "probe"],
         GameScreen.SHOP: ["shop_buy_card", "shop_buy_relic", "shop_buy_potion", "shop_remove_card", "probe"],
         GameScreen.REST: ["choose_rest_option", "probe"],
-        GameScreen.EVENT: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
+        GameScreen.EVENT: ["start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
         GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
-        GameScreen.BUNDLE_SELECTION: ["choose_bundle", "confirm_bundle", "probe"],
+        GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "probe"],
+        GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "probe"],
         GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
-        GameScreen.CARD_REWARD: ["return_to_menu", "start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],
+        GameScreen.CARD_REWARD: ["start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],
         GameScreen.RELIC_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
         GameScreen.GAME_OVER: ["return_to_menu", "probe"],
         GameScreen.VICTORY: ["return_to_menu", "probe"],
@@ -709,7 +807,6 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
 def _state_to_actions(state: GameState) -> list[str]:
     if getattr(state, "grid_card_select", None) is not None:
         return [
-            "return_to_menu",
             "start_new_run",
             "select_character",
             "embark",
@@ -836,6 +933,7 @@ _POSITIONAL_ARG_KEYS: dict[str, tuple[str, ...]] = {
     "select_character": ("character_id",),
     "choose_map_node": ("col", "row"),
     "choose_event": ("index",),
+    "bundle_select": ("index",),
     "choose_rest_option": ("index",),
     "grid_card_select": ("index",),
     "hand_select_card": ("card_ids",),

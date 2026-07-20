@@ -1,0 +1,9 @@
+[v11 07:16:47] capabilities operations=['capabilities', 'submit_run', 'get_run', 'cancel_run', 'resume_run', 'get_report']
+[v11 07:16:48] ORIG 提交: run-20260719-231648-5ffe6829
+[v11 07:16:49] 幂等重复提交: run-20260719-231648-5ffe6829（应与 ORIG 相同）
+[v11 07:18:06] ORIG 终态: CANCELLED
+[v11 07:18:06] RESUME 提交: run-20260719-231806-8f123c65（resumed_from 应=run-20260719-231648-5ffe6829）
+[v11 07:18:47] RESUME 终态: PASSED
+[v11 07:18:48] SECOND 提交: run-20260719-231848-a41cf0c0
+[v11 07:20:46] SECOND 终态: CANCELLED
+[v11 07:20:51] V11_PASS=True 未通过项=无

@@ -1,0 +1,4 @@
+[v11 22:22:57] capabilities operations=['capabilities', 'submit_run', 'get_run', 'cancel_run', 'resume_run', 'get_report']
+[v11 22:22:58] ORIG 提交: run-20260719-142258-36e8ec46
+[v11 22:22:59] 幂等重复提交: run-20260719-142258-36e8ec46（应与 ORIG 相同）
+[v11 22:33:01] ORIG 未真实进入局内，拒绝取消（避免假取消），验收终止

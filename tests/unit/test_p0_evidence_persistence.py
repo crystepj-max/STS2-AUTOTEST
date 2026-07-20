@@ -9,8 +9,130 @@ from pathlib import Path
 
 from sts2_autotest.cli.main import _write_journey_evidence
 from sts2_autotest.cli.mcp_tools import read_run_report
+from sts2_autotest.core.evidence_hooks import build_evidence_hooks
 from sts2_autotest.core.run_service import RunRequest, RunStore
 from sts2_autotest.evidence.packager import EvidencePackager
+
+
+def _place_declared_files(pack_dir: Path, *, with_log: bool = True) -> None:
+    """把 _write_journey_evidence 声明的文件全部预置到 pack_dir，避免清单记 missing。"""
+    _write_json(pack_dir / "summary.json", {"status": "CANCELLED"})
+    _write_json(pack_dir / "summary.md", {"note": "x"})
+    _write_json(pack_dir / "reports" / "journey-trace.json", {"journey": "first_battle"})
+    _write_json(pack_dir / "reports" / "junit.xml", {"x": 1})
+    _write_json(pack_dir / "reports" / "run-result.json", {"status": "CANCELLED"})
+    if with_log:
+        (pack_dir / "logs").mkdir(parents=True, exist_ok=True)
+        (pack_dir / "logs" / "game.log").write_text("log content", encoding="utf-8")
+
+
+def test_cancel_seal_order_leaves_consistent_internal_manifest(tmp_path: Path) -> None:
+    """P0 修复回归：取消收尾的最终封存必须让压缩包内证据清单与真实内容一致。
+
+    复刻取消 handler 顺序：写 run-result.json → 生成清单 → on_session_end 封存
+    → persist → 最终清单 → refresh_artifact 最终封存。最终解压核对内部清单
+    missing_files==[] 且 archive.status=='verified'、日志数与压缩包一致。
+    """
+    run_id = "run-p0-cancel-seal"
+    packager = EvidencePackager(tmp_path)
+    pack_dir = packager.create_pack(run_id, run_result="cancelled", duration_ms=999)
+    _place_declared_files(pack_dir, with_log=True)
+
+    hooks = build_evidence_hooks(tmp_path, pack_id=run_id)
+    # 1) 首次清单（run-result.json 已存在）
+    _write_journey_evidence(
+        tmp_path, run_id, journey="first_battle", target_scene="MAP",
+        evidence={"scene_trajectory": ["MAIN_MENU", "MAP"]}, duration_ms=999,
+    )
+    # 2) on_session_end → 封存（SEAL #1）
+    hooks.on_session_end({
+        "total": 1, "passed": 0, "failed": 0, "crashed": 0, "skipped": 1,
+        "duration_ms": 999, "status": "CANCELLED",
+    })
+    # 3) persist_artifact_path：把压缩包路径写回 run-result.json
+    zips = sorted(tmp_path.glob(f"artifacts/{run_id}_*.zip"))
+    assert zips, "on_session_end 应已生成压缩包"
+    payload = json.loads((pack_dir / "reports" / "run-result.json").read_text(encoding="utf-8"))
+    payload["artifact_path"] = str(zips[-1].resolve())
+    payload["evidence_pack_url"] = str(zips[-1].resolve())
+    (pack_dir / "reports" / "run-result.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    # 4) 最终清单（压缩包已存在 → archive 可校验）
+    _write_journey_evidence(
+        tmp_path, run_id, journey="first_battle", target_scene="MAP",
+        evidence={"scene_trajectory": ["MAIN_MENU", "MAP"]}, duration_ms=999,
+    )
+    # 5) refresh_artifact → 最终封存（SEAL #2，必须排在最终清单之后）
+    hooks.refresh_artifact()
+
+    final_zip = sorted(tmp_path.glob(f"artifacts/{run_id}_*.zip"))[-1]
+    with zipfile.ZipFile(final_zip) as archive:
+        inner = next(
+            n for n in archive.namelist() if n.endswith("evidence-manifest.json")
+        )
+        manifest = json.loads(archive.read(inner))
+
+    assert manifest["missing_files"] == [], manifest["missing_files"]
+    assert manifest["log_count"] == 1
+    assert manifest["archive"]["status"] == "verified"
+    assert manifest["archive"]["counts_match"] is True
+    # 清单自身也应被封入压缩包
+    assert any(n.endswith("evidence-manifest.json") for n in archive.namelist())
+
+
+def test_cancel_seal_before_final_manifest_is_stale_regression(tmp_path: Path) -> None:
+    """反向守卫：复刻原始 bug 顺序，证明压缩包内清单会停留在陈旧快照。
+
+    原始 bug：先生成清单（此时 run-result.json 尚不存在 → 被记为缺失），
+    再 on_session_end 封存 + refresh_artifact 二次封存（均未重算清单），
+    最后才落盘 run-result.json 并重算清单（但不再 reseal）。结果压缩包内
+    清单声称 run-result.json 缺失，与压缩包真实内容矛盾。
+    """
+    run_id = "run-p0-cancel-stale"
+    packager = EvidencePackager(tmp_path)
+    pack_dir = packager.create_pack(run_id, run_result="cancelled", duration_ms=999)
+    # 预置除 run-result.json 外的声明文件，复刻「清单在 run-result.json 落盘前生成」
+    _write_json(pack_dir / "summary.json", {"status": "CANCELLED"})
+    _write_json(pack_dir / "summary.md", {"note": "x"})
+    _write_json(pack_dir / "reports" / "journey-trace.json", {"journey": "first_battle"})
+    _write_json(pack_dir / "reports" / "junit.xml", {"x": 1})
+    (pack_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (pack_dir / "logs" / "game.log").write_text("log content", encoding="utf-8")
+
+    hooks = build_evidence_hooks(tmp_path, pack_id=run_id)
+    # 1) 先生成清单（run-result.json 尚不存在 → 记缺失）
+    _write_journey_evidence(
+        tmp_path, run_id, journey="first_battle", target_scene="MAP",
+        evidence={"scene_trajectory": ["MAIN_MENU", "MAP"]}, duration_ms=999,
+    )
+    # 2) on_session_end 封存（SEAL #1，含陈旧清单）
+    hooks.on_session_end({
+        "total": 1, "passed": 0, "failed": 0, "crashed": 0, "skipped": 1,
+        "duration_ms": 999, "status": "CANCELLED",
+    })
+    # 3) refresh_artifact 再次封存（SEAL #2，仍是陈旧清单，未重算）
+    hooks.refresh_artifact()
+    # 4) 此刻才落盘 run-result.json + 重算清单，但不再 reseal
+    _write_json(pack_dir / "reports" / "run-result.json", {"status": "CANCELLED"})
+    _write_journey_evidence(
+        tmp_path, run_id, journey="first_battle", target_scene="MAP",
+        evidence={"scene_trajectory": ["MAIN_MENU", "MAP"]}, duration_ms=999,
+    )
+
+    stale_zip = sorted(tmp_path.glob(f"artifacts/{run_id}_*.zip"))[-1]
+    with zipfile.ZipFile(stale_zip) as archive:
+        inner = next(
+            n for n in archive.namelist() if n.endswith("evidence-manifest.json")
+        )
+        manifest = json.loads(archive.read(inner))
+    # 压缩包内清单停留在陈旧快照：run-result.json 被记为缺失（或 archive 不可用）
+    inconsistent = (
+        "reports/run-result.json" in manifest["missing_files"]
+        or manifest["archive"]["status"] != "verified"
+    )
+    assert inconsistent, "坏顺序竟产生了自洽清单，说明守卫假设失效"
+
 
 
 def _write_json(path: Path, value: dict) -> None:

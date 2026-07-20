@@ -347,3 +347,106 @@ class TestZombieTriggersTermination:
             status = _run(w.terminate_session())
         assert status == SessionStatus.TERMINATED
         callback.assert_called_once_with("test detection")
+
+
+# ── 修复五-B：环境事故止损 ────────────────────────────────────
+
+
+class TestEnvironmentIncident:
+    """修复五-B：GUI 采集与游戏控制同时异常 → 环境事故，止损而非无限重启。"""
+
+    def test_gui_healthy_by_default_without_probe(self) -> None:
+        """未注入 GUI 探针时保持旧行为：视为 GUI 健康，走正常僵尸路径。"""
+        w = Watchdog(game_pid=123, adapter=_make_adapter())
+        assert w._gui_healthy() is True
+
+    def test_gui_probe_failure_is_unhealthy(self) -> None:
+        """GUI 探针返回 False → 判定 GUI 不可用。"""
+        w = Watchdog(game_pid=123, adapter=_make_adapter(), gui_probe=lambda: False)
+        assert w._gui_healthy() is False
+
+    def test_gui_probe_exception_treated_as_unhealthy(self) -> None:
+        """GUI 探针自身抛错也算 GUI 采集失败，绝不冒泡。"""
+        def _boom() -> bool:
+            raise RuntimeError("screen capture blew up")
+
+        w = Watchdog(game_pid=123, adapter=_make_adapter(), gui_probe=_boom)
+        assert w._gui_healthy() is False
+
+    def test_zombie_with_gui_down_marks_environment_incident(self) -> None:
+        """游戏控制异常 + GUI 采集同时失败 → 环境事故，不进入终止/重启流程。"""
+        from sts2_autotest.common.errors import EnvironmentIncidentReason
+
+        incident_cb = MagicMock()
+        zombie_cb = MagicMock()
+        w = Watchdog(
+            game_pid=456,
+            adapter=_make_adapter(),
+            gui_probe=lambda: False,
+            on_zombie=zombie_cb,
+            on_environment_incident=incident_cb,
+        )
+        with patch.object(w, "terminate_session") as mock_term:
+            handled = w.evaluate_detection("game process PID 456 is dead")
+        assert handled == "environment_incident"
+        assert w.status == SessionStatus.TERMINATED
+        assert (
+            w.environment_incident_reason
+            == EnvironmentIncidentReason.GUI_SESSION_UNAVAILABLE.value
+        )
+        mock_term.assert_not_called()          # 环境事故不重启游戏
+        zombie_cb.assert_not_called()          # 不走僵尸恢复回调
+        incident_cb.assert_called_once()
+
+    def test_zombie_with_gui_healthy_is_normal_zombie(self) -> None:
+        """仅游戏控制异常、GUI 采集正常 → 普通僵尸，正常终止（合法重启候选）。"""
+        zombie_cb = MagicMock()
+        w = Watchdog(
+            game_pid=456,
+            adapter=_make_adapter(),
+            gui_probe=lambda: True,
+            on_zombie=zombie_cb,
+        )
+        assert w.evaluate_detection("heartbeat timeout after 60s") == "zombie"
+        assert w.status == SessionStatus.ZOMBIE
+        zombie_cb.assert_called_once()
+
+
+class TestRestartGuardrail:
+    """修复五-B：护栏计数，禁止无限重启。"""
+
+    def test_initial_budget_not_exhausted(self) -> None:
+        w = Watchdog(game_pid=1, adapter=_make_adapter(), max_restart_budget=3)
+        assert w.restart_budget_exhausted() is False
+        assert w.restart_count == 0
+
+    def test_note_restart_consumes_budget(self) -> None:
+        w = Watchdog(game_pid=1, adapter=_make_adapter(), max_restart_budget=2)
+        assert w.note_restart() is True   # 1/2
+        assert w.note_restart() is True   # 2/2
+        assert w.restart_budget_exhausted() is True
+        assert w.note_restart() is False  # 拒绝：预算耗尽
+        assert w.restart_count == 2
+
+    def test_exhausted_budget_downgrades_zombie_to_incident(self) -> None:
+        """重启预算耗尽后再检出僵尸 → 转判环境事故止损，不再终止重启。"""
+        from sts2_autotest.common.errors import EnvironmentIncidentReason
+
+        incident_cb = MagicMock()
+        w = Watchdog(
+            game_pid=456,
+            adapter=_make_adapter(),
+            gui_probe=lambda: True,      # GUI 正常，本应是普通僵尸
+            max_restart_budget=1,
+            on_environment_incident=incident_cb,
+        )
+        assert w.note_restart() is True  # 耗尽预算
+        with patch.object(w, "terminate_session") as mock_term:
+            handled = w.evaluate_detection("game process PID 456 is dead")
+        assert handled == "environment_incident"
+        assert (
+            w.environment_incident_reason
+            == EnvironmentIncidentReason.GAME_CONTROL_LOST.value
+        )
+        mock_term.assert_not_called()
+        incident_cb.assert_called_once()

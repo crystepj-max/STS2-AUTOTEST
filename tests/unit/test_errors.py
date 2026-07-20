@@ -5,10 +5,41 @@ from datetime import datetime, timezone
 import pytest
 
 from sts2_autotest.common.errors import (
+    BLOCKED_ENVIRONMENT,
     AdapterErrorSubType,
+    CancelFailureReason,
+    EnvironmentBlockReason,
+    EnvironmentIncidentReason,
     ErrorCategory,
     STS2Error,
 )
+
+
+class TestEnvironmentReasons:
+    """Environment block / incident / cancel reason enums (P1 lifecycle)."""
+
+    def test_block_reasons_present(self) -> None:
+        expected = {
+            "GAME_CONTROL_UNAVAILABLE", "GAME_START_FAILED", "GAME_PROCESS_STALE",
+            "GAME_READINESS_TIMEOUT", "GUI_SESSION_UNAVAILABLE",
+        }
+        assert expected == {r.name for r in EnvironmentBlockReason}
+
+    def test_incident_reasons_present(self) -> None:
+        expected = {"WINDOWSERVER_UNHEALTHY", "GUI_SESSION_UNAVAILABLE", "GAME_CONTROL_LOST"}
+        assert expected == {r.name for r in EnvironmentIncidentReason}
+
+    def test_cancel_reasons_present(self) -> None:
+        expected = {"CANCEL_CLEANUP_FAILED", "CANCEL_EVIDENCE_FAILED", "GAME_CONTROL_UNAVAILABLE"}
+        assert expected == {r.name for r in CancelFailureReason}
+
+    def test_reasons_are_string_enums_with_name_equal_value(self) -> None:
+        for reason in list(EnvironmentBlockReason) + list(EnvironmentIncidentReason) + list(CancelFailureReason):
+            assert isinstance(reason, str)
+            assert reason.value == reason.name
+
+    def test_blocked_environment_constant(self) -> None:
+        assert BLOCKED_ENVIRONMENT == "BLOCKED_ENVIRONMENT"
 
 
 class TestErrorCategory:

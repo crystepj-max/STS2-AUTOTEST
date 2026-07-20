@@ -8,6 +8,7 @@ import ctypes
 import os
 import platform
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,7 +81,7 @@ time.sleep(settle)
     try:
         result = subprocess.run(
             [
-                "python3",
+                sys.executable,
                 "-c",
                 script,
                 str(window_id),
@@ -137,7 +138,7 @@ if candidates:
 '''
     try:
         result = subprocess.run(
-            ["python3", "-c", script, window_title],
+            [sys.executable, "-c", script, window_title],
             capture_output=True,
             text=True,
             timeout=15.0,
@@ -152,7 +153,12 @@ if candidates:
     if len(fields) != 5:
         return None
     try:
-        return int(fields[0]), tuple(int(value) for value in fields[1:5])
+        return int(fields[0]), (
+            int(fields[1]),
+            int(fields[2]),
+            int(fields[3]),
+            int(fields[4]),
+        )
     except ValueError:
         return None
 
@@ -197,7 +203,7 @@ print(f"{width}\t{height}\t{min(ratios):.6f}")
 '''
     try:
         result = subprocess.run(
-            ["python3", "-c", script, str(path)],
+            [sys.executable, "-c", script, str(path)],
             capture_output=True,
             text=True,
             timeout=15.0,
@@ -346,7 +352,7 @@ if png_data is None or not png_data.writeToFile_atomically_(path, True):
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run(
             [
-                "python3",
+                sys.executable,
                 "-c",
                 script,
                 str(raw_path),

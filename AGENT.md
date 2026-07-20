@@ -23,19 +23,18 @@ STS2-AUTOTEST 是面向《杀戮尖塔 2》（Slay the Spire 2）Mod 的端到�
 - Beta Epics/Story 拆解：`_bmad-output/planning-artifacts/beta-epics.md`
 - Sprint 状态：`_bmad-output/implementation-artifacts/sprint-status.yaml`
 - STS2-Cli-Mod CLI 参考：`docs/sts2-cli-mod-reference.md`
+- 跨 Agent 任务与验收：`docs/unified-run-contract.md`、`docs/cross-agent-acceptance.md`、`docs/platform-capability-inventory.md`
 
 ## 当前交付状态
 
-截至 `2026-06-17`：
+截至 `2026-07-16`：
 
-- Epic 1（Foundation & Game Control）：`done`
-- Epic 2（Test Authoring & Execution）：`done`
-- Epic 3（Evidence & Observability）：`done`
-- Epic 4（Resilience & Operational Safety）：`done`
-- Epic 5（Runtime Control）：`done`
-- Beta 扩展（B7 AgentAdapter、B8 Visual QA 稳定版、B10 修复建议、B11 CI/CD、B13 桌面通知、B17 Health Check HTTP、B25 NL 流水线）：`done`
+- 基础编排、证据收集、队列与恢复、自然语言规格、Agent 接入、MCP 服务和 HTML 报告已合入主干。
+- 跨 Agent 统一任务入口已具备 CLI/MCP 两种接入方式，支持任务编号、状态查询、取消、恢复、幂等提交和报告读取。
+- 通用目标场景能力已具备；整章遍历仍是目标场景组合，不代表所有项目或所有外部 Agent 已完成真实验收。
+- 真实游戏首战复验已验证开局到地图及失败留证；进入战斗仍受外部控制接口版本不匹配阻塞，不能标记为完整通过。
 
-剩余事项以 `docs/beta-roadmap.md` 为准（主要为：真实环境验收补跑、B15 安全沙箱、B9 多人冒烟、B6 覆盖率报告）。
+剩余事项以 `docs/beta-roadmap.md` 为准（主要为：真实环境验收补跑、具体客户端外部实测、B15 安全沙箱、B9 多人冒烟、B6 覆盖率报告）。
 
 ## 必须暂停并请求决策的情况
 

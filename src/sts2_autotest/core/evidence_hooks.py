@@ -257,8 +257,12 @@ class RealEvidenceHooks:
             failed = summary.get("failed", 0)
             crashed = summary.get("crashed", 0)
             declared_status = str(summary.get("status", "")).upper()
+            # 取消是独立终态，绝不能回退成通过：0 失败 + 0 跳过在取消场景下
+            # 会被错误映射成 passed，因此 CANCELLED 必须显式优先判定。
             run_result = (
-                "blocked"
+                "cancelled"
+                if declared_status == "CANCELLED"
+                else "blocked"
                 if declared_status == "BLOCKED_ENVIRONMENT"
                 else "failed"
                 if (failed + crashed) > 0

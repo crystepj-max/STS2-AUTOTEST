@@ -1,0 +1,15 @@
+  /Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/src/sts2_autotest/core/test_agent_runner.py:706: PytestCollectionWarning: cannot collect test class 'TestAgentRunner' because it has a __init__ constructor (from: tests/unit/test_agent_runner_visual_qa.py)
+    class TestAgentRunner:
+
+src/sts2_autotest/core/test_agent_runner.py:706
+  /Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/src/sts2_autotest/core/test_agent_runner.py:706: PytestCollectionWarning: cannot collect test class 'TestAgentRunner' because it has a __init__ constructor (from: tests/unit/test_smoke_card_validation.py)
+    class TestAgentRunner:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/unit/test_cli_command_mapping.py::TestScreenToActions::test_map_actions
+FAILED tests/unit/test_cli_command_mapping.py::TestScreenToActions::test_combat_actions
+FAILED tests/unit/test_cli_command_mapping.py::TestScreenToActions::test_event_actions
+FAILED tests/unit/test_common_state.py::TestGameScreen::test_has_all_required_states
+FAILED tests/unit/test_lifecycle.py::test_ensure_game_up_launches_when_down
+5 failed, 1668 passed, 2 warnings in 549.70s (0:09:09)

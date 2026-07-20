@@ -1,0 +1,9 @@
+[v11 11:40:52] capabilities operations=['capabilities', 'submit_run', 'get_run', 'cancel_run', 'resume_run', 'get_report']
+[v11 11:40:53] ORIG 提交: run-20260720-034053-dcbc1294
+[v11 11:40:53] 幂等重复提交: run-20260720-034053-dcbc1294（应与 ORIG 相同）
+[v11 11:42:09] ORIG 终态: CANCELLED
+[v11 11:42:10] RESUME 提交: run-20260720-034210-4a728cc1（resumed_from 应=run-20260720-034053-dcbc1294）
+[v11 11:42:56] RESUME 终态: PASSED
+[v11 11:42:57] SECOND 提交: run-20260720-034257-7568a673
+[v11 11:45:05] SECOND 终态: CANCELLED
+[v11 11:45:10] V11_PASS=True 未通过项=无

@@ -282,3 +282,43 @@ def test_enter_first_battle_translates_blocked_to_failure_with_last_state() -> N
         assert isinstance(exc.last_state, dict)
         assert exc.last_state.get("screen") == "EVENT"
         assert "EVENT" in run.trajectory
+
+
+def test_cancel_check_stops_before_the_next_game_operation() -> None:
+    """修复三：收到取消后，旅程不再发起新的游戏操作，抛出 JourneyCancelled
+    并带上取消前的状态快照，供收尾时留证。"""
+    from sts2_autotest.core.journeys import JourneyCancelled
+
+    adapter = _Adapter()
+    acted: list[str] = []
+    original_act = adapter.act
+
+    async def _tracking_act(action: str, params: dict | None = None):
+        acted.append(action)
+        return await original_act(action, params)
+
+    adapter.act = _tracking_act  # type: ignore[method-assign]
+
+    # 第一次动作后即请求取消：此后不得再有任何游戏操作。
+    calls = {"n": 0}
+
+    def cancel_check() -> bool:
+        calls["n"] += 1
+        return calls["n"] > 1
+
+    run = GenericJourneys(adapter, cancel_check=cancel_check)
+
+    try:
+        asyncio.run(run.start_new_run("IRONCLAD"))
+        raise AssertionError("expected JourneyCancelled")
+    except JourneyCancelled as exc:
+        assert isinstance(exc.last_state, dict)
+        # 只允许执行到取消被观察到的那一刻，之后不再新增操作。
+        assert len(acted) <= 1
+
+
+def test_cancel_check_absent_runs_to_completion() -> None:
+    """不传 cancel_check 时行为不变，旅程正常跑完。"""
+    adapter = _Adapter()
+    result = asyncio.run(GenericJourneys(adapter).start_new_run("IRONCLAD"))
+    assert result["screen"] == "MAP"

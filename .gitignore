@@ -88,9 +88,3 @@ tests/output/
 
 # Local agent collaboration protocol and handoffs
 .agent-collab/
-docs/process/specs/cases/TC-EXAMPLEMOD-COMBAT-END.md
-docs/process/specs/cases/TC-EXAMPLEMOD-COMBAT-START.md
-docs/process/specs/suites/SUITE-EXAMPLEMOD-SMOKE.md
-tests/generated/test_suite_examplemod_smoke.py
-tests/generated/test_tc_examplemod_combat_end.py
-tests/generated/test_tc_examplemod_combat_start.py

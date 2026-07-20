@@ -22,6 +22,7 @@ class GameScreen(StrEnum):
     EVENT = "EVENT"
     CHEST = "CHEST"
     BUNDLE_SELECTION = "BUNDLE_SELECTION"
+    TRI_SELECT = "TRI_SELECT"
     BOSS_REWARD = "BOSS_REWARD"
     CARD_REWARD = "CARD_REWARD"
     RELIC_REWARD = "RELIC_REWARD"
@@ -65,6 +66,9 @@ _ALLOWED_TRANSITIONS: dict[GameScreen, frozenset[GameScreen]] = {
     GameScreen.EVENT: frozenset({GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}),
     GameScreen.CHEST: frozenset({GameScreen.MAP}),
     GameScreen.BUNDLE_SELECTION: frozenset({
+        GameScreen.EVENT, GameScreen.MAP,
+    }),
+    GameScreen.TRI_SELECT: frozenset({
         GameScreen.EVENT, GameScreen.MAP,
     }),
     GameScreen.CARD_REWARD: frozenset({GameScreen.MAP}),

@@ -242,7 +242,7 @@ MOD CI 示例（Gawain `.github/workflows/test.yml`）：
 ### 6.4 磁盘空间不足
 
 **现象**：每夜构建证据包累积。
-**策略**：CI job 中调用现有 DiskGuard 检查。证据包保留最近 7 天，`ci-nightly.yml` 末尾自动清理旧包。
+**策略**：CI job 中调用现有 DiskGuard 检查。证据包保留期限为 7 天，`ci-nightly.yml` 末尾自动清理旧包。
 
 ---
 

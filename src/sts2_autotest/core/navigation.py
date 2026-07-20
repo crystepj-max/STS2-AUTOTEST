@@ -449,6 +449,11 @@ def choose_progress_action(
     if screen == "MAIN_MENU":
         if "open_character_select" in actions:
             return "open_character_select", {}
+        # 有可恢复存档时，主菜单的「推进」语义是继续存档（进入 MAP/局内），
+        # 而非丢弃。否则 resume_run 在回到主菜单时会被导航器误选 abandon_run
+        # 而 FAIL（"No saved run exists"）。abandon_run 仅作为无存档时的兜底。
+        if "continue_run" in actions:
+            return "continue_run", {}
         if "abandon_run" in actions:
             return "abandon_run", {}
 
@@ -527,7 +532,7 @@ def choose_progress_action(
             return "win_combat", {}
         return _basic_combat_action(state, actions)
 
-    if "tri_select_skip" in actions:
+    if "tri_select_skip" in actions and screen != "TRI_SELECT":
         return "tri_select_skip", {}
     if "grid_select_skip" in actions:
         return "grid_select_skip", {}
@@ -566,11 +571,31 @@ def choose_progress_action(
 
 
     if screen == "BUNDLE_SELECTION":
-        # 卡包选择页：无人值守时选择第一个卡包，再由下一轮处理确认页。
-        if "choose_bundle" in actions:
-            return "choose_bundle", {"option_index": 0}
-        if "confirm_bundle" in actions:
-            return "confirm_bundle", {}
+        # 卡包选择页（Scroll Boxes 遗物）：真实 CLI 动作是 bundle_select <index>
+        # （预览）+ bundle_confirm（确认），二者被适配器合并为单个 bundle_select
+        # 复合动作，一步预览并确认第一个卡包。旧代码用的 choose_bundle /
+        # confirm_bundle 是不存在的命令，会导致该页永远卡在 UNKNOWN。
+        if "bundle_select" in actions:
+            return "bundle_select", {"index": 0}
+        if "bundle_confirm" in actions:
+            return "bundle_confirm", {}
+
+    if screen == "TRI_SELECT":
+        # 三选一卡牌事件屏：真实 CLI 动作是 tri_select_card <card_ids>
+        # （选一张）/ tri_select_skip（跳过，若允许）。导航器默认选第一张卡
+        # 向 MAP 推进；若无可选项则尝试跳过。旧逻辑因屏幕被映射成 UNKNOWN
+        # 而卡死（available_actions 为空），现已由适配器正确映射 TRI_SELECT。
+        tri = state.get("tri_select") or {}
+        cards = tri.get("cards") or []
+        if cards:
+            first = cards[0]
+            cid = first.get("card_id")
+            if cid is None:
+                cid = first.get("index")
+            if cid is not None:
+                return "tri_select_card", {"card_id": str(cid)}
+        if "tri_select_skip" in actions:
+            return "tri_select_skip", {}
 
     if screen == "CHEST":
         for ca in ("open_chest", "choose_treasure_relic", "pick_relic", "proceed"):
@@ -653,6 +678,10 @@ async def progress_until(
     last_action_success = False
     last_action: str | None = None
     pseudo_combat_seen = False
+    # UNKNOWN 兜底：记录首次“屏幕为 UNKNOWN 且无任何可执行动作”的时刻，
+    # 一旦持续超过 no_progress_timeout 即快速失败并回传原始 screen 名，
+    # 避免未映射屏幕（如新增的卡包页）让主循环空转到 deadline（曾静默卡死 10 分钟）。
+    unknown_stuck_since: float | None = None
 
     while time.monotonic() < deadline:
         state = await get_state()
@@ -727,8 +756,32 @@ async def progress_until(
                     last_action=last_action,
                     reason_code="NO_PROGRESS",
                 )
+            # UNKNOWN 兜底：屏幕无法识别且没有任何可执行动作时，若尝试 recover 无效，
+            # 持续超过 no_progress_timeout 即快速失败，回传原始 screen 名便于补映射，
+            # 绝不空转到 deadline（历史上曾因未映射的卡包页静默卡死约 10 分钟）。
+            if screen == "UNKNOWN":
+                now = time.monotonic()
+                if unknown_stuck_since is None:
+                    unknown_stuck_since = now
+                    if recover is not None:
+                        recovered = await recover()
+                        if recovered:
+                            unknown_stuck_since = None
+                            await asyncio.sleep(delay)
+                            continue
+                elif now - unknown_stuck_since >= no_progress_timeout:
+                    raw_screen = state.get("screen")
+                    raise NavigationBlocked(
+                        f"屏幕无法识别为已知页面（screen={raw_screen!r}）且无任何可执行动作，"
+                        f"持续 {no_progress_timeout:.0f} 秒无进展；可能是未映射的新屏幕，"
+                        f"需在 _SCREEN_MAP / choose_progress_action 中补充映射",
+                        last_state=last_state,
+                        last_action=last_action,
+                        reason_code="UNKNOWN_SCREEN_STUCK",
+                    )
             await asyncio.sleep(delay)
             continue
+        unknown_stuck_since = None
 
         action_name, params = spec
         last_action = action_name

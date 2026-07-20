@@ -1,0 +1,35 @@
+=== 现场探针：_recover_main_menu_via_restart 完整执行 ===
+  [帧 23:41:30] screen=UNKNOWN has_save=None actions=[]
+  [帧 23:41:33] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:33] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:33] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:33] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:34] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:35] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:36] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:38] screen=MAIN_MENU has_save=None actions=[]
+  [帧 23:41:41] screen=MAIN_MENU has_save=None actions=['continue_run', 'abandon_run', 'open_timeline']
+  [帧 23:41:41] screen=MAIN_MENU has_save=None actions=['continue_run', 'abandon_run', 'open_timeline']
+  [帧 23:41:42] screen=MAIN_MENU has_save=None actions=['continue_run', 'abandon_run', 'open_timeline']
+  [帧 23:41:44] screen=MAIN_MENU has_save=None actions=['continue_run', 'abandon_run', 'open_timeline']
+  [act 23:41:44] abandon_run
+    → status=success detail=None
+  [帧 23:41:44] screen=MAIN_MENU has_save=None actions=['confirm_modal', 'dismiss_modal']
+  [act 23:41:44] confirm_modal
+    → status=success detail=None
+  [帧 23:41:44] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+  [帧 23:41:44] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+  [帧 23:41:45] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+  [帧 23:41:46] screen=MAIN_MENU has_save=None actions=['open_character_select', 'open_timeline']
+=== 结果 ===
+  target: MAIN_MENU
+  recovery_method: controlled_restart
+  normal_menu_abandon: False
+  restart_count: 1
+  final_screen: MAIN_MENU
+  clean_main_menu: True
+  old_run_abandoned: True
+  ok: True
+  blocked: False
+  reason: None
+  final_state: {'screen': 'MAIN_MENU', 'has_run_save': None, 'available_actions': ['open_character_select', 'open_timeline'], 'has_continue_run': False, 'has_abandon_run': False, 'has_new_run_action': True, 'state_timestamp': None, 'captured_at': '2026-07-19T15:41:46.707799+00:00'}

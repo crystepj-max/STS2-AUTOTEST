@@ -43,6 +43,88 @@ class TestToolRegistry:
         assert "BLOCKED_ENVIRONMENT" in result["run_statuses"]
 
 
+class TestCapabilitiesRuntimeVerification:
+    """capabilities 必须反映真实运行能力，而非只按配置声明（修复二）。"""
+
+    def test_capabilities_include_runtime_verification_fields(self, monkeypatch):
+        """探测确认可用时，暴露真实验证字段且快速结束战斗开启。"""
+        import sts2_autotest.cli.mcp_tools as mt
+
+        monkeypatch.setattr(
+            mt,
+            "_probe_runtime_capabilities",
+            lambda: {
+                "game_control_ready": True,
+                "debug_actions_configured": True,
+                "debug_actions_verified": True,
+                "debug_actions_reason": None,
+                "runtime_capabilities_checked_at": "2026-07-17T12:00:00+00:00",
+            },
+        )
+        result = mt.handle_capabilities({})
+        assert result["game_control_ready"] is True
+        assert result["debug_actions_configured"] is True
+        assert result["debug_actions_verified"] is True
+        assert result["debug_actions_reason"] is None
+        assert result["runtime_capabilities_checked_at"] == "2026-07-17T12:00:00+00:00"
+        # 配置 + 验证双真 → 快速结束战斗真实可用
+        assert result["combat_capabilities"]["traversal_fast_end_enabled"] is True
+        assert result["card_test"]["debug_actions_enabled"] is True
+
+    def test_fast_end_requires_config_and_verification(self, monkeypatch):
+        """只配置未验证时，快速结束战斗必须保持关闭（不能只按配置声明）。"""
+        import sts2_autotest.cli.mcp_tools as mt
+
+        monkeypatch.setattr(
+            mt,
+            "_probe_runtime_capabilities",
+            lambda: {
+                "game_control_ready": True,
+                "debug_actions_configured": True,
+                "debug_actions_verified": False,
+                "debug_actions_reason": "DEBUG_CONSOLE_UNAVAILABLE",
+                "runtime_capabilities_checked_at": "2026-07-17T12:00:00+00:00",
+            },
+        )
+        result = mt.handle_capabilities({})
+        assert result["debug_actions_configured"] is True
+        assert result["debug_actions_verified"] is False
+        assert result["combat_capabilities"]["traversal_fast_end_enabled"] is False
+        assert result["card_test"]["debug_actions_enabled"] is False
+
+    def test_probe_is_safe_and_fields_are_well_typed(self):
+        """无论游戏是否在跑，能力探测都必须安全返回且字段类型正确。"""
+        import sts2_autotest.cli.mcp_tools as mt
+
+        result = mt.handle_capabilities({})
+        assert isinstance(result["game_control_ready"], bool)
+        assert isinstance(result["debug_actions_configured"], bool)
+        assert isinstance(result["debug_actions_verified"], bool)
+        assert "runtime_capabilities_checked_at" in result
+        # 快速结束战斗永远等于"配置 AND 验证"双真。
+        expected_fast_end = (
+            result["debug_actions_configured"] and result["debug_actions_verified"]
+        )
+        assert (
+            result["combat_capabilities"]["traversal_fast_end_enabled"]
+            is expected_fast_end
+        )
+        assert result["card_test"]["debug_actions_enabled"] is expected_fast_end
+
+    def test_probe_never_raises_when_control_unavailable(self, monkeypatch):
+        """控制入口不可达时（探测失败）安全返回未就绪，绝不抛错或阻塞。"""
+        import sts2_autotest.cli.mcp_tools as mt
+
+        def _boom(_type: str):
+            raise RuntimeError("adapter build failed")
+
+        monkeypatch.setattr("sts2_autotest.cli.main._create_adapter", _boom)
+        result = mt.handle_capabilities({})
+        assert result["game_control_ready"] is False
+        assert result["debug_actions_verified"] is False
+        assert result["combat_capabilities"]["traversal_fast_end_enabled"] is False
+
+
 class TestPersistentRunTools:
     def test_get_run_returns_not_found_for_unknown_id(self, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
@@ -121,14 +203,35 @@ class TestPersistentRunTools:
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_resume_run_preserves_resume_mode_in_worker_argv(self, mock_worker, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
-        from sts2_autotest.cli.mcp_tools import handle_resume_run, handle_submit_run
+        from sts2_autotest.cli.mcp_tools import (
+            _run_store,
+            handle_resume_run,
+            handle_submit_run,
+        )
 
         original = handle_submit_run({"project": "examplemod", "suite": "smoke"})
+        # 修复四：只有取消/失败收尾完成（终态 + 证据封存）的任务才可恢复。
+        _run_store().finish_cancel(original["run_id"], reason=None, sealed=True)
         resumed = handle_resume_run({"run_id": original["run_id"]})
 
         assert resumed["request"]["mode"] == "resume"
         assert "--resume" in resumed["request"]["argv"]
+        assert resumed["resumed_from"] == original["run_id"]
+        assert resumed["run_id"] != original["run_id"]
         assert mock_worker.call_count == 2
+
+    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    def test_resume_run_rejected_while_original_not_finished(
+        self, mock_worker, monkeypatch, tmp_path
+    ):
+        """修复四：原任务还在跑（未终态/证据未封存）时，恢复必须被拒。"""
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.mcp_protocol import McpError
+        from sts2_autotest.cli.mcp_tools import handle_resume_run, handle_submit_run
+
+        original = handle_submit_run({"project": "examplemod", "suite": "smoke"})
+        with pytest.raises(McpError, match="cannot be resumed"):
+            handle_resume_run({"run_id": original["run_id"]})
 
 
 class TestHealthCheck:
@@ -396,7 +499,11 @@ class TestDeathAndCardTestContract:
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_resume_run_preserves_card_id(self, mock_worker, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
-        from sts2_autotest.cli.mcp_tools import handle_resume_run, handle_submit_run
+        from sts2_autotest.cli.mcp_tools import (
+            _run_store,
+            handle_resume_run,
+            handle_submit_run,
+        )
 
         original = handle_submit_run({
             "journey": "card_test",
@@ -404,6 +511,7 @@ class TestDeathAndCardTestContract:
             "card_id": "STRIKE",
             "idempotency_key": "card-test-resume-1",
         })
+        _run_store().finish_cancel(original["run_id"], reason=None, sealed=True)
         resumed = handle_resume_run({"run_id": original["run_id"]})
 
         argv = resumed["request"]["argv"]

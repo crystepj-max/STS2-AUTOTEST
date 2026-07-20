@@ -24,7 +24,7 @@ autotest doctor
 # 2. 运行全部测试用例
 autotest run --all
 
-# 3. 查看最近一次运行的报告
+# 3. 查看最新一次运行的报告
 autotest report
 
 # 4. 查看跨 Agent 公共能力契约
@@ -35,11 +35,14 @@ autotest capabilities --json
 
 | 命令 | 作用 |
 |------|------|
-| `autotest run` | 运行测试用例（支持 `--all`、`--resume`、`--ci` 等） |
+| `autotest run` | 运行测试用例（支持 `--all`、`--resume`、`--detach`、`--journey` 等） |
 | `autotest review` | 审查自然语言测试规格 |
 | `autotest compile` | 将规格编译为 pytest 测试文件 |
 | `autotest doctor` | 检查运行环境就绪情况（支持 `--json`、`--ci`） |
 | `autotest report` | 查看测试运行摘要 |
+| `autotest status` | 查询后台任务状态 |
+| `autotest cancel` | 取消后台任务 |
+| `autotest resume` | 从保存的任务继续执行 |
 | `autotest queue` | 管理本地测试队列 |
 | `autotest capabilities` | 输出跨 Agent 共用的任务状态和旅程契约 |
 | `autotest progress` | 查看断点续跑进度 |
@@ -47,6 +50,7 @@ autotest capabilities --json
 | `autotest serve` | 启动健康检查 HTTP 端点（`/health`、`/health/live`、`/health/ready`） |
 | `autotest serve-mcp` | 启动 MCP 测试服务 |
 | `autotest gen-report` | 生成 HTML 测试报告 |
+| `autotest visual-qa` | 分析单张截图并输出结构化结果 |
 
 详细用法见 [docs/user-manual.md](docs/user-manual.md)。
 
@@ -94,6 +98,7 @@ lint-imports
 - 自然语言测试：[docs/natural-language-testing/](docs/natural-language-testing/)
 - 平台能力盘点与 Gawain 边界：[docs/platform-capability-inventory.md](docs/platform-capability-inventory.md)
 - 跨 Agent 统一运行契约：[docs/unified-run-contract.md](docs/unified-run-contract.md)
+- 跨 Agent 接入与验收：[docs/cross-agent-acceptance.md](docs/cross-agent-acceptance.md)
 
 ## 许可
 

@@ -102,6 +102,40 @@ class TestSessionLifecycle:
         assert orchestrator._session_active is False
 
 
+class TestEnvironmentIncidentWiring:
+    """修复五-B：编排器把 GUI 探针与环境事故止损接入 watchdog。"""
+
+    def test_gui_probe_and_incident_callback_passed_to_watchdog(self) -> None:
+        """start_session 构造 Watchdog 时应带上 gui_probe 与环境事故回调。"""
+        adapter = _make_mock_adapter()
+        probe = MagicMock(return_value=True)
+        orch = TestOrchestrator(
+            adapter=adapter, gui_probe=probe, max_restart_budget=2
+        )
+        _run(orch.start_session())
+        wd = orch._watchdog
+        assert wd is not None
+        assert wd._gui_probe is probe
+        assert wd._on_environment_incident == orch._on_environment_incident
+        assert wd._max_restart_budget == 2
+
+    def test_environment_incident_callback_records_reason_without_crash(self) -> None:
+        """环境事故回调把会话止损为 TERMINATED 并记录原因，不置崩溃标志。"""
+        from sts2_autotest.common.errors import EnvironmentIncidentReason
+        from sts2_autotest.common.types import SessionStatus
+
+        orch = TestOrchestrator(adapter=_make_mock_adapter())
+        orch._on_environment_incident(
+            EnvironmentIncidentReason.GUI_SESSION_UNAVAILABLE.value
+        )
+        assert orch._session_status == SessionStatus.TERMINATED
+        assert (
+            orch.environment_incident_reason
+            == EnvironmentIncidentReason.GUI_SESSION_UNAVAILABLE.value
+        )
+        assert orch._crashed is False
+
+
 class TestExecutionModes:
     """AC#2: run_all, run_cases, run_failed."""
 

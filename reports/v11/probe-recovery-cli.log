@@ -1,0 +1,61 @@
+=== 步骤1: 创建真实对局 ===
+  [act 07:14:58] start_new_run
+    → status=success
+start_new_run → success
+  [帧 07:15:00] screen=CHARACTER_SELECT has_save=None embedded_actions=[]
+  [act 07:15:00] embark
+unmapped game screen name: 'UNKNOWN'
+    → status=success
+  [帧 07:15:04] screen=EVENT has_save=None embedded_actions=[]
+已进入局内: EVENT
+=== 步骤2: _recover_main_menu_via_restart（CliMod 生产路径） ===
+  [帧 07:15:23] screen=EVENT has_save=None embedded_actions=[]
+  [帧 07:15:28] screen=EVENT has_save=None embedded_actions=[]
+  [协议动作 07:15:28] ['start_new_run', 'select_character', 'embark', 'choose_event', 'advance_dialogue', 'choose_map_node']
+unmapped game screen name: 'UNKNOWN'
+  [帧 07:15:32] screen=UNKNOWN has_save=None embedded_actions=[]
+unmapped game screen name: 'UNKNOWN'
+  [帧 07:15:33] screen=UNKNOWN has_save=None embedded_actions=[]
+unmapped game screen name: 'UNKNOWN'
+  [帧 07:15:35] screen=UNKNOWN has_save=None embedded_actions=[]
+unmapped game screen name: 'UNKNOWN'
+  [帧 07:15:36] screen=UNKNOWN has_save=None embedded_actions=[]
+unmapped game screen name: 'UNKNOWN'
+  [帧 07:15:38] screen=UNKNOWN has_save=None embedded_actions=[]
+unmapped game screen name: 'UNKNOWN'
+  [帧 07:15:39] screen=UNKNOWN has_save=None embedded_actions=[]
+unmapped game screen name: 'UNKNOWN'
+  [帧 07:15:40] screen=UNKNOWN has_save=None embedded_actions=[]
+  [帧 07:15:43] screen=MAIN_MENU has_save=True embedded_actions=[]
+  [协议动作 07:15:43] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [帧 07:15:43] screen=MAIN_MENU has_save=True embedded_actions=[]
+  [协议动作 07:15:43] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [帧 07:15:45] screen=MAIN_MENU has_save=True embedded_actions=[]
+  [协议动作 07:15:45] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [帧 07:15:46] screen=MAIN_MENU has_save=True embedded_actions=[]
+  [协议动作 07:15:46] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [act 07:15:46] abandon_run
+    → status=success
+  [帧 07:15:47] screen=MAIN_MENU has_save=False embedded_actions=[]
+  [协议动作 07:15:47] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [帧 07:15:47] screen=MAIN_MENU has_save=False embedded_actions=[]
+  [协议动作 07:15:47] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [帧 07:15:47] screen=MAIN_MENU has_save=False embedded_actions=[]
+  [协议动作 07:15:47] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [帧 07:15:49] screen=MAIN_MENU has_save=False embedded_actions=[]
+  [协议动作 07:15:49] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [帧 07:15:50] screen=MAIN_MENU has_save=False embedded_actions=[]
+  [协议动作 07:15:50] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+  [协议动作 07:15:50] ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe']
+=== 结果 ===
+  target: MAIN_MENU
+  recovery_method: controlled_restart
+  normal_menu_abandon: False
+  restart_count: 1
+  final_screen: MAIN_MENU
+  clean_main_menu: True
+  old_run_abandoned: True
+  ok: True
+  blocked: False
+  reason: None
+  final_state: {'screen': 'MAIN_MENU', 'has_run_save': False, 'available_actions': ['start_new_run', 'new_run', 'continue_run', 'abandon_run', 'choose_game_mode', 'probe', 'return_to_menu'], 'has_continue_run': True, 'has_abandon_run': True, 'has_new_run_action': True, 'state_timestamp': 1784502950644, 'captured_at': '2026-07-19T23:15:50.671972+00:00'}

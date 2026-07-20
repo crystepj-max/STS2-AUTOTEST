@@ -24,15 +24,21 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import subprocess
 import sys
 import time
-from typing import Any, IO
+from dataclasses import dataclass, field
+from typing import Any, Callable, IO
 from urllib.parse import urlparse
 
-import psutil  # type: ignore[import-untyped]
+import psutil
 
+from sts2_autotest.common.errors import EnvironmentBlockReason
 from sts2_autotest.common.logging import get_logger
+
+# 就绪探测瞬态抖动重试间隔（秒）。测试可 monkeypatch 为 0 以保持快速。
+_PROBE_RETRY_GAP_SECONDS = 2.0
 
 logger = get_logger("core.lifecycle")
 
@@ -52,6 +58,41 @@ def _port_from_endpoint(endpoint: str) -> str:
     except Exception:
         pass
     return _DEFAULT_PORT
+
+
+@dataclass(frozen=True)
+class EnvironmentReadiness:
+    """Result of a pre-run environment readiness check + bounded recovery.
+
+    ``ready`` True means the game control API is healthy, state and actions are
+    readable and the screen is not UNKNOWN. When not ready, ``reason`` explains
+    why (always an environment block, never a product/platform failure).
+    """
+
+    ready: bool
+    reason: EnvironmentBlockReason | None = None
+    recovered: bool = False
+    recovery_attempts: int = 0
+    pre_process_present: bool = False
+    pre_control_ready: bool = False
+    checks: dict[str, Any] = field(default_factory=dict)
+    actions_taken: list[str] = field(default_factory=list)
+    duration_ms: int = 0
+    detail: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ready": self.ready,
+            "reason": str(self.reason) if self.reason is not None else None,
+            "recovered": self.recovered,
+            "recovery_attempts": self.recovery_attempts,
+            "pre_process_present": self.pre_process_present,
+            "pre_control_ready": self.pre_control_ready,
+            "checks": self.checks,
+            "actions_taken": list(self.actions_taken),
+            "duration_ms": self.duration_ms,
+            "detail": self.detail,
+        }
 
 
 def _default_game_exe(game_dir: str | None) -> str | None:
@@ -104,6 +145,7 @@ class GameLifecycleManager:
         down_poll_interval: float = 3.0,
         character_id: str = "IRONCLAD",
         game_log: str | None = None,
+        port_release_timeout: float = 15.0,
     ) -> None:
         """Initialize.
 
@@ -143,6 +185,7 @@ class GameLifecycleManager:
         self.down_poll_interval = float(down_poll_interval)
         self.character_id = character_id
         self.game_log = game_log
+        self.port_release_timeout = float(port_release_timeout)
 
         # resolved at init
         self.game_exe, self.game_cwd, self.game_dir, self.game_env = self._resolve()
@@ -174,8 +217,90 @@ class GameLifecycleManager:
 
     # ── process control ────────────────────────────────────
 
+    def _app_bundle_path(self) -> str | None:
+        """Best-effort locate the ``.app`` bundle containing ``game_exe``.
+
+        Launching via ``open <bundle>`` (macOS) is far more reliable than
+        ``Popen`` of the inner binary, which frequently comes up with an
+        unresponsive control API (screen stuck at ``UNKNOWN``). The bundle path
+        is derived by walking up from ``game_exe`` to the first ``*.app`` segment.
+        """
+        exe = self.game_exe or ""
+        if not exe:
+            return None
+        parts = os.path.normpath(exe).split(os.sep)
+        for i in range(len(parts) - 1, -1, -1):
+            if parts[i].endswith(".app"):
+                return os.sep + os.path.join(*parts[: i + 1])
+        return None
+
+    def _discover_game_pid(self) -> int | None:
+        """Find the externally-launched game pid (best-effort, never raises)."""
+        if not self.game_exe:
+            return None
+        needle = os.path.basename(self.game_exe).lower()
+        try:
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    name = (proc.info.get("name") or "").lower()
+                    cmd = " ".join(proc.info.get("cmdline") or []).lower()
+                    if (needle and needle in name) or (
+                        self.game_exe.lower() in cmd
+                    ):
+                        return int(proc.info.get("pid"))  # type: ignore[arg-type]
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+        return None
+
+    def _launch_via_open(self) -> int:
+        """Launch the game as a macOS GUI app via ``open``.
+
+        Unlike ``Popen`` of the inner binary, this starts the game the same way
+        a normal user/sandbox launch does — with a stable control API. The debug
+        API env (``STS2_API_PORT`` / ``STS2_ENABLE_DEBUG_ACTIONS`` /
+        ``STS2_GAME_DIR``) is passed explicitly so the relaunched instance keeps
+        the 8080 debug actions working. The process is owned by ``launchd``, not
+        this Python process, so no child handle is tracked.
+        """
+        env = dict(os.environ)
+        env.update(self.game_env)
+        self._close_game_log()
+        bundle = self._app_bundle_path()
+        if bundle and os.path.exists(bundle):
+            cmd: list[str] = ["open", bundle]
+        else:
+            # Last-resort: open by application name.
+            cmd = ["open", "-a", "Slay the Spire 2"]
+        logger.info("launch game via open: %s", " ".join(cmd))
+        subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        self._proc = None
+        self._pid = None
+        # Best-effort: return the launched game pid for logging/diagnostics.
+        return self._discover_game_pid() or 0
+
     def launch(self) -> int:
-        """Launch the game executable with debug-API env. Returns the PID."""
+        """Launch the game with debug-API env. Returns the game PID (best-effort).
+
+        On macOS the game is launched via ``open <bundle>`` (stable control API);
+        on other platforms the inner binary is Popen'd directly. A double-launch
+        guard prevents spawning a second instance (which would trigger Steam's
+        "already running" error).
+        """
+        # Guard: never launch a second instance.
+        if self._game_process_present():
+            logger.info("launch skipped: game process already present")
+            return self._discover_game_pid() or 0
+        if _IS_MACOS:
+            return self._launch_via_open()
+        # Non-macOS: original Popen launch of the inner binary.
         env = dict(os.environ)
         env.update(self.game_env)
         self._close_game_log()
@@ -204,7 +329,18 @@ class GameLifecycleManager:
             self._game_log_handle = None
 
     def terminate(self) -> None:
-        """Terminate the managed game process (best-effort)."""
+        """Terminate the managed game process (best-effort).
+
+        Covers three launch origins:
+        * framework-launched (``self._proc`` / ``self._pid``),
+        * Steam-managed (via ``SteamController``),
+        * externally launched — e.g. a macOS ``.app`` bundle opened directly by
+          the user or a harness. These have no tracked handle/pid, so we also
+          match by executable path / process name (see
+          ``_terminate_external_game_processes``). Without this, an externally
+          launched game survives ``terminate()`` and the controlled-restart
+          fallback can never reach a clean MAIN_MENU.
+        """
         proc = self._proc
         if proc is not None:
             try:
@@ -225,6 +361,10 @@ class GameLifecycleManager:
                 pass
             except Exception:
                 pass
+        # Kill any externally-launched game process (no tracked handle). This is
+        # what makes the cancel-cleanup controlled restart work when the game was
+        # not spawned by the framework (common on macOS app-bundle setups).
+        self._terminate_external_game_processes()
         # optionally use SteamController to catch externally-launched processes
         if self.steam_controller is not None:
             try:
@@ -234,6 +374,38 @@ class GameLifecycleManager:
         self._proc = None
         self._pid = None
         self._close_game_log()
+
+    def _terminate_external_game_processes(self) -> None:
+        """Kill game processes not tracked by ``self._proc`` / ``self._pid``.
+
+        Used when the game was launched externally (e.g. a macOS ``.app`` bundle
+        opened by the user or a harness). Matches by executable path or by the
+        basename of the configured game executable. Never raises.
+        """
+        try:
+            needle = os.path.basename(self.game_exe or "").lower()
+        except Exception:
+            needle = ""
+        if not needle and not self.game_exe:
+            return
+        own_pid = os.getpid()
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            try:
+                if proc.info.get("pid") == own_pid:
+                    continue
+                name = (proc.info.get("name") or "").lower()
+                cmd = " ".join(proc.info.get("cmdline") or []).lower()
+                matched = False
+                if needle and needle in name:
+                    matched = True
+                if self.game_exe and self.game_exe.lower() in cmd:
+                    matched = True
+                if matched:
+                    proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+            except Exception:
+                continue
 
     # ── API readiness ──────────────────────────────────────
 
@@ -255,7 +427,7 @@ class GameLifecycleManager:
             return False
 
     async def wait_for_api(self, timeout: float | None = None) -> bool:
-        """Poll until the game API is controllable. Returns success."""
+        """Poll until the game API answers (screen present, even UNKNOWN)."""
         timeout = self.api_timeout if timeout is None else float(timeout)
         t0 = time.time()
         while time.time() - t0 < timeout:
@@ -266,13 +438,271 @@ class GameLifecycleManager:
         logger.warning("wait_for_api timeout after %.0fs", timeout)
         return False
 
+    async def wait_for_controllable(self, timeout: float | None = None) -> bool:
+        """Poll until the game reaches a controllable (non-``UNKNOWN``) screen.
+
+        A freshly launched game sits at ``UNKNOWN`` for a while while it
+        initializes; ``wait_for_api`` would return immediately on that first
+        ``UNKNOWN`` reading and the caller would wrongly conclude the launch
+        failed. This waits for an actual, actionable screen before declaring
+        the game ready.
+        """
+        timeout = self.api_timeout if timeout is None else float(timeout)
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                st = self._as_dict(await self.adapter.get_state())
+                screen = str(st.get("screen") or "").upper()
+            except Exception:
+                screen = ""
+            if screen and screen != "UNKNOWN":
+                logger.info("wait_for_controllable ok screen=%s", screen)
+                return True
+            await asyncio.sleep(self.poll_interval)
+        logger.warning("wait_for_controllable timeout after %.0fs", timeout)
+        return False
+
     async def ensure_game_up(self, api_timeout: float | None = None) -> bool:
-        """Ensure the game is up; launch if needed. Returns success."""
-        if await self.is_api_up():
+        """Ensure the game is up and controllable; launch if needed."""
+        if await self.wait_for_controllable(api_timeout):
             return True
-        if self._proc is None or (self._proc.poll() is not None):
-            self.launch()
-        return await self.wait_for_api(api_timeout)
+        self.launch()
+        return await self.wait_for_controllable(api_timeout)
+
+    # ── pre-run readiness + bounded auto-recovery ──────────
+
+    def _api_port(self) -> int:
+        endpoint = getattr(self.adapter, "endpoint", None) or "http://127.0.0.1:8080"
+        return int(_port_from_endpoint(endpoint))
+
+    def _wait_port_released(self, timeout: float | None = None) -> bool:
+        """Block until the control API port stops accepting connections.
+
+        Returns True once the port is released (connection refused), False on
+        timeout. Used after a controlled terminate so a relaunch does not race a
+        still-listening stale server.
+        """
+        timeout = self.port_release_timeout if timeout is None else float(timeout)
+        port = self._api_port()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            try:
+                sock.connect(("127.0.0.1", port))
+            except OSError:
+                sock.close()
+                return True  # refused -> released
+            else:
+                sock.close()
+                time.sleep(0.3)  # still listening
+        return False
+
+    def _wait_game_gone(self, timeout: float | None = None) -> bool:
+        """Block until no game process is detected. Returns True once gone.
+
+        Used after a controlled terminate so the subsequent ``open`` relaunch
+        starts a genuinely fresh instance (a still-dying process would make
+        ``open`` merely focus the old one).
+        """
+        timeout = self.port_release_timeout if timeout is None else float(timeout)
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if not self._game_process_present():
+                return True
+            time.sleep(0.3)
+        return not self._game_process_present()
+
+    def _game_process_present(self) -> bool:
+        """Best-effort detection of a running game process (managed or external)."""
+        if self._proc is not None and self._proc.poll() is None:
+            return True
+        if self.steam_controller is not None:
+            try:
+                pids = self.steam_controller._find_game_pids()  # noqa: SLF001
+                if pids:
+                    return True
+            except Exception:
+                pass
+        try:
+            needle = os.path.basename(self.game_exe or "").lower()
+            if needle:
+                for proc in psutil.process_iter(["name", "cmdline"]):
+                    try:
+                        name = (proc.info.get("name") or "").lower()
+                        if needle in name:
+                            return True
+                        cmd = " ".join(proc.info.get("cmdline") or []).lower()
+                        if self.game_exe and self.game_exe.lower() in cmd:
+                            return True
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+        except Exception:
+            pass
+        return False
+
+    async def _probe_ready(self) -> tuple[bool, EnvironmentBlockReason | None, dict[str, Any]]:
+        """Run the three control checks: health, state, actions + screen sanity."""
+        checks: dict[str, Any] = {
+            "health": False,
+            "state": False,
+            "actions": False,
+            "screen": None,
+        }
+        # 1) health
+        try:
+            hs = await self.adapter.health_check()
+            healthy = bool(getattr(hs, "healthy", hs))
+            checks["health"] = healthy
+        except Exception as exc:
+            return False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {**checks, "error": repr(exc)}
+        if not checks["health"]:
+            return False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, checks
+        # 2) state
+        try:
+            st = self._as_dict(await self.adapter.get_state())
+        except Exception as exc:
+            return False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {**checks, "error": repr(exc)}
+        screen = str(st.get("screen") or "").upper()
+        checks["state"] = True
+        checks["screen"] = screen or None
+        # 3) actions
+        try:
+            actions = await self.adapter.get_available_actions()
+            checks["actions"] = actions is not None
+        except Exception as exc:
+            return False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {**checks, "error": repr(exc)}
+        # 4) screen sanity — readable but UNKNOWN/empty is not "ready"
+        if not screen or screen == "UNKNOWN":
+            return False, EnvironmentBlockReason.GAME_PROCESS_STALE, checks
+        # 可操作判定（V11 实测）：主菜单动作列表为空 = 控制模组仍在加载
+        # （画面先显示主菜单、模组加载可达数分钟），此时不算真就绪——
+        # 否则下游会把「菜单空动作」误判成需要再一次重启。
+        if screen == "MAIN_MENU" and not actions:
+            checks["actions"] = False
+            return False, EnvironmentBlockReason.GAME_PROCESS_STALE, checks
+        return True, None, checks
+
+    async def ensure_environment_ready(
+        self,
+        *,
+        max_recoveries: int = 1,
+        port_release_timeout: float | None = None,
+        gui_check: Callable[[], bool] | None = None,
+    ) -> EnvironmentReadiness:
+        """Verify the game is controllable; if not, perform bounded recovery.
+
+        Success criteria: health readable AND state readable AND actions readable
+        AND screen != UNKNOWN. On failure, attempt at most ``max_recoveries``
+        (default 1) recovery cycles: a stale process is controlled-terminated,
+        the port is drained, then a single relaunch is performed; no process is
+        launched fresh. Still-not-ready returns ``ready=False`` with a reason —
+        which the caller maps to BLOCKED_ENVIRONMENT. Never loops indefinitely.
+        """
+        t0 = time.time()
+        actions_taken: list[str] = []
+
+        # Optional GUI/graphics session precondition (macOS WindowServer, etc.).
+        if gui_check is not None:
+            try:
+                gui_ok = bool(gui_check())
+            except Exception:
+                gui_ok = False
+            if not gui_ok:
+                return EnvironmentReadiness(
+                    ready=False,
+                    reason=EnvironmentBlockReason.GUI_SESSION_UNAVAILABLE,
+                    checks={"gui_session": False},
+                    actions_taken=actions_taken,
+                    duration_ms=int((time.time() - t0) * 1000),
+                    detail="graphics session unavailable",
+                )
+
+        ok, reason, checks = await self._probe_ready()
+        if not ok:
+            # 瞬态抖动重试（V11 实测）：单次探测抖动（HTTP 瞬断、模组瞬时未
+            # 就绪）不应触发破坏性重启——快速重试，连续失败才进入有界恢复。
+            for _ in range(2):
+                await asyncio.sleep(_PROBE_RETRY_GAP_SECONDS)
+                ok, reason, checks = await self._probe_ready()
+                if ok:
+                    break
+        pre_process = self._game_process_present()
+        if ok:
+            return EnvironmentReadiness(
+                ready=True,
+                recovered=False,
+                pre_process_present=pre_process,
+                pre_control_ready=True,
+                checks=checks,
+                actions_taken=actions_taken,
+                duration_ms=int((time.time() - t0) * 1000),
+            )
+
+        attempts = 0
+        while attempts < max_recoveries:
+            attempts += 1
+            # If a game process exists but control is unavailable -> stale:
+            # controlled exit + drain the port before relaunch.
+            if pre_process:
+                actions_taken.append("controlled_terminate")
+                self.terminate()
+                gone = self._wait_game_gone(port_release_timeout)
+                actions_taken.append("game_gone" if gone else "game_gone_timeout")
+                released = self._wait_port_released(port_release_timeout)
+                actions_taken.append("port_released" if released else "port_release_timeout")
+            # Launch a single fresh instance with debug API env injected.
+            try:
+                actions_taken.append("launch")
+                self.launch()
+            except Exception as exc:
+                return EnvironmentReadiness(
+                    ready=False,
+                    reason=EnvironmentBlockReason.GAME_START_FAILED,
+                    recovered=True,
+                    recovery_attempts=attempts,
+                    pre_process_present=pre_process,
+                    checks=checks,
+                    actions_taken=actions_taken,
+                    duration_ms=int((time.time() - t0) * 1000),
+                    detail=f"launch failed: {exc!r}",
+                )
+            # Wait for the game to reach a controllable screen (not just "up").
+            if not await self.wait_for_controllable():
+                reason = (
+                    EnvironmentBlockReason.GAME_PROCESS_STALE
+                    if pre_process
+                    else EnvironmentBlockReason.GAME_READINESS_TIMEOUT
+                )
+                continue
+            # Re-verify the three checks.
+            ok, reason, checks = await self._probe_ready()
+            if ok:
+                return EnvironmentReadiness(
+                    ready=True,
+                    recovered=True,
+                    recovery_attempts=attempts,
+                    pre_process_present=pre_process,
+                    checks=checks,
+                    actions_taken=actions_taken,
+                    duration_ms=int((time.time() - t0) * 1000),
+                )
+            reason = (
+                EnvironmentBlockReason.GAME_PROCESS_STALE
+                if pre_process
+                else EnvironmentBlockReason.GAME_READINESS_TIMEOUT
+            )
+
+        return EnvironmentReadiness(
+            ready=False,
+            reason=reason or EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE,
+            recovered=attempts > 0,
+            recovery_attempts=attempts,
+            pre_process_present=pre_process,
+            checks=checks,
+            actions_taken=actions_taken,
+            duration_ms=int((time.time() - t0) * 1000),
+        )
 
     # ── run lifecycle ──────────────────────────────────────
 
@@ -333,9 +763,10 @@ class GameLifecycleManager:
         logger.info("game down=%s", down)
         # 3) terminate any lingering process
         self.terminate()
+        self._wait_game_gone(self.port_release_timeout)
         # 4) relaunch
         self.launch()
-        ok = await self.wait_for_api(api_timeout)
+        ok = await self.wait_for_controllable(api_timeout)
         if not ok:
             logger.error("relaunch_run: API did not come up")
             return False

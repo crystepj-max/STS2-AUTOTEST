@@ -183,12 +183,31 @@ def test_is_api_down(no_sleep, fake_popen):
     assert asyncio.run(mgr.wait_for_api(timeout=0.05)) is False
 
 
-def test_ensure_game_up_launches_when_down(no_sleep, fake_popen):
-    adapter = FakeAdapter([{"screen": "MAIN_MENU"}], down_first=1000)
+def test_ensure_game_up_launches_when_down(no_sleep, monkeypatch):
+    """游戏不可控时 ensure_game_up 恰好启动一次。
+
+    与启动机制无关（macOS 经 open、其他平台经 Popen）——直接拦截 launch()
+    计数；旧版用 fake_popen 断言，与 macOS 启动方式不一致（基线失败）。
+    """
+    adapter = FakeAdapter([], down_first=0)
+    launched = {"count": 0}
+
+    async def _down_until_launch():
+        if launched["count"] == 0:
+            raise ConnectionError("refused")
+        return FakeState(screen="MAIN_MENU")
+
+    adapter.get_state = _down_until_launch  # type: ignore[method-assign]
     mgr = _mgr(adapter)
-    ok = asyncio.run(mgr.ensure_game_up(api_timeout=2.0))
+
+    def _launch():
+        launched["count"] += 1
+        return 1234
+
+    monkeypatch.setattr(mgr, "launch", _launch)
+    ok = asyncio.run(mgr.ensure_game_up(api_timeout=0.05))
     assert ok is True
-    assert len(fake_popen) == 1  # launch() was called
+    assert launched["count"] == 1
 
 
 def test_relaunch_run(no_sleep, fake_popen):
@@ -219,3 +238,206 @@ def test_relaunch_run_respects_max_cap(no_sleep, fake_popen):
     assert ok is False
     assert mgr.relaunch_count == 0
     assert len(fake_popen) == 0
+
+
+# ── pre-run readiness + bounded auto-recovery (P1 fix one) ──
+
+from sts2_autotest.common.errors import EnvironmentBlockReason  # noqa: E402
+
+
+class _ProbeAdapter:
+    """Adapter whose health/state/actions are individually controllable."""
+
+    def __init__(self, *, health=True, state=None, actions=None):
+        self.endpoint = "http://127.0.0.1:8080"
+        self.debug_actions = True
+        self._health = health
+        self._state = state if state is not None else {"screen": "MAIN_MENU"}
+        self._actions = actions if actions is not None else ["start_new_run"]
+
+    async def health_check(self):
+        if isinstance(self._health, Exception):
+            raise self._health
+        return MagicMock(healthy=self._health)
+
+    async def get_state(self):
+        if isinstance(self._state, Exception):
+            raise self._state
+        return FakeState(**self._state)
+
+    async def get_available_actions(self):
+        if isinstance(self._actions, Exception):
+            raise self._actions
+        return self._actions
+
+
+def _probe(mgr):
+    return asyncio.run(mgr._probe_ready())
+
+
+class TestProbeReady:
+    def test_all_good_is_ready(self):
+        mgr = _mgr(_ProbeAdapter(state={"screen": "MAP"}))
+        ok, reason, checks = _probe(mgr)
+        assert ok is True and reason is None
+        assert checks["health"] and checks["state"] and checks["actions"]
+        assert checks["screen"] == "MAP"
+
+    def test_health_refused_is_control_unavailable(self):
+        mgr = _mgr(_ProbeAdapter(health=ConnectionError("refused")))
+        ok, reason, _ = _probe(mgr)
+        assert ok is False
+        assert reason == EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE
+
+    def test_state_refused_is_control_unavailable(self):
+        mgr = _mgr(_ProbeAdapter(state=ConnectionError("refused")))
+        ok, reason, _ = _probe(mgr)
+        assert reason == EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE
+
+    def test_actions_refused_is_control_unavailable(self):
+        mgr = _mgr(_ProbeAdapter(actions=ConnectionError("refused")))
+        ok, reason, _ = _probe(mgr)
+        assert reason == EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE
+
+    def test_unknown_screen_is_stale(self):
+        mgr = _mgr(_ProbeAdapter(state={"screen": "UNKNOWN"}))
+        ok, reason, _ = _probe(mgr)
+        assert ok is False
+        assert reason == EnvironmentBlockReason.GAME_PROCESS_STALE
+
+    def test_main_menu_empty_actions_is_not_ready(self):
+        """V11 实测：主菜单动作列表为空 = 控制模组仍在加载，不算真就绪。"""
+        mgr = _mgr(_ProbeAdapter(state={"screen": "MAIN_MENU"}, actions=[]))
+        ok, reason, checks = _probe(mgr)
+        assert ok is False
+        assert reason == EnvironmentBlockReason.GAME_PROCESS_STALE
+        assert checks["actions"] is False
+
+    def test_non_menu_screen_tolerates_empty_actions(self):
+        """非主菜单页面（如过场）动作可为空，不影响就绪判定。"""
+        mgr = _mgr(_ProbeAdapter(state={"screen": "MAP"}, actions=[]))
+        ok, reason, _ = _probe(mgr)
+        assert ok is True and reason is None
+
+
+def _scripted_probe(results):
+    """Return an async _probe_ready that yields queued (ok, reason, checks)."""
+    seq = list(results)
+
+    async def _p():
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    return _p
+
+
+class TestEnsureEnvironmentReady:
+    def _mgr_with(self, monkeypatch, *, probe_results, api_up=True,
+                 process_present=False, port_released=True):
+        mgr = _mgr(_ProbeAdapter())
+        monkeypatch.setattr(mgr, "_probe_ready", _scripted_probe(probe_results))
+        monkeypatch.setattr(mgr, "_game_process_present", lambda: process_present)
+        monkeypatch.setattr(mgr, "_wait_port_released", lambda *a, **k: port_released)
+        monkeypatch.setattr(
+            "sts2_autotest.core.lifecycle._PROBE_RETRY_GAP_SECONDS", 0
+        )
+
+        async def _wait(*a, **k):
+            return api_up
+        monkeypatch.setattr(mgr, "wait_for_api", _wait)
+        mgr._launch_calls = 0
+        mgr._term_calls = 0
+
+        def _launch():
+            mgr._launch_calls += 1
+            return 1234
+
+        def _term():
+            mgr._term_calls += 1
+
+        monkeypatch.setattr(mgr, "launch", _launch)
+        monkeypatch.setattr(mgr, "terminate", _term)
+        return mgr
+
+    def test_ready_does_not_launch(self, monkeypatch):
+        good = (True, None, {"health": True, "state": True, "actions": True, "screen": "MAP"})
+        mgr = self._mgr_with(monkeypatch, probe_results=[good])
+        res = asyncio.run(mgr.ensure_environment_ready())
+        assert res.ready is True and res.recovered is False
+        assert mgr._launch_calls == 0
+        assert res.pre_control_ready is True
+
+    def test_transient_probe_failure_recovers_without_relaunch(self, monkeypatch):
+        """V11 实测：单次探测抖动（如模组瞬时未就绪）不得触发破坏性重启。"""
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        good = (True, None, {"health": True, "state": True, "actions": True, "screen": "MAP"})
+        mgr = self._mgr_with(monkeypatch, probe_results=[bad, good])
+        res = asyncio.run(mgr.ensure_environment_ready())
+        assert res.ready is True and res.recovered is False
+        assert mgr._launch_calls == 0
+        assert mgr._term_calls == 0
+
+    def test_launch_once_when_no_process(self, monkeypatch):
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        good = (True, None, {"screen": "MAIN_MENU"})
+        mgr = self._mgr_with(
+            monkeypatch, probe_results=[bad, bad, bad, good], process_present=False
+        )
+        res = asyncio.run(mgr.ensure_environment_ready())
+        assert res.ready is True and res.recovered is True
+        assert mgr._launch_calls == 1
+        assert mgr._term_calls == 0
+        assert "launch" in res.actions_taken
+
+    def test_stale_process_terminates_then_launches(self, monkeypatch):
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        good = (True, None, {"screen": "MAIN_MENU"})
+        mgr = self._mgr_with(
+            monkeypatch, probe_results=[bad, bad, bad, good], process_present=True
+        )
+        res = asyncio.run(mgr.ensure_environment_ready())
+        assert res.ready is True
+        assert mgr._term_calls == 1
+        assert mgr._launch_calls == 1
+        assert res.actions_taken.index("controlled_terminate") < res.actions_taken.index("launch")
+
+    def test_launched_but_state_unreadable_is_not_ready(self, monkeypatch):
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        stale = (False, EnvironmentBlockReason.GAME_PROCESS_STALE, {"screen": "UNKNOWN"})
+        mgr = self._mgr_with(monkeypatch, probe_results=[bad, stale], process_present=False)
+        res = asyncio.run(mgr.ensure_environment_ready())
+        assert res.ready is False
+        assert res.reason is not None
+
+    def test_api_never_up_returns_blocked(self, monkeypatch):
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        mgr = self._mgr_with(monkeypatch, probe_results=[bad, bad], api_up=False, process_present=False)
+        res = asyncio.run(mgr.ensure_environment_ready())
+        assert res.ready is False
+        assert res.reason == EnvironmentBlockReason.GAME_READINESS_TIMEOUT
+
+    def test_only_one_recovery_attempt(self, monkeypatch):
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        still_bad = (False, EnvironmentBlockReason.GAME_PROCESS_STALE, {"screen": "UNKNOWN"})
+        mgr = self._mgr_with(monkeypatch, probe_results=[bad, still_bad, still_bad], process_present=False)
+        res = asyncio.run(mgr.ensure_environment_ready(max_recoveries=1))
+        assert res.ready is False
+        assert mgr._launch_calls == 1  # exactly one launch, no infinite restart
+        assert res.recovery_attempts == 1
+
+    def test_gui_check_failure_blocks_before_launch(self, monkeypatch):
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        mgr = self._mgr_with(monkeypatch, probe_results=[bad])
+        res = asyncio.run(mgr.ensure_environment_ready(gui_check=lambda: False))
+        assert res.ready is False
+        assert res.reason == EnvironmentBlockReason.GUI_SESSION_UNAVAILABLE
+        assert mgr._launch_calls == 0
+
+
+def test_game_exe_not_hardcoded_to_user_path():
+    """The resolved exe must derive from the provided game_dir, not a literal home path."""
+    import inspect
+    import sts2_autotest.core.lifecycle as lc
+    src = inspect.getsource(lc)
+    assert "/Users/chris" not in src
+    mgr = GameLifecycleManager(_ProbeAdapter(), game_dir="/opt/steam/StS2")
+    assert mgr.game_exe.startswith("/opt/steam/StS2")

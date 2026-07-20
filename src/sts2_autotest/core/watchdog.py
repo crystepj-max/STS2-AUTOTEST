@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Callable
 
 import psutil
 
+from sts2_autotest.common.errors import EnvironmentIncidentReason
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.types import SessionStatus
 
@@ -41,12 +42,21 @@ class Watchdog:
         adapter_pid: int | None = None,
         heartbeat_timeout: float = 60.0,
         on_zombie: Callable[[str], None] | None = None,
+        gui_probe: Callable[[], bool] | None = None,
+        on_environment_incident: Callable[[str], None] | None = None,
+        max_restart_budget: int = 3,
     ) -> None:
         self._game_pid = game_pid
         self._adapter_pid = adapter_pid
         self._adapter = adapter
         self._heartbeat_timeout = heartbeat_timeout
         self._on_zombie = on_zombie
+        # 修复五-B：GUI/窗口采集健康探针（可选注入，避免 core 依赖 evidence）。
+        self._gui_probe = gui_probe
+        self._on_environment_incident = on_environment_incident
+        self._max_restart_budget = max_restart_budget
+        self._restart_count = 0
+        self._environment_incident_reason: str = ""
         self._last_heartbeat = time.monotonic()
         self._status = SessionStatus.RUNNING
         self._task: asyncio.Task[None] | None = None
@@ -61,6 +71,32 @@ class Watchdog:
     @property
     def zombie_reason(self) -> str:
         return self._zombie_reason
+
+    @property
+    def environment_incident_reason(self) -> str:
+        """环境事故原因（EnvironmentIncidentReason 值），无则空串。"""
+        return self._environment_incident_reason
+
+    @property
+    def restart_count(self) -> int:
+        """已消耗的重启预算次数。"""
+        return self._restart_count
+
+    def restart_budget_exhausted(self) -> bool:
+        """重启预算是否已耗尽（护栏：禁止无限重启）。"""
+        return self._restart_count >= self._max_restart_budget
+
+    def note_restart(self) -> bool:
+        """登记一次重启尝试。
+
+        Returns:
+            True 表示还有预算、允许本次重启；False 表示预算已耗尽、必须拒绝，
+            改走环境事故止损。预算耗尽时计数不再增加。
+        """
+        if self.restart_budget_exhausted():
+            return False
+        self._restart_count += 1
+        return True
 
     def record_heartbeat(self) -> None:
         """Record a successful communication heartbeat."""
@@ -120,9 +156,55 @@ class Watchdog:
                     reason = f"adapter process PID {self._adapter_pid} is dead"
 
             if reason is not None:
-                self._mark_zombie(reason)
-                await self.terminate_session()
+                outcome = self.evaluate_detection(reason)
+                if outcome == "zombie":
+                    await self.terminate_session()
+                # 环境事故：已在 evaluate_detection 中止损（状态置 TERMINATED、
+                # 通知 on_environment_incident），不再尝试终止/重启游戏。
                 return
+
+    # ── detection classification ────────────────────────────
+
+    def evaluate_detection(self, reason: str) -> str:
+        """把一次检出的异常分类为普通僵尸或环境事故（修复五-B）。
+
+        判定规则：
+        - 若 GUI/窗口采集同时失败（游戏控制异常 AND 画面采集异常同时发生），
+          说明是本机图形会话层面的事故（WindowServer 崩溃 / 锁屏 / 显示休眠），
+          重启游戏无意义 → 记为环境事故，止损停止，不再重启。
+        - 若重启预算已耗尽（护栏），即便 GUI 正常也转判环境事故，避免无限重启。
+        - 否则视为普通僵尸（合法重启候选），走正常终止流程。
+
+        Returns:
+            ``"environment_incident"`` 或 ``"zombie"``。副作用已就地应用
+            （标记状态、触发对应回调）；本方法不做异步终止。
+        """
+        if not self._gui_healthy():
+            self._mark_environment_incident(
+                EnvironmentIncidentReason.GUI_SESSION_UNAVAILABLE.value, reason
+            )
+            return "environment_incident"
+        if self.restart_budget_exhausted():
+            self._mark_environment_incident(
+                EnvironmentIncidentReason.GAME_CONTROL_LOST.value,
+                f"restart budget exhausted after: {reason}",
+            )
+            return "environment_incident"
+        self._mark_zombie(reason)
+        return "zombie"
+
+    def _gui_healthy(self) -> bool:
+        """探测 GUI/窗口采集是否可用。未注入探针时保守视为健康（旧行为）。
+
+        探针自身抛错也算采集失败——这本身就是图形会话异常的信号。
+        """
+        if self._gui_probe is None:
+            return True
+        try:
+            return bool(self._gui_probe())
+        except Exception as exc:  # noqa: BLE001 - 探针任何异常都视为 GUI 不可用
+            logger.warning("GUI probe raised, treating GUI as unavailable: %s", exc)
+            return False
 
     # ── termination ─────────────────────────────────────────
 
@@ -190,6 +272,23 @@ class Watchdog:
         logger.warning("Session marked ZOMBIE: %s", reason)
         if self._on_zombie:
             self._on_zombie(reason)
+
+    def _mark_environment_incident(self, incident_reason: str, detail: str) -> None:
+        """止损：标记环境事故并通知编排器（修复五-B）。
+
+        环境事故不是游戏缺陷，重启游戏无意义。直接把会话置为 TERMINATED
+        （干净停止），记录事故原因，触发 on_environment_incident，交由上层
+        判为 BLOCKED_ENVIRONMENT 而非 FAILED。
+        """
+        self._status = SessionStatus.TERMINATED
+        self._environment_incident_reason = incident_reason
+        self._zombie_reason = detail
+        logger.critical(
+            "Environment incident (%s): %s — stopping cleanly, no restart",
+            incident_reason, detail,
+        )
+        if self._on_environment_incident:
+            self._on_environment_incident(incident_reason)
 
     @staticmethod
     def _is_process_alive(pid: int) -> bool:

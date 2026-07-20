@@ -1,0 +1,9 @@
+[v11 21:31:12] capabilities operations=['capabilities', 'submit_run', 'get_run', 'cancel_run', 'resume_run', 'get_report']
+[v11 21:31:13] ORIG 提交: run-20260719-133113-f37a3960
+[v11 21:31:14] 幂等重复提交: run-20260719-133113-f37a3960（应与 ORIG 相同）
+[v11 21:42:40] ORIG 终态: BLOCKED_ENVIRONMENT
+[v11 21:42:40] RESUME 提交: run-20260719-134240-153dd663（resumed_from 应=run-20260719-133113-f37a3960）
+[v11 21:51:29] RESUME 终态: PASSED
+[v11 21:51:30] SECOND 提交: run-20260719-135130-61923c98
+[v11 22:01:32] SECOND 未真实进入局内，跳过取消（避免假取消）
+[v11 22:01:38] V11_PASS=False 未通过项=['orig_terminal_cancelled', 'orig_clean_main_menu', 'orig_final_state_no_saved_run', 'orig_final_screenshot_in_pack', 'second_reached_in_run_before_cancel', 'second_terminal_cancelled', 'second_report_consistent', 'second_restart_count_is_one', 'second_clean_main_menu', 'second_final_state_no_saved_run', 'second_final_screenshot_in_pack', 'second_evidence_sealed', 'second_artifact_readable', 'second_started_from_clean_menu', 'anti_sleep_no_residual', 'no_blocked_environment']
