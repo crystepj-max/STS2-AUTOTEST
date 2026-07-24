@@ -98,3 +98,55 @@ def test_parse_card_id_prefixes_format() -> None:
     }
     assert parse_card_id_prefixes("") == {}
     assert parse_card_id_prefixes("broken,,no-colon-here-ok:x") == {"no-colon-here-ok": "x"}
+
+
+class TestPerTaskProjectResolution:
+    """按公共任务的 project 解析项目配置（Review 复核 #2）。
+
+    场景：公共服务从平台仓库目录启动、环境变量为空、任务携带
+    project=gawain —— 适配器必须读到 Gawain 的项目扩展规则；
+    未携带 project 时必须保持空中性，不得串用其他项目规则。
+    """
+
+    def test_create_adapter_with_project_reads_project_config(self, monkeypatch) -> None:
+        from sts2_autotest.cli.main import _create_adapter
+
+        monkeypatch.delenv("STS2_PROJECT__CARD_ID_PREFIXES", raising=False)
+        monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
+
+        adapter = _create_adapter("agent", project="gawain")
+
+        assert adapter._card_id_prefixes == {"gawain": "GAWAINMOD-"}
+        assert adapter._seed_command_template == "gawain_emergency_recruit_seed {seed}"
+
+    def test_create_adapter_without_project_stays_neutral(self, monkeypatch) -> None:
+        from sts2_autotest.cli.main import _create_adapter
+
+        monkeypatch.delenv("STS2_PROJECT__CARD_ID_PREFIXES", raising=False)
+        monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
+
+        adapter = _create_adapter("agent")
+
+        assert adapter._card_id_prefixes == {}
+        assert adapter._seed_command_template == ""
+
+    def test_create_adapter_with_unknown_project_falls_back_to_neutral(self, monkeypatch) -> None:
+        from sts2_autotest.cli.main import _create_adapter
+
+        monkeypatch.delenv("STS2_PROJECT__CARD_ID_PREFIXES", raising=False)
+        monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
+
+        adapter = _create_adapter("agent", project="no-such-project")
+
+        assert adapter._card_id_prefixes == {}
+        assert adapter._seed_command_template == ""
+
+    def test_env_var_overrides_project_yaml(self, monkeypatch) -> None:
+        from sts2_autotest.cli.main import _create_adapter
+
+        monkeypatch.setenv("STS2_PROJECT__CARD_ID_PREFIXES", "other:OTHER-")
+        monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
+
+        adapter = _create_adapter("agent", project="gawain")
+
+        assert adapter._card_id_prefixes == {"gawain": "GAWAINMOD-", "other": "OTHER-"}

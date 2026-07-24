@@ -130,7 +130,7 @@
 ## 自动检查与真实验收
 
 - 小范围检查：受影响单元测试（适配器/代码生成/审查器/冒烟/配置）全部通过
-- 完整检查：单元全量 1698 passed（最终代码）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
+- 完整检查：单元全量 1706 passed（最终代码）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
 - 跳过项及原因：集成测试 5 项需要真实游戏或外部控制服务的既有跳过（与 P1 基线相同）
 - 真实任务编号：见上表
 - 证据包：`tests/output/artifacts/` 中各 run 的 zip 均可读
@@ -149,6 +149,23 @@
 
 另：复核环境集成检查为 25 通过 10 跳过、本环境为 30 通过 5 跳过——差异来自现场检查项在服务/游戏不可达时自动跳过，与 P1 基线（30/5）在本环境一致；复核中 1 项单元检查因系统截图权限失败，属环境权限项，非 P2 功能回归。
 
+## 第二轮 Review 复核响应（2026-07-24 下午）
+
+第二轮复核（仍 CHANGES REQUIRED）指出 3 项阻塞 + 1 项格式问题，逐项处理：
+
+| # | 复核问题 | 处理 | 证据 |
+|---|---|---|---|
+| 1 | 9 个过期 Gawain 文件未进入提交（早前 stash 操作取消暂存所致） | 补提交删除 | `db8433b`；`git ls-tree -r HEAD tests/generated/` 中 Gawain 文件数为 0 |
+| 2 | 项目配置由服务启动位置决定，未按任务生效 | 新增按任务解析：任务携带 `project` → workspace 配置的 manifest 指针 → 项目根目录 → 该项目 project_extension；平台根目录新增 `sts2-autotest.yaml` 声明 gawain 项目；`Workspace.from_yaml` 补齐 manifest 字段填充；`--card-id` 经 CLI `--detach` 提交时未传入工作进程的既有缺陷一并修复 | 单元检查 4 条（AUTOTEST 目录启动 + env 为空 + gawain 任务正确读取 / 无 project 保持中性 / 未知项目回退中性 / env 覆盖 YAML）；真实验收：从公共服务目录提交 card_test——`project=gawain` 时 PASSED（trace 含 GAWAINMOD-STRIKE_GAWAIN，run-20260724-070830-e7062846）；不传 project 的对照任务如实失败（`Card 'GAWAIN:STRIKE_GAWAIN' not found`，run-20260724-071221-1963dbcd），证明无 project 即无 Gawain 规则 |
+| 3 | 权威文档保留旧结论 | Hermes 矩阵行更新为 r4 真恢复链；1698→1706；提交号 990cfa5→b8b0173 并补 db8433b | `docs/cross-agent-acceptance.md`、本文 |
+| 4 | 提交格式检查未过 | handoff 文档行尾硬换行改独立段落、去末尾空行 | `git diff --check` 通过 |
+
+干净环境复核（第二轮）：
+
+- 按任务配置：公共服务目录 + 项目扩展环境变量为空 + card_test 项目任务 → 按 project 正确读取（上表 #2）
+- 项目隔离：不传 project 时平台保持中性，对照任务如实失败（同上）
+- Gawain 冒烟（干净环境）：PASSED 不变（第一轮复核已验，本轮代码改动不影响该路径）
+
 复核要求的"干净环境重新验证"（2026-07-24 完成）：
 
 - 项目配置：三个 `STS2_PROJECT__*` 环境变量全部未设置时，`load_card_id_prefixes/load_seed_command_template/load_character_aliases` 与 pytest fixtures 装配的适配器均正确解析出 Gawain 前缀/模板/别名（经 `sts2-mod.yaml` 指向的已提交配置文件）
@@ -160,5 +177,5 @@
 
 - 修改范围：STS2-AUTOTEST（源码 9 文件 + 测试 6 文件 + 文档 + 移除 9 个过期生成文件 + scripts/p2_character_short_goals.py 新增）；STS2-GAWAIN（gitignore + 配置 2 文件 + 规格 1 文件 + _env.sh）
 - 原有未提交内容如何保留：两个仓库均只做增量修改；Gawain 仓库中他人的未提交修改（AGENTS.md、MainFile.cs 等）未触碰
-- 是否提交：已提交。STS2-GAWAIN `9390081`（承接配置 5 文件）；STS2-AUTOTEST `990cfa5`（平台迁移 + 复核修复 + 文档，23 文件）
+- 是否提交：已提交。STS2-GAWAIN `9390081`（承接配置 5 文件）；STS2-AUTOTEST `b8b0173`（平台迁移 + 一轮复核修复，23 文件）+ `db8433b`（9 个过期 Gawain 生成文件删除补提交）+ 二轮复核收口提交（按任务解析项目配置，即本报告所在提交，哈希以 `git log` 为准）
 - 是否推送：未推送（留待用户决定）

@@ -152,7 +152,10 @@ class TestCLICommands:
             ["run", "--journey", "first_battle", "--character-id", "IRONCLAD"]
         )
         adapter = object()
-        monkeypatch.setattr("sts2_autotest.cli.main._create_adapter", lambda _: adapter)
+        monkeypatch.setattr(
+            "sts2_autotest.cli.main._create_adapter",
+            lambda _type, project=None: adapter,
+        )
         with patch(
             "sts2_autotest.cli.main._run_journey_foreground", return_value=0
         ) as journey:
@@ -346,6 +349,21 @@ class TestCLICommands:
 
 
 class TestCreateAdapter:
+    def test_child_argv_forwards_card_id_for_card_test(self) -> None:
+        """card_test 经 CLI --detach 提交时 --card-id 必须传入工作进程。"""
+        from sts2_autotest.cli.main import _child_argv
+
+        args = _create_parser().parse_args([
+            "run", "--journey", "card_test", "--card-id", "gawain:strike_gawain",
+            "--adapter", "agent", "--detach",
+        ])
+
+        argv = _child_argv(args, "run-test-1")
+
+        assert "--card-id" in argv
+        assert argv[argv.index("--card-id") + 1] == "gawain:strike_gawain"
+
+
     """_create_adapter reads agent transport env vars."""
 
     def test_agent_http_defaults_use_loopback_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:

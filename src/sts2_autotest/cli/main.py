@@ -294,7 +294,24 @@ def _is_agent_default() -> bool:
     return raw.lower() in ("true", "1", "yes")
 
 
-def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
+def _resolve_project_base_dir(project: str | None) -> Path | None:
+    """按任务项目名解析项目根目录。
+
+    经当前目录 workspace 配置（sts2-autotest.yaml）中该项目的 manifest
+    指针定位；未声明 project 或解析失败时返回 None（调用方回退当前目录）。
+    """
+    if not project:
+        return None
+    ws = _load_workspace()
+    if ws is None:
+        return None
+    manifest = ws.mod_manifest_path(project)
+    if not manifest:
+        return None
+    return Path(manifest).resolve().parent
+
+
+def _create_adapter(adapter_type: str, project: str | None = None) -> GameAdapterProtocol:
     """Create adapter based on type.
 
     Reads configuration from STS2_ prefixed environment variables,
@@ -302,6 +319,8 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
 
     Args:
         adapter_type: "cli" or "agent" — which adapter to instantiate.
+        project: 任务携带的项目名；提供时按该项目自己的配置目录读取
+            项目扩展规则（卡牌前缀、种子命令模板），实现按任务隔离。
 
     Returns:
         A GameAdapterProtocol-compliant adapter instance.
@@ -312,6 +331,8 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
             load_card_id_prefixes,
             load_seed_command_template,
         )
+
+        extension_base_dir = _resolve_project_base_dir(project) or Path.cwd()
 
         transport_raw = _get_env(["STS2_ADAPTER__AGENT__TRANSPORT"], "http")
         if transport_raw not in ("http", "mcp"):
@@ -356,8 +377,8 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
             wait_path=_get_env(
                 ["STS2_ADAPTER__AGENT__WAIT_PATH"], "wait_until_actionable"
             ),
-            card_id_prefixes=load_card_id_prefixes(),
-            seed_command_template=load_seed_command_template(),
+            card_id_prefixes=load_card_id_prefixes(extension_base_dir),
+            seed_command_template=load_seed_command_template(extension_base_dir),
         )
     else:
         from sts2_autotest.adapters.cli_mod import CliModAdapter
@@ -1439,6 +1460,8 @@ def _child_argv(args: Any, run_id: str) -> list[str]:
         argv.extend(["--route-policy", str(args.route_policy)])
     if getattr(args, "combat_mode", None):
         argv.extend(["--combat-mode", str(args.combat_mode)])
+    if getattr(args, "card_id", None):
+        argv.extend(["--card-id", str(args.card_id)])
     argv.extend(["--internal-run-id", run_id])
     return argv
 
@@ -2711,7 +2734,7 @@ def _run_cmd_foreground(args: Any) -> int:
     # Determine adapter type: --adapter flag takes precedence, then env var default
     adapter_type: str = args.adapter or ("agent" if _is_agent_default() else "cli")
     use_agent = adapter_type == "agent"
-    adapter = _create_adapter(adapter_type)
+    adapter = _create_adapter(adapter_type, project=getattr(args, "project", None))
 
     if getattr(args, "journey", None) or getattr(args, "target_scene", None):
         journey_kwargs: dict[str, Any] = {

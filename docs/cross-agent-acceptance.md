@@ -73,7 +73,7 @@ submit_run（保留 run_id）
 | WorkBuddy | MCP；CLI JSON 备选 | 公共协议测试 + M1-M7 共享回归 | `workbuddy-v11-replication-20260720-145438`：三柱全绿 | **已验证**（2026-07-20，P1 基线） |
 | Claude Code | MCP 或 CLI JSON | 与公共契约一致 | `p2-claudecode-short-20260720-01`：CLI JSON 通道，提交、防重、取消 CANCELLED、恢复 PASSED、报告可读 | **已验证**（2026-07-20） |
 | OpenClaw | MCP | 软件包定义验证；CLI 能力发现 | `p2-openclaw-short-20260720-01` / `p2-openclaw-cancel-20260720-01`：两轮全通 | **已验证**（2026-07-20） |
-| Hermes | MCP | 公共契约 + 运行时兼容性 | `p2-hermes-short-20260720-01`：提交、防重、取消 CANCELLED；resume 因 FAILED_PLATFORM 证据未封存平台限制不可用，新提交等效恢复 PASSED | **已验证**（2026-07-20，附说明） |
+| Hermes | MCP | 公共契约 + 运行时兼容性 | `p2-hermes-short-20260720-01`：提交、防重；第四轮真恢复链——原任务 run-20260724-021557-7bca75e8 局内取消 CANCELLED → resume 原任务 run-20260724-021744-e2bed936 PASSED（resumed_from 正确指向），双报告可读 | **已验证**（2026-07-24） |
 
 “平台级验证”证明的是协议和服务行为一致；“外部环境实测”还要证明对应 Agent 能正确配置服务地址、保存 `run_id`、轮询任务并读取报告，不能用平台单测冒充。
 

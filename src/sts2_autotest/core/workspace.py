@@ -110,6 +110,7 @@ class Workspace:
                 name=p["name"],
                 spec_dir=p.get("spec_dir", ""),
                 output_dir=p.get("output_dir", ""),
+                manifest=p.get("manifest", ""),
             ))
 
         return cls(projects, base_dir=base_dir)
