@@ -200,6 +200,89 @@ class TestPersistentRunTools:
         with pytest.raises(McpError, match="evidence"):
             handle_submit_run({"evidence": "verbose"})
 
+    def test_submit_rejects_directory_project_outside_allowed_roots(self, monkeypatch, tmp_path):
+        """目录型 project 必须位于允许范围内（与 spec_dir 同一白名单）。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        outside = tmp_path / "outside" / "mod"
+        outside.mkdir(parents=True)
+
+        with pytest.raises(McpError, match="allowed roots"):
+            handle_submit_run({"project": str(outside), "journey": "new_run"})
+
+    def test_submit_rejects_project_config_outside_allowed_roots(self, monkeypatch, tmp_path):
+        """项目声明指向的配置文件越出允许范围时同样拒绝。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        # 项目目录在白名单内，但 manifest 指向白名单外的配置文件
+        mod_dir = allowed / "mod"
+        mod_dir.mkdir()
+        outside_config = tmp_path / "outside-config.yaml"
+        outside_config.write_text("project_extension: {}\n", encoding="utf-8")
+        (mod_dir / "sts2-mod.yaml").write_text(
+            f"mod:\n  id: mod\nautotest:\n  config: {outside_config}\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(McpError, match="allowed roots"):
+            handle_submit_run({"project": str(mod_dir), "journey": "new_run"})
+
+    def test_run_tests_in_dir_injects_project_dir_env(self, monkeypatch, tmp_path):
+        """执行生成测试时，项目上下文经 STS2_PROJECT_DIR 传入子进程。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
+        captured: dict = {}
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["cmd"] = cmd
+            return FakeCompleted()
+
+        monkeypatch.setattr(mcp_tools.subprocess, "run", fake_run)
+        project_dir = tmp_path / "my-mod"
+        project_dir.mkdir()
+
+        mcp_tools.run_tests_in_dir(
+            tmp_path, timeout=10, project_dir=project_dir, output_dir=tmp_path / "out"
+        )
+
+        assert captured["env"]["STS2_PROJECT_DIR"] == str(project_dir.resolve())
+
+    def test_run_tests_in_dir_without_project_keeps_default_env(self, monkeypatch, tmp_path):
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
+        captured: dict = {}
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return FakeCompleted()
+
+        monkeypatch.setattr(mcp_tools.subprocess, "run", fake_run)
+
+        mcp_tools.run_tests_in_dir(tmp_path, timeout=10, output_dir=tmp_path / "out")
+
+        assert captured["env"] is None
+
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_resume_run_preserves_resume_mode_in_worker_argv(self, mock_worker, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))

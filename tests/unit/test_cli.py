@@ -363,6 +363,44 @@ class TestCreateAdapter:
         assert "--card-id" in argv
         assert argv[argv.index("--card-id") + 1] == "gawain:strike_gawain"
 
+    def test_cli_submit_persists_card_id_and_resume_restores_it(self, tmp_path, monkeypatch) -> None:
+        """CLI card_test：取消后恢复必须保留原目标卡牌（与 MCP 语义一致）。"""
+        from sts2_autotest.cli import main as cli_main
+
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        spawned: dict = {}
+        monkeypatch.setattr(
+            "sts2_autotest.core.run_service.spawn_worker",
+            lambda store, record, argv: spawned.setdefault("argv", argv) or 0,
+        )
+        args = _create_parser().parse_args([
+            "run", "--journey", "card_test", "--card-id", "gawain:strike_gawain",
+            "--character-id", "GAWAINMOD-GAWAIN", "--adapter", "agent",
+            "--timeout", "60", "--detach", "--idempotency-key", "resume-card-1",
+        ])
+        assert cli_main.run_cmd(args) == 0
+        run_id = spawned["argv"][-1]  # argv 末尾为 --internal-run-id <run_id>
+
+        store = cli_main._run_store()
+        record = store.load(run_id)
+        assert record is not None
+        assert record.request.metadata.get("card_id") == "gawain:strike_gawain"
+
+        # 原任务收尾为 CANCELLED 且证据封存后才能恢复
+        store.update(run_id, status="CANCELLED", phase="COMPLETED",
+                     evidence_sealed=True)
+        spawned.clear()
+        resume_args = _create_parser().parse_args(["resume", run_id])
+        assert cli_main.resume_run_cmd(resume_args) == 0
+
+        resumed_argv = spawned["argv"]
+        assert "--card-id" in resumed_argv
+        assert resumed_argv[resumed_argv.index("--card-id") + 1] == "gawain:strike_gawain"
+        # 恢复任务自身的 metadata 同样保留 card_id（链式恢复不丢失）
+        resumed_record = store.load(resumed_argv[-1])
+        assert resumed_record.request.metadata.get("card_id") == "gawain:strike_gawain"
+        assert resumed_record.request.metadata.get("resumed_from") == run_id
+
 
     """_create_adapter reads agent transport env vars."""
 

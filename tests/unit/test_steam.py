@@ -87,7 +87,11 @@ class TestStartGame:
                     with patch.object(sc, "_find_game_pid", return_value=54321):
                         pid = sc.start_game()
             assert pid == 54321
-            mock_popen.assert_called_once_with(["open", "steam://run/2868840"])
+            args, kwargs = mock_popen.call_args
+            assert args[0][0] == "open"
+            assert args[0][1].endswith("SlayTheSpire2.app") or args[0][1].startswith("steam://run/")
+            assert kwargs["env"]["STS2_ENABLE_DEBUG_ACTIONS"] == "1"
+            assert kwargs["env"]["STS2_API_PORT"] == "8080"
         else:
             sc = SteamController(steam_exe=r"C:\Program Files (x86)\Steam\steam.exe")
             sc.startup_timeout = 1.0
@@ -96,11 +100,26 @@ class TestStartGame:
                     with patch.object(sc, "_find_game_pid", return_value=54321):
                         pid = sc.start_game()
             assert pid == 54321
-            mock_popen.assert_called_once_with([
+            args, kwargs = mock_popen.call_args
+            assert args[0] == [
                 r"C:\Program Files (x86)\Steam\steam.exe",
                 "-applaunch",
                 "2868840",
-            ])
+            ]
+            assert kwargs["env"]["STS2_ENABLE_DEBUG_ACTIONS"] == "1"
+
+    def test_start_game_injects_debug_env_on_macos(self) -> None:
+        """macOS 启动必须注入调试 API 环境（硬重启后调试控制台不丢失）。"""
+        if not _IS_MACOS:
+            return
+        sc = SteamController()
+        sc.startup_timeout = 1.0
+        with patch("subprocess.Popen") as mock_popen:
+            with patch.object(sc, "_find_game_pids", return_value=set()):
+                with patch.object(sc, "_find_game_pid", return_value=54321):
+                    sc.start_game()
+        _, kwargs = mock_popen.call_args
+        assert kwargs["env"]["STS2_ENABLE_DEBUG_ACTIONS"] == "1"
 
     def test_start_game_timeout(self, sc: SteamController) -> None:
         sc.startup_timeout = 0.1

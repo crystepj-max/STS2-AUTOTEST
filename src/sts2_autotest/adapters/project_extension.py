@@ -62,6 +62,11 @@ def _find_config_file(base_dir: Path) -> Path | None:
     return None
 
 
+def find_project_config_file(base_dir: Path) -> Path | None:
+    """_find_config_file 的公开别名（供提交阶段做允许范围校验）。"""
+    return _find_config_file(base_dir)
+
+
 def _read_yaml_extension(base_dir: Path) -> dict[str, Any]:
     config_file = _find_config_file(base_dir)
     if config_file is None:
@@ -112,3 +117,65 @@ def load_character_aliases(base_dir: Path | None = None) -> dict[str, str]:
         if name.strip():
             aliases[name.strip()] = character_id.strip()
     return aliases
+
+
+def resolve_base_dir(start: Path | None = None) -> Path:
+    """项目扩展配置的生效目录。
+
+    ``STS2_PROJECT_DIR`` 环境变量优先（跨进程任务边界——测试子进程、
+    工作进程——传递项目上下文的标准方式），否则退回给定目录或当前目录。
+    """
+    raw = os.environ.get("STS2_PROJECT_DIR", "")
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_dir():
+            return candidate.resolve()
+    return (start or Path.cwd()).resolve()
+
+
+def load_project_spec_output(base_dir: Path) -> tuple[str | None, str | None]:
+    """从项目声明中解析规格来源目录与生成输出目录（绝对路径）。
+
+    优先项目自己的 workspace 配置（``workspace.projects[0]`` 的
+    spec_dir/output_dir，相对路径按项目根目录解析）；
+    其次 mod manifest 的 ``autotest.spec_dirs[0]`` / ``evidence_dir``。
+    均不可得时返回 (None, None)，由调用方决定回退。
+    """
+    base_dir = base_dir.resolve()
+    config_file = _find_config_file(base_dir)
+    if config_file is not None:
+        try:
+            data = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            workspace = data.get("workspace")
+            if isinstance(workspace, dict):
+                projects = workspace.get("projects")
+                if isinstance(projects, list) and projects:
+                    first = projects[0]
+                    if isinstance(first, dict):
+                        spec_dir = first.get("spec_dir") or None
+                        output_dir = first.get("output_dir") or None
+                        if spec_dir or output_dir:
+                            return (
+                                str((base_dir / spec_dir).resolve()) if spec_dir else None,
+                                str((base_dir / output_dir).resolve()) if output_dir else None,
+                            )
+    manifest = base_dir / _MOD_MANIFEST
+    if manifest.is_file():
+        try:
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        except Exception:
+            return None, None
+        if isinstance(data, dict):
+            autotest = data.get("autotest")
+            if isinstance(autotest, dict):
+                spec_dirs = autotest.get("spec_dirs") or []
+                spec_dir = spec_dirs[0] if spec_dirs else None
+                output_dir = autotest.get("evidence_dir") or None
+                return (
+                    str((base_dir / spec_dir).resolve()) if spec_dir else None,
+                    str((base_dir / output_dir).resolve()) if output_dir else None,
+                )
+    return None, None

@@ -274,3 +274,31 @@ class TestPerTaskProjectResolution:
 
         assert rc == 0
         assert captured["aliases"] == {"MyChar": "MYMOD-MYCHAR"}
+
+    def test_project_directory_determines_spec_and_output_dirs(self, tmp_path, monkeypatch) -> None:
+        """目录型项目同时决定规格来源与默认输出，不回退平台默认目录。"""
+        from argparse import Namespace
+        from sts2_autotest.cli.main import _resolve_output_dir, _resolve_spec_dir
+
+        monkeypatch.chdir(tmp_path)  # 公共服务目录：无 docs/process/specs
+        mod_dir = self._make_mod_project(tmp_path / "my-mod")
+        (mod_dir / "automation" / "autotest" / "config" / "sts2-autotest.yaml").write_text(
+            "workspace:\n"
+            "  projects:\n"
+            "    - name: mymod\n"
+            "      spec_dir: automation/autotest/specs\n"
+            "      output_dir: automation/autotest/generated\n"
+            "project_extension:\n"
+            "  card_id_prefixes:\n"
+            "    mymod: MYMOD-\n",
+            encoding="utf-8",
+        )
+        args = Namespace(spec_dir=None, output_dir=None, project=str(mod_dir))
+
+        spec_dir = _resolve_spec_dir(args)
+        output_dir = _resolve_output_dir(args, spec_dir or "")
+
+        assert spec_dir == str((mod_dir / "automation/autotest/specs").resolve())
+        assert output_dir == str((mod_dir / "automation/autotest/generated").resolve())
+        assert "docs/process/specs" not in (spec_dir or "")
+        assert output_dir != "tests/generated"

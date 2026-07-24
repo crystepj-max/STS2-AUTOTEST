@@ -127,7 +127,7 @@
 ## 自动检查与真实验收
 
 - 小范围检查：受影响单元测试（适配器/代码生成/审查器/冒烟/配置）全部通过
-- 完整检查：单元全量 **1715 passed**（最终代码，含按任务解析与隔离的全部新增检查）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
+- 完整检查：单元全量 **1723 passed**（最终代码，含第四轮生命周期贯通的全部新增检查）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
 - 跳过项及原因：集成测试 5 项需要真实游戏或外部控制服务的既有跳过（与 P1 基线相同）
 - 真实任务编号：见上表
 - 证据包：`tests/output/artifacts/` 中各 run 的 zip 均可读
@@ -171,9 +171,31 @@
 |---|---|---|---|
 | 1 | 项目解析只支持平台预登记的 Gawain；平台仓库重新出现 Gawain 固定登记 | `project` 同时支持两种通用输入：直接项目目录（含 sts2-mod.yaml 或项目配置文件）与已登记名称（本地 workspace 配置）；平台仓库中的 Gawain 预登记已删除（`git rm sts2-autotest.yaml`），该文件名加入 .gitignore 作为本地设置 | 单元检查 `test_create_adapter_with_project_directory`（目录直接接入，无登记）、`test_create_adapter_with_registered_name`（本地登记名）；真实验收：以 `project=../STS2-GAWAIN` 目录直接接入的 card_test **PASSED**（run-20260724-082728-f89cda40，trace 含 GAWAINMOD-STRIKE_GAWAIN），全程无平台登记 |
 | 2 | 项目配置未覆盖角色别名与连接恢复 | 角色别名随任务 project 读取（编译路径贯通）；恢复重建入口（`_dispatch_orchestrator` 及 5 处调用点）全部携带 project，连接恢复后项目规则不丢失 | 单元检查 `test_character_aliases_follow_project`、`test_compile_cmd_passes_project_aliases`（公共服务目录编译）、`test_recovery_factory_keeps_project_config`（强制重建后配置保留） |
-| 3 | 权威文档三套数字并存 | 统一为 **1715**（单元全量最终值），登记 `8ef63e2`；删除"以 git log 为准"写法 | `docs/cross-agent-acceptance.md`、本文 |
+| 3 | 权威文档三套数字并存 | 统一为当时最终值，登记 `8ef63e2`；删除"以 git log 为准"写法 | `docs/cross-agent-acceptance.md`、本文 |
 
-本轮全量回归：单元 **1715 passed**（含本轮按任务解析与隔离的新增检查）；集成 30 passed, 5 skipped；compileall / lint-imports / git diff --check 全部通过。按复核说明，未重跑完整第一章；真实项目目录 card_test 已覆盖关闭条件。
+第三轮全量回归：单元 1715 passed（含该轮按任务解析与隔离的新增检查；第四轮后统一为 1723）；集成 30 passed, 5 skipped；compileall / lint-imports / git diff --check 全部通过。按复核说明，未重跑完整第一章；真实项目目录 card_test 已覆盖关闭条件。
+
+## 第四轮 Review 复核响应（2026-07-24 晚）
+
+第四轮复核指出 4 项 P1 阻塞 + 1 项文档问题，全部处理：
+
+| # | 复核问题 | 处理 | 证据 |
+|---|---|---|---|
+| 1 | 目录型项目只读配置，规格来源与输出仍回退平台目录（假通过风险） | 目录型项目同时决定项目配置、规格来源与默认输出：优先项目自己的 workspace 配置（`workspace.projects[0]` 的 spec_dir/output_dir），其次 mod manifest 的 `autotest.spec_dirs[0]`/`evidence_dir`；不回退平台默认目录 | 单元检查 `test_project_directory_determines_spec_and_output_dirs` |
+| 2 | 编译后执行阶段丢失项目规则 | 项目上下文跨进程传递：`STS2_PROJECT_DIR` 标准环境变量（`resolve_base_dir` 统一优先级）；pytest fixtures、CLI 适配器装配、`run_tests_in_dir`（新增 project_dir 参数）、`run --all` 管线全部贯通 | 单元检查 `test_run_tests_in_dir_injects_project_dir_env`；**端到端真实验收**：从平台目录执行 Gawain 自包含套件（含 give_card/set_seed）PASSED（42.5s，见下） |
+| 3 | CLI 恢复 card_test 丢失目标卡牌 | CLI 提交持久化 `card_id` 到任务 metadata（与 MCP 路径一致），恢复时还原到工作进程参数；链式恢复不丢失 | 单元检查 `test_cli_submit_persists_card_id_and_resume_restores_it` |
+| 4 | 目录型 project 绕过路径白名单 | 提交阶段对目录型 project 执行与 spec_dir 同一允许范围校验；项目声明指向的配置文件同样必须在白名单内 | 单元检查 `test_submit_rejects_directory_project_outside_allowed_roots`、`test_submit_rejects_project_config_outside_allowed_roots` |
+| 5 | 报告保留动态提交号 | 直接登记 `3510c91`；本段为最终定稿 | 本文工作区段 |
+
+**端到端真实验收（复核 #2 要求的完整链路）**：
+
+1. `first_battle` 旅程以 `project=../STS2-GAWAIN` 目录接入到达首战（run-20260724-095826-608d0870，PASSED）；
+2. 从平台仓库目录执行 Gawain 自包含套件 `test_suite_gawain_m2_multi_trigger.py`（`STS2_PROJECT_DIR` 传入，无其他项目环境变量）→ **PASSED**（42.5s）：`give_card("gawain:emergency_recruit")` 经项目前缀映射为 `GAWAINMOD-EMERGENCY_RECRUIT`、`set_seed` 经项目命令模板执行、三张牌真实打出、多仆从触发断言通过。
+
+**端到端顺带修复的两个平台既有缺陷**（均有单元检查）：
+
+- 状态机不承认 EVENT→BUNDLE_SELECTION / EVENT→TRI_SELECT（涅奥捆绑选择与三选一是 EVENT 的合法后继，Hermes r3 轨迹与本次端到端均真实遇到）→ 已补充合法转移；
+- 编排器硬重启经 `open steam://run` 启动（env 经已运行 Steam 转发无法到达游戏），重启后调试控制台丢失 → SteamController 改为 macOS 直接启动游戏包并注入调试环境（`test_start_game_injects_debug_env_on_macos`）。
 复核要求的"干净环境重新验证"（2026-07-24 完成）：
 
 - 项目配置：三个 `STS2_PROJECT__*` 环境变量全部未设置时，`load_card_id_prefixes/load_seed_command_template/load_character_aliases` 与 pytest fixtures 装配的适配器均正确解析出 Gawain 前缀/模板/别名（经 `sts2-mod.yaml` 指向的已提交配置文件）
@@ -185,5 +207,5 @@
 
 - 修改范围：STS2-AUTOTEST（源码 9 文件 + 测试 6 文件 + 文档 + 移除 9 个过期生成文件 + scripts/p2_character_short_goals.py 新增）；STS2-GAWAIN（gitignore + 配置 2 文件 + 规格 1 文件 + _env.sh）
 - 原有未提交内容如何保留：两个仓库均只做增量修改；Gawain 仓库中他人的未提交修改（AGENTS.md、MainFile.cs 等）未触碰
-- 是否提交：已提交。STS2-GAWAIN `9390081`（承接配置 5 文件）；STS2-AUTOTEST `b8b0173`（平台迁移 + 一轮复核修复，23 文件）+ `db8433b`（9 个过期 Gawain 生成文件删除补提交）+ `8ef63e2`（按任务解析项目配置 + 二轮复核收口，8 文件）+ 三轮复核收口提交（project 支持项目目录直接接入，即本报告所在提交，哈希以 `git log -1` 为准）
+- 是否提交：已提交。STS2-GAWAIN `9390081`（承接配置 5 文件）；STS2-AUTOTEST `b8b0173`（平台迁移 + 一轮复核修复，23 文件）+ `db8433b`（9 个过期 Gawain 生成文件删除补提交）+ `8ef63e2`（按任务解析项目配置 + 二轮复核收口，8 文件）+ `3510c91`（project 支持项目目录直接接入 + 配置全生命周期贯通，三轮收口）+ 第四轮收口提交（提交号登记于文末）
 - 是否推送：未推送（留待用户决定）

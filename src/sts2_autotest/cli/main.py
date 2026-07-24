@@ -340,9 +340,10 @@ def _create_adapter(adapter_type: str, project: str | None = None) -> GameAdapte
         from sts2_autotest.adapters.project_extension import (
             load_card_id_prefixes,
             load_seed_command_template,
+            resolve_base_dir,
         )
 
-        extension_base_dir = _resolve_project_base_dir(project) or Path.cwd()
+        extension_base_dir = _resolve_project_base_dir(project) or resolve_base_dir()
 
         transport_raw = _get_env(["STS2_ADAPTER__AGENT__TRANSPORT"], "http")
         if transport_raw not in ("http", "mcp"):
@@ -1072,7 +1073,7 @@ def _load_character_aliases(project: str | None = None) -> dict[str, str]:
 
 
 def _resolve_spec_dir(args: Any) -> str | None:
-    """Resolve spec directory from args or workspace config."""
+    """Resolve spec directory from args, the task's project, or workspace config."""
     spec_dir = getattr(args, "spec_dir", None)
     if isinstance(spec_dir, str) and spec_dir:
         return spec_dir
@@ -1080,6 +1081,17 @@ def _resolve_spec_dir(args: Any) -> str | None:
         return str(spec_dir)
     project_name = getattr(args, "project", None)
     if project_name:
+        # 任务项目（目录或登记名）自己的声明决定规格来源，
+        # 不回退到平台默认目录（否则目录型项目会错误执行平台测试）。
+        project_base = _resolve_project_base_dir(project_name)
+        if project_base is not None:
+            from sts2_autotest.adapters.project_extension import (
+                load_project_spec_output,
+            )
+
+            project_spec_dir, _ = load_project_spec_output(project_base)
+            if project_spec_dir:
+                return project_spec_dir
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
@@ -1104,6 +1116,15 @@ def _resolve_output_dir(args: Any, spec_dir: str) -> str:
         return str(output_dir)
     project_name = getattr(args, "project", None)
     if project_name:
+        project_base = _resolve_project_base_dir(project_name)
+        if project_base is not None:
+            from sts2_autotest.adapters.project_extension import (
+                load_project_spec_output,
+            )
+
+            _, project_output_dir = load_project_spec_output(project_base)
+            if project_output_dir:
+                return project_output_dir
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
@@ -1504,6 +1525,7 @@ def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> i
             **({"target_scene": getattr(args, "target_scene")} if getattr(args, "target_scene", None) else {}),
             "route_policy": getattr(args, "route_policy", "leftmost"),
             "combat_mode": getattr(args, "combat_mode", "traversal"),
+            **({"card_id": getattr(args, "card_id")} if getattr(args, "card_id", None) else {}),
         },
     )
     record = store.create(request)
@@ -1610,6 +1632,7 @@ def resume_run_cmd(args: Any) -> int:
         target_scene=request.metadata.get("target_scene"),
         route_policy=request.metadata.get("route_policy", "leftmost"),
         combat_mode=request.metadata.get("combat_mode", "traversal"),
+        card_id=request.metadata.get("card_id"),
         evidence=request.evidence,
         idempotency_key=None,
     )
@@ -2849,6 +2872,7 @@ def _run_cmd_foreground(args: Any) -> int:
                 targets=[Path(target) for target in pytest_targets],
                 output_dir=output_dir,
                 run_id=getattr(args, "internal_run_id", None),
+                project_dir=_resolve_project_base_dir(getattr(args, "project", None)),
             )
             return 0 if run_result.get("status") == "OK" else 1
         print("[autotest] Running all cases (no spec pipeline)...")
