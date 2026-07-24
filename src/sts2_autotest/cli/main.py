@@ -295,12 +295,22 @@ def _is_agent_default() -> bool:
 
 
 def _resolve_project_base_dir(project: str | None) -> Path | None:
-    """按任务项目名解析项目根目录。
+    """按任务项目输入解析项目根目录。
 
-    经当前目录 workspace 配置（sts2-autotest.yaml）中该项目的 manifest
-    指针定位；未声明 project 或解析失败时返回 None（调用方回退当前目录）。
+    支持两种通用输入（公共契约：项目标识或项目目录）：
+    1. 直接项目目录（含路径分隔符或以 ``.`` 开头，且目录真实存在）；
+    2. 已登记的项目名称（当前目录本地 workspace 配置中的 manifest 指针；
+       平台不预置任何项目登记，登记属于本地设置）。
+    未提供或解析失败时返回 None（调用方回退当前目录）。
     """
     if not project:
+        return None
+    if "/" in project or "\\" in project or project.startswith("."):
+        candidate = Path(project).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        if candidate.is_dir():
+            return candidate.resolve()
         return None
     ws = _load_workspace()
     if ws is None:
@@ -1047,17 +1057,18 @@ def _load_workspace() -> Any | None:
     return None
 
 
-def _load_character_aliases() -> dict[str, str]:
+def _load_character_aliases(project: str | None = None) -> dict[str, str]:
     """Load project-provided character aliases.
 
-    统一经 adapters.project_extension 读取：项目配置文件
-    （sts2-autotest.yaml 或 sts2-mod.yaml 指向的配置）为基，
-    ``STS2_PROJECT__CHARACTER_ALIASES`` 环境变量覆盖。
+    统一经 adapters.project_extension 读取：按任务 project（项目目录或
+    已登记名称）解析项目配置；未携带 project 时读取当前目录配置。
+    ``STS2_PROJECT__CHARACTER_ALIASES`` 环境变量为覆盖层。
     两者皆无时返回空映射（平台默认仅认识原游戏角色）。
     """
     from sts2_autotest.adapters.project_extension import load_character_aliases
 
-    return load_character_aliases()
+    base_dir = _resolve_project_base_dir(project) or Path.cwd()
+    return load_character_aliases(base_dir)
 
 
 def _resolve_spec_dir(args: Any) -> str | None:
@@ -1287,7 +1298,9 @@ def compile_cmd(args: Any) -> int:
         print(f"[autotest] No spec files found in {compile_input_dir}")
         return 0
 
-    generator = CodeGenerator(character_aliases=_load_character_aliases())
+    generator = CodeGenerator(
+        character_aliases=_load_character_aliases(getattr(args, "project", None))
+    )
     generated: list[str] = []
     specs_by_id = {s.id: s for s in cases}
 
@@ -1337,6 +1350,7 @@ def _dispatch_orchestrator(
     resumed_from: str | None = None,
     use_agent: bool = False,
     run_id: str | None = None,
+    project: str | None = None,
 ) -> int:
     """Route to the correct orchestrator with the given adapter.
 
@@ -1344,10 +1358,12 @@ def _dispatch_orchestrator(
     instance from _create_adapter() (which respects STS2_ env vars)
     is actually used. When adapter is None (from --resume branches
     that haven't built it yet), creates it from default env config.
+    任务携带的 project 同时传入恢复重建入口，确保连接恢复后
+    项目扩展规则（卡牌前缀、种子命令模板）不丢失。
     """
     if adapter is None:
         use_agent = _is_agent_default()
-        adapter = _create_adapter("agent") if use_agent else _create_adapter("cli")
+        adapter = _create_adapter("agent", project=project) if use_agent else _create_adapter("cli")
 
     kwargs: dict[str, str | None] = {"progress_path": progress_path}
     if resumed_from is not None:
@@ -1357,7 +1373,9 @@ def _dispatch_orchestrator(
         adapter,
         case_ids,
         timeout=timeout,
-        adapter_factory=lambda: _create_adapter("agent" if use_agent else "cli"),
+        adapter_factory=lambda: _create_adapter(
+            "agent" if use_agent else "cli", project=project
+        ),
         run_id=run_id,
         **kwargs,
     )
@@ -2785,6 +2803,7 @@ def _run_cmd_foreground(args: Any) -> int:
                 progress_path=use_progress, resumed_from=resumed_from,
                 use_agent=use_agent,
                 run_id=getattr(args, "internal_run_id", None),
+                project=getattr(args, "project", None),
             )
 
     # Auto-detect: progress file exists but no explicit flag
@@ -2837,6 +2856,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, ["all"], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     elif args.cases:
         print(f"[autotest] Running cases: {', '.join(args.cases)}")
@@ -2844,6 +2864,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, args.cases, timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     elif args.suite:
         print(f"[autotest] Running suite: {args.suite}")
@@ -2851,6 +2872,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, [args.suite], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     elif args.failed:
         print("[autotest] Re-running failed cases...")
@@ -2858,6 +2880,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, ["failed"], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     else:
         print("[autotest] No run option specified. "

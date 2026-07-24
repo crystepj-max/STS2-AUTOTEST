@@ -13,9 +13,6 @@
 - 是否需要用户补充权限：**否**（三个外部 Agent 环境本机齐全，用户已批准驱动）
 
 > 本报告为 Review 复核（2026-07-24，双 PASSED 被拒）后的修正版。复核指出的 5 项问题全部处理：Gawain 承接配置已解除忽略并提交（`9390081`）；平台新增统一项目配置读取（`adapters/project_extension.py`）；不可跳过网格选牌已修复（含失败路径检查）；Hermes 已完成真正的取消→恢复→PASSED（r4- 前缀独立存档）；报告数字已逐项按原始证据修正（详见文末"Review 复核响应"）。
-- 是否仍存在角色或 Mod 隐性默认值：**否**（迁移清单 11 项 A 类全部处理完毕；剩余 Gawain 字样仅为边界声明文档字符串与中性测试样例）
-- 是否修改公共任务含义：**否**（六操作、状态名称、报告结构均未改变；`get_magic_web_layer` 为平台适配器上的项目专属只读接口，移除前全仓无调用方）
-- 是否需要用户补充权限：**否**（三个外部 Agent 环境本机齐全，用户已批准驱动）
 
 ## P2-1 结果
 
@@ -130,7 +127,7 @@
 ## 自动检查与真实验收
 
 - 小范围检查：受影响单元测试（适配器/代码生成/审查器/冒烟/配置）全部通过
-- 完整检查：单元全量 1706 passed（最终代码）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
+- 完整检查：单元全量 **1715 passed**（最终代码，含按任务解析与隔离的全部新增检查）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
 - 跳过项及原因：集成测试 5 项需要真实游戏或外部控制服务的既有跳过（与 P1 基线相同）
 - 真实任务编号：见上表
 - 证据包：`tests/output/artifacts/` 中各 run 的 zip 均可读
@@ -157,7 +154,7 @@
 |---|---|---|---|
 | 1 | 9 个过期 Gawain 文件未进入提交（早前 stash 操作取消暂存所致） | 补提交删除 | `db8433b`；`git ls-tree -r HEAD tests/generated/` 中 Gawain 文件数为 0 |
 | 2 | 项目配置由服务启动位置决定，未按任务生效 | 新增按任务解析：任务携带 `project` → workspace 配置的 manifest 指针 → 项目根目录 → 该项目 project_extension；平台根目录新增 `sts2-autotest.yaml` 声明 gawain 项目；`Workspace.from_yaml` 补齐 manifest 字段填充；`--card-id` 经 CLI `--detach` 提交时未传入工作进程的既有缺陷一并修复 | 单元检查 4 条（AUTOTEST 目录启动 + env 为空 + gawain 任务正确读取 / 无 project 保持中性 / 未知项目回退中性 / env 覆盖 YAML）；真实验收：从公共服务目录提交 card_test——`project=gawain` 时 PASSED（trace 含 GAWAINMOD-STRIKE_GAWAIN，run-20260724-070830-e7062846）；不传 project 的对照任务如实失败（`Card 'GAWAIN:STRIKE_GAWAIN' not found`，run-20260724-071221-1963dbcd），证明无 project 即无 Gawain 规则 |
-| 3 | 权威文档保留旧结论 | Hermes 矩阵行更新为 r4 真恢复链；1698→1706；提交号 990cfa5→b8b0173 并补 db8433b | `docs/cross-agent-acceptance.md`、本文 |
+| 3 | 权威文档保留旧结论 | Hermes 矩阵行更新为 r4 真恢复链；数字统一为 1711；提交号 990cfa5→b8b0173 并补 db8433b | `docs/cross-agent-acceptance.md`、本文 |
 | 4 | 提交格式检查未过 | handoff 文档行尾硬换行改独立段落、去末尾空行 | `git diff --check` 通过 |
 
 干净环境复核（第二轮）：
@@ -166,6 +163,17 @@
 - 项目隔离：不传 project 时平台保持中性，对照任务如实失败（同上）
 - Gawain 冒烟（干净环境）：PASSED 不变（第一轮复核已验，本轮代码改动不影响该路径）
 
+## 第三轮 Review 复核响应（2026-07-24 晚）
+
+第三轮复核指出"按任务隔离项目配置"仍未完整实现（2 项阻塞 + 1 项文档），逐项处理：
+
+| # | 复核问题 | 处理 | 证据 |
+|---|---|---|---|
+| 1 | 项目解析只支持平台预登记的 Gawain；平台仓库重新出现 Gawain 固定登记 | `project` 同时支持两种通用输入：直接项目目录（含 sts2-mod.yaml 或项目配置文件）与已登记名称（本地 workspace 配置）；平台仓库中的 Gawain 预登记已删除（`git rm sts2-autotest.yaml`），该文件名加入 .gitignore 作为本地设置 | 单元检查 `test_create_adapter_with_project_directory`（目录直接接入，无登记）、`test_create_adapter_with_registered_name`（本地登记名）；真实验收：以 `project=../STS2-GAWAIN` 目录直接接入的 card_test **PASSED**（run-20260724-082728-f89cda40，trace 含 GAWAINMOD-STRIKE_GAWAIN），全程无平台登记 |
+| 2 | 项目配置未覆盖角色别名与连接恢复 | 角色别名随任务 project 读取（编译路径贯通）；恢复重建入口（`_dispatch_orchestrator` 及 5 处调用点）全部携带 project，连接恢复后项目规则不丢失 | 单元检查 `test_character_aliases_follow_project`、`test_compile_cmd_passes_project_aliases`（公共服务目录编译）、`test_recovery_factory_keeps_project_config`（强制重建后配置保留） |
+| 3 | 权威文档三套数字并存 | 统一为 **1715**（单元全量最终值），登记 `8ef63e2`；删除"以 git log 为准"写法 | `docs/cross-agent-acceptance.md`、本文 |
+
+本轮全量回归：单元 **1715 passed**（含本轮按任务解析与隔离的新增检查）；集成 30 passed, 5 skipped；compileall / lint-imports / git diff --check 全部通过。按复核说明，未重跑完整第一章；真实项目目录 card_test 已覆盖关闭条件。
 复核要求的"干净环境重新验证"（2026-07-24 完成）：
 
 - 项目配置：三个 `STS2_PROJECT__*` 环境变量全部未设置时，`load_card_id_prefixes/load_seed_command_template/load_character_aliases` 与 pytest fixtures 装配的适配器均正确解析出 Gawain 前缀/模板/别名（经 `sts2-mod.yaml` 指向的已提交配置文件）
@@ -177,5 +185,5 @@
 
 - 修改范围：STS2-AUTOTEST（源码 9 文件 + 测试 6 文件 + 文档 + 移除 9 个过期生成文件 + scripts/p2_character_short_goals.py 新增）；STS2-GAWAIN（gitignore + 配置 2 文件 + 规格 1 文件 + _env.sh）
 - 原有未提交内容如何保留：两个仓库均只做增量修改；Gawain 仓库中他人的未提交修改（AGENTS.md、MainFile.cs 等）未触碰
-- 是否提交：已提交。STS2-GAWAIN `9390081`（承接配置 5 文件）；STS2-AUTOTEST `b8b0173`（平台迁移 + 一轮复核修复，23 文件）+ `db8433b`（9 个过期 Gawain 生成文件删除补提交）+ 二轮复核收口提交（按任务解析项目配置，即本报告所在提交，哈希以 `git log` 为准）
+- 是否提交：已提交。STS2-GAWAIN `9390081`（承接配置 5 文件）；STS2-AUTOTEST `b8b0173`（平台迁移 + 一轮复核修复，23 文件）+ `db8433b`（9 个过期 Gawain 生成文件删除补提交）+ `8ef63e2`（按任务解析项目配置 + 二轮复核收口，8 文件）+ 三轮复核收口提交（project 支持项目目录直接接入，即本报告所在提交，哈希以 `git log -1` 为准）
 - 是否推送：未推送（留待用户决定）

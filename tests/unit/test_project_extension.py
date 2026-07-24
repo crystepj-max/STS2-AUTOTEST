@@ -101,23 +101,66 @@ def test_parse_card_id_prefixes_format() -> None:
 
 
 class TestPerTaskProjectResolution:
-    """按公共任务的 project 解析项目配置（Review 复核 #2）。
+    """按公共任务的 project 解析项目配置（Review 复核 #2 / 三轮复核 #1-#2）。
 
-    场景：公共服务从平台仓库目录启动、环境变量为空、任务携带
-    project=gawain —— 适配器必须读到 Gawain 的项目扩展规则；
-    未携带 project 时必须保持空中性，不得串用其他项目规则。
+    project 同时接受：已登记名称（本地 workspace 配置）与直接项目目录。
+    未携带 project 时保持空中性，不得串用其他项目规则。
     """
 
-    def test_create_adapter_with_project_reads_project_config(self, monkeypatch) -> None:
+    def _make_mod_project(self, base: Path) -> Path:
+        """构造一个最小 MOD 项目目录（manifest + 项目配置）。"""
+        config_dir = base / "automation" / "autotest" / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "sts2-autotest.yaml").write_text(
+            "project_extension:\n"
+            "  card_id_prefixes:\n"
+            "    mymod: MYMOD-\n"
+            "  seed_command_template: 'mymod_seed {seed}'\n"
+            "  character_aliases:\n"
+            "    MyChar: MYMOD-MYCHAR\n",
+            encoding="utf-8",
+        )
+        (base / "sts2-mod.yaml").write_text(
+            "mod:\n  id: mymod\n"
+            "autotest:\n  config: automation/autotest/config/sts2-autotest.yaml\n",
+            encoding="utf-8",
+        )
+        return base
+
+    def test_create_adapter_with_project_directory(self, tmp_path, monkeypatch) -> None:
+        """直接传项目目录：无需任何平台登记即可读到项目规则。"""
         from sts2_autotest.cli.main import _create_adapter
 
         monkeypatch.delenv("STS2_PROJECT__CARD_ID_PREFIXES", raising=False)
         monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
+        mod_dir = self._make_mod_project(tmp_path / "my-mod")
 
-        adapter = _create_adapter("agent", project="gawain")
+        adapter = _create_adapter("agent", project=str(mod_dir))
 
-        assert adapter._card_id_prefixes == {"gawain": "GAWAINMOD-"}
-        assert adapter._seed_command_template == "gawain_emergency_recruit_seed {seed}"
+        assert adapter._card_id_prefixes == {"mymod": "MYMOD-"}
+        assert adapter._seed_command_template == "mymod_seed {seed}"
+
+    def test_create_adapter_with_registered_name(self, tmp_path, monkeypatch) -> None:
+        """已登记名称：经本地 workspace 配置的 manifest 指针解析。"""
+        from sts2_autotest.cli.main import _create_adapter
+
+        monkeypatch.delenv("STS2_PROJECT__CARD_ID_PREFIXES", raising=False)
+        monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
+        mod_dir = self._make_mod_project(tmp_path / "my-mod")
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "sts2-autotest.yaml").write_text(
+            "workspace:\n"
+            "  projects:\n"
+            "    - name: mymod\n"
+            f"      manifest: {mod_dir}/sts2-mod.yaml\n"
+            "      spec_dir: " + str(mod_dir) + "\n",
+            encoding="utf-8",
+        )
+
+        adapter = _create_adapter("agent", project="mymod")
+
+        assert adapter._card_id_prefixes == {"mymod": "MYMOD-"}
+        assert adapter._seed_command_template == "mymod_seed {seed}"
 
     def test_create_adapter_without_project_stays_neutral(self, monkeypatch) -> None:
         from sts2_autotest.cli.main import _create_adapter
@@ -141,12 +184,93 @@ class TestPerTaskProjectResolution:
         assert adapter._card_id_prefixes == {}
         assert adapter._seed_command_template == ""
 
-    def test_env_var_overrides_project_yaml(self, monkeypatch) -> None:
+    def test_env_var_overrides_project_yaml(self, tmp_path, monkeypatch) -> None:
         from sts2_autotest.cli.main import _create_adapter
 
+        mod_dir = self._make_mod_project(tmp_path / "my-mod")
         monkeypatch.setenv("STS2_PROJECT__CARD_ID_PREFIXES", "other:OTHER-")
         monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
 
-        adapter = _create_adapter("agent", project="gawain")
+        adapter = _create_adapter("agent", project=str(mod_dir))
 
-        assert adapter._card_id_prefixes == {"gawain": "GAWAINMOD-", "other": "OTHER-"}
+        assert adapter._card_id_prefixes == {"mymod": "MYMOD-", "other": "OTHER-"}
+
+    def test_character_aliases_follow_project(self, tmp_path, monkeypatch) -> None:
+        """角色别名按任务 project 读取（公共服务目录启动编译场景）。"""
+        from sts2_autotest.cli.main import _load_character_aliases
+
+        monkeypatch.delenv("STS2_PROJECT__CHARACTER_ALIASES", raising=False)
+        mod_dir = self._make_mod_project(tmp_path / "my-mod")
+
+        assert _load_character_aliases(str(mod_dir)) == {"MyChar": "MYMOD-MYCHAR"}
+
+    def test_recovery_factory_keeps_project_config(self, tmp_path, monkeypatch) -> None:
+        """恢复重建入口继续携带 project：强制重建后项目规则仍保留。"""
+        from sts2_autotest.cli import main as cli_main
+
+        monkeypatch.delenv("STS2_PROJECT__CARD_ID_PREFIXES", raising=False)
+        monkeypatch.delenv("STS2_PROJECT__SEED_COMMAND_TEMPLATE", raising=False)
+        mod_dir = self._make_mod_project(tmp_path / "my-mod")
+        captured: dict = {}
+
+        def fake_run_with_adapter(adapter, case_ids, **kwargs):
+            captured["factory"] = kwargs.get("adapter_factory")
+            return 0
+
+        monkeypatch.setattr(
+            cli_main, "_run_orchestrator_with_adapter", fake_run_with_adapter
+        )
+        monkeypatch.setattr(cli_main, "_create_adapter", cli_main._create_adapter)
+
+        cli_main._dispatch_orchestrator(
+            object(), ["all"], 30, use_agent=True, project=str(mod_dir)
+        )
+
+        factory = captured["factory"]
+        assert factory is not None
+        recreated = factory()
+        assert recreated._card_id_prefixes == {"mymod": "MYMOD-"}
+        assert recreated._seed_command_template == "mymod_seed {seed}"
+
+    def test_compile_cmd_passes_project_aliases(self, tmp_path, monkeypatch) -> None:
+        """从公共服务目录编译项目规格时，角色别名随 project 生效。"""
+        from argparse import Namespace
+        from sts2_autotest.cli import main as cli_main
+
+        mod_dir = self._make_mod_project(tmp_path / "my-mod")
+        spec_dir = tmp_path / "specs"
+        spec_dir.mkdir()
+        (spec_dir / "TC-X.md").write_text(
+            "# TC-X 选择角色\n\n"
+            "## Metadata\n- id: TC-X\n- level: case\n- priority: P0\n\n"
+            "## Start State\n- MAIN_MENU\n\n"
+            "## End State\n- EVENT\n\n"
+            "## When\n1. 选择 MyChar\n2. 开始冒险\n\n"
+            "## Then\n- 不 crash\n",
+            encoding="utf-8",
+        )
+        captured: dict = {}
+
+        class FakeGenerator:
+            def __init__(self, character_aliases=None):
+                captured["aliases"] = character_aliases
+
+            def generate_to_file(self, spec, output_dir):
+                return "fake.py"
+
+        monkeypatch.setattr(
+            "sts2_autotest.core.code_generator.CodeGenerator", FakeGenerator
+        )
+        monkeypatch.chdir(tmp_path)  # 公共服务目录：不是项目目录，无项目配置文件
+        args = Namespace(
+            command="compile",
+            spec_dir=str(spec_dir),
+            output_dir=str(tmp_path / "out"),
+            project=str(mod_dir),
+            use_revised=False,
+        )
+
+        rc = cli_main.compile_cmd(args)
+
+        assert rc == 0
+        assert captured["aliases"] == {"MyChar": "MYMOD-MYCHAR"}

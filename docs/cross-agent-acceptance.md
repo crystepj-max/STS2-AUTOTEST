@@ -81,7 +81,7 @@ submit_run（保留 run_id）
 
 截至 2026-07-20（P2 收口）：
 
-- `tests/unit`：**1698 passed**（P2-1 迁移后全量回归）
+- `tests/unit`：**1715 passed**（P2 收口最终全量回归）
 - `tests/integration`：30 passed, 5 skipped（与 P1 基线一致的跳过项）
 - 五类 Agent 均留下独立原始调用记录与证据包（见 `docs/p2/2026-07-20-p2-final-report.md` 验收矩阵）
 - P2-1 Gawain 专属迁移清单与承接验证：`docs/p2/2026-07-20-p2-1-gawain-migration-inventory.md`
