@@ -73,10 +73,11 @@ _STEP_TO_ACTION: dict[str, str] = {
 
 _CHARACTER_IDS: dict[str, str] = {
     "Ironclad": "IRONCLAD",
-    "Gawain": "GAWAINMOD-GAWAIN",
     "战士": "IRONCLAD",
     "铁甲战士": "IRONCLAD",
 }
+
+_ASCII_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 
 def _assertion_to_call(assertion: str) -> str:
@@ -149,8 +150,15 @@ def _assertion_to_call(assertion: str) -> str:
     return f"# TODO: implement assertion for '{assertion}'"
 
 
-def _step_to_action_call(step: str) -> str:
-    """Convert a natural-language step into a DSL call or ActionDescriptor."""
+def _step_to_action_call(step: str, character_ids: dict[str, str] | None = None) -> str:
+    """Convert a natural-language step into a DSL call or ActionDescriptor.
+
+    character_ids：角色别名到运行时角色标识的映射。默认仅含原游戏角色；
+    MOD 项目可经 project_extension.character_aliases 注入自己的别名。
+    未命中映射的 ASCII 角色名按大写原样透传（原游戏角色命名约定）。
+    """
+    if character_ids is None:
+        character_ids = _CHARACTER_IDS
     step = step.strip()
 
     if step in {"启动游戏", "开始新局", "开始新 run"}:
@@ -181,8 +189,13 @@ def _step_to_action_call(step: str) -> str:
         return 'ActionDescriptor(action_type="choose_neow_blessing")'
     if step in {"点击 Proceed", "点击继续前进", "选择 Proceed"}:
         return "choose_event(0)"
-    if step == "选择魔网共鸣":
-        return 'ActionDescriptor(action_type="choose_rest_option", params={"option_index": 2})'
+
+    rest_option_match = re.search(r"选择营火[^\d]*(\d+)", step)
+    if rest_option_match:
+        return (
+            'ActionDescriptor(action_type="choose_rest_option", '
+            f'params={{"option_index": {rest_option_match.group(1)}}})'
+        )
     if step == "离开营火返回地图":
         return 'ActionDescriptor(action_type="proceed")'
 
@@ -211,10 +224,15 @@ def _step_to_action_call(step: str) -> str:
         )
 
     character_match = re.search(
-        r"选择\s*([A-Za-z][A-Za-z0-9_-]*|战士|铁甲战士|Gawain|Ironclad)", step
+        r"选择\s*([A-Za-z][A-Za-z0-9_-]*|战士|铁甲战士)", step
     )
     if character_match:
-        character_id = _CHARACTER_IDS.get(character_match.group(1))
+        character_name = character_match.group(1)
+        character_id = character_ids.get(character_name)
+        if character_id is None and _ASCII_NAME_PATTERN.match(character_name):
+            # 未配置别名的 ASCII 角色名按大写透传（原游戏角色命名约定）；
+            # MOD 角色应在 project_extension.character_aliases 中提供映射。
+            character_id = character_name.upper()
         if character_id:
             return f'select_character("{character_id}")'
 
@@ -265,7 +283,16 @@ class CodeGenerator:
 
     Output code follows the standard framework chain:
         pytest fixture -> FluentBuilder -> ActionDescriptor -> DSL -> adapter
+
+    character_aliases：项目提供的角色别名映射（project_extension.character_aliases），
+    与原游戏角色映射合并后用于"选择 X"步骤解析；平台默认仅含原游戏角色。
     """
+
+    def __init__(self, character_aliases: dict[str, str] | None = None) -> None:
+        self._character_ids: dict[str, str] = {
+            **_CHARACTER_IDS,
+            **(character_aliases or {}),
+        }
 
     def _generate_case_body(self, spec: TestSpec) -> str:
         """Generate the function definition body for a test case (no import block).
@@ -313,11 +340,11 @@ class CodeGenerator:
             )
         lines.append("        .setup(")
         for step in setup_steps:
-            lines.append(f"            {_step_to_action_call(step)},")
+            lines.append(f"            {_step_to_action_call(step, self._character_ids)},")
         lines.append("        )")
         lines.append("        .execute(")
         lines.append(
-            f"            {_step_to_action_call(execute_step)},"
+            f"            {_step_to_action_call(execute_step, self._character_ids)},"
         )
         lines.append("        )")
         lines.append("        .assert_that(")
@@ -404,11 +431,11 @@ class CodeGenerator:
                 )
             lines.append("        .setup(")
             for step in (spec.steps[:-1] if len(spec.steps) > 1 else []):
-                lines.append(f"            {_step_to_action_call(step)},")
+                lines.append(f"            {_step_to_action_call(step, self._character_ids)},")
             lines.append("        )")
             lines.append("        .execute(")
             if spec.steps:
-                lines.append(f"            {_step_to_action_call(spec.steps[-1])},")
+                lines.append(f"            {_step_to_action_call(spec.steps[-1], self._character_ids)},")
             lines.append("        )")
             lines.append("        .assert_that(")
             if spec.assertions:

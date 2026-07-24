@@ -55,6 +55,86 @@ def test_progress_until_requires_stable_map_arrival() -> None:
     assert result["map"]["is_traveling"] is False
 
 
+def test_progress_until_falls_back_to_grid_select_card_when_skip_rejected() -> None:
+    """不可跳过的网格选牌：跳过被拒后改选第一张牌推进，而不是 ACTION_FAILED 卡死。
+
+    复现 2026-07-20 三次真实任务失败（IRONCLAD 短目标 / Claude Code 取消轮 /
+    Hermes 恢复任务）：grid_select_skip 被游戏拒绝（"cannot be cancelled"）。
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    event_state = {
+        "screen": "EVENT",
+        "available_actions": ["grid_select_skip", "grid_select_card"],
+        "selection": {"cards": [{"card_id": "CARD-A"}, {"card_id": "CARD-B"}]},
+        "event": {"options": []},
+    }
+    map_state = {
+        "screen": "MAP",
+        "available_actions": [],
+        "map": {"is_traveling": False},
+    }
+    seq = [event_state, event_state, map_state]
+    cursor = {"i": 0}
+    calls: list[tuple[str, dict]] = []
+
+    async def get_state() -> dict:
+        i = min(cursor["i"], len(seq) - 1)
+        cursor["i"] += 1
+        return seq[i]
+
+    async def act(action: str, params: dict) -> object:
+        calls.append((action, params))
+        if action == "grid_select_skip":
+            return SimpleNamespace(
+                status="failure",
+                detail="This grid card selection cannot be cancelled/skipped.",
+            )
+        if action == "grid_select_card":
+            return SimpleNamespace(status="success", detail="")
+        raise AssertionError(f"unexpected action {action}")
+
+    result = asyncio.run(
+        progress_until(get_state, act, "MAP", timeout=2.0, delay=0.0)
+    )
+
+    assert result["screen"] == "MAP"
+    assert calls == [
+        ("grid_select_skip", {}),
+        ("grid_select_card", {"card_id": "CARD-A"}),
+    ]
+
+
+def test_progress_until_raises_when_skip_rejected_and_no_card_selectable() -> None:
+    """跳过被拒且无可选卡牌时，仍应如实 ACTION_FAILED（不允许静默假通过）。"""
+    import asyncio
+    import pytest
+    from types import SimpleNamespace
+    from sts2_autotest.core.navigation import NavigationBlocked
+
+    event_state = {
+        "screen": "EVENT",
+        "available_actions": ["grid_select_skip"],
+        "selection": {"cards": []},
+        "event": {"options": []},
+    }
+
+    async def get_state() -> dict:
+        return event_state
+
+    async def act(action: str, params: dict) -> object:
+        return SimpleNamespace(
+            status="failure",
+            detail="This grid card selection cannot be cancelled/skipped.",
+        )
+
+    with pytest.raises(NavigationBlocked):
+        asyncio.run(
+            progress_until(get_state, act, "MAP", timeout=2.0, delay=0.0)
+        )
+
+
 def test_choose_progress_action_waits_for_travel_transition_before_picking_node() -> None:
     state = {
         "screen": "MAP",

@@ -791,13 +791,27 @@ async def progress_until(
         if result is not None:
             action_status = getattr(result, "status", "success") or "success"
         success = action_status == "success"
+        if not success and action_name in ("grid_select_skip", "tri_select_skip"):
+            # 不可跳过的选牌页面（变化/移除类事件）：跳过被游戏拒绝后改选第一张
+            # 可用牌推进，避免整局因"无法跳过"卡死（2026-07-20 三次真实任务暴露）。
+            fallback_name = (
+                "grid_select_card" if action_name == "grid_select_skip" else "tri_select_card"
+            )
+            fallback_card = _first_card_id(state)
+            if fallback_card:
+                fb_result = await act(fallback_name, {"card_id": fallback_card})
+                fb_status = getattr(fb_result, "status", "") if fb_result else ""
+                if fb_status == "success":
+                    action_name = fallback_name
+                    last_action = f"{last_action}->{fallback_name}"
+                    success = True
         last_action_success = success
 
         if not success:
             raise NavigationBlocked(
                 f"动作 {action_name!r} 未执行成功：{getattr(result, 'detail', '') or action_status}",
                 last_state=state,
-                last_action=action_name,
+                last_action=last_action,
                 reason_code="ACTION_FAILED",
             )
 

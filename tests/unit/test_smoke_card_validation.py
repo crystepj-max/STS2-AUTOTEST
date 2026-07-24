@@ -22,8 +22,41 @@ from sts2_autotest.core.test_agent_runner import (
     _start_steam_client_without_polling,
 )
 
+# Gawain 项目经测试计划提供的冒烟期望（迁移后平台不再内置这些默认值，
+# 项目以配置形式注入，见 docs/p2/2026-07-20-p2-1-gawain-migration-inventory.md）。
+_GAWAIN_SMOKE_CONFIG: dict = {
+    "character_ids": ["GAWAINMOD-GAWAIN", "gawain"],
+    "character_names": ["gawain", "高文"],
+    "starter_relic": "GAWAINMOD-MAGIC_TERMINAL",
+    "starter_cards": [
+        "GAWAINMOD-STRIKE_GAWAIN",
+        "GAWAINMOD-DEFEND_GAWAIN",
+        "GAWAINMOD-EMERGENCY_RECRUIT",
+        "GAWAINMOD-MAGIC_DRAW",
+        "GAWAINMOD-PORTABLE_MAGIC_TERMINAL",
+    ],
+    "localization_key_prefixes": ["GAWAINMOD-"],
+}
+
 
 class TestSmokeCardValidation:
+
+    def test_run_reports_failed_on_unhandled_error(self, tmp_path):
+        """未分类异常必须如实判 FAILED，禁止带着默认结论写 PASSED 报告。"""
+        runner = TestAgentRunner(
+            mod_project=str(tmp_path / "mod"),
+            task_id="test-task",
+            infra_path=str(tmp_path / "infra"),
+        )
+        runner._step_validate_inputs = MagicMock(
+            side_effect=RuntimeError("Event loop is closed")
+        )
+
+        result = runner.run()
+
+        assert result.conclusion == "FAILED"
+        assert "Unhandled runner error" in result.failure_details
+        assert "RuntimeError" in result.failure_details
 
     def test_screenshot_saves_file(self, tmp_path):
         """_capture_screenshot should return a path when mss succeeds."""
@@ -759,6 +792,7 @@ class TestSmokeCardValidation:
             mod_project=str(tmp_path / "mod"),
             task_id="test-task",
             infra_path=str(tmp_path / "infra"),
+            **_GAWAIN_SMOKE_CONFIG,
         )
 
         mock_agent = AsyncMock()
@@ -803,6 +837,7 @@ class TestSmokeCardValidation:
             mod_project=str(tmp_path / "mod"),
             task_id="test-task",
             infra_path=str(tmp_path / "infra"),
+            **_GAWAIN_SMOKE_CONFIG,
         )
 
         class State(dict):
@@ -929,12 +964,43 @@ class TestSmokeCardValidation:
         assert ("choose_map_node", {"option_index": 0}) in calls
         assert ("choose_event_option", {"option_index": 0}) in calls
 
+    def test_navigate_to_first_combat_handles_card_reward_screen(self, tmp_path):
+        """事件后的卡牌奖励页必须被通用处理（2026-07-24 干净环境冒烟复现缺口）。"""
+        runner = TestAgentRunner(
+            mod_project=str(tmp_path / "mod"),
+            task_id="test-task",
+            infra_path=str(tmp_path / "infra"),
+        )
+
+        combat_state = {
+            "screen": "COMBAT",
+            "combat": {"players": [{"character_id": "GAWAINMOD-GAWAIN"}]},
+            "run": {"character_id": "GAWAINMOD-GAWAIN", "character_name": "高文"},
+        }
+        mock_agent = AsyncMock()
+        mock_agent.act.return_value = ActionResult(status="success", state_changed=True)
+        mock_agent.wait_until_actionable.return_value = True
+        mock_agent.get_available_actions.return_value = ["skip_card_reward"]
+        mock_agent.get_state.side_effect = [
+            {"screen": "CHARACTER_SELECT"},
+            {"screen": "CHARACTER_SELECT"},
+            {"screen": "MAP"},
+            {"screen": "CARD_REWARD"},
+            combat_state,
+        ]
+
+        runner._navigate_to_first_combat(mock_agent)
+
+        calls = [(call.args[0], call.args[1]) for call in mock_agent.act.call_args_list]
+        assert ("skip_card_reward", {}) in calls
+
     def test_unresolved_gawain_key_scan_catches_model_loc_keys(self, tmp_path):
         """Raw GAWAINMOD localization keys must fail even when they use hyphen syntax."""
         runner = TestAgentRunner(
             mod_project=str(tmp_path / "mod"),
             task_id="test-task",
             infra_path=str(tmp_path / "infra"),
+            **_GAWAIN_SMOKE_CONFIG,
         )
         state = {
             "combat": {
@@ -957,6 +1023,7 @@ class TestSmokeCardValidation:
             mod_project=str(tmp_path / "mod"),
             task_id="test-task",
             infra_path=str(tmp_path / "infra"),
+            **_GAWAIN_SMOKE_CONFIG,
         )
         state = {
             "run": {
@@ -999,4 +1066,4 @@ class TestSmokeCardValidation:
             }
         }
 
-        runner._assert_gawain_runtime_text_state(state)
+        runner._assert_runtime_text_state(state)

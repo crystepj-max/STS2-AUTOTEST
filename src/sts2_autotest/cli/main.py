@@ -185,7 +185,7 @@ def _create_parser() -> Any:
     # autotest agent-test (cross-platform Test Agent Runner, replaces run-test-agent.ps1)
     agent_test = sub.add_parser("agent-test", help="Run the full test-agent workflow (build + localization + deploy + smoke)")
     agent_test.add_argument("--mod-project", required=True, help="Path to the mod project root")
-    agent_test.add_argument("--task-id", required=True, help="Task identifier (e.g. gawain-localization-key-fix)")
+    agent_test.add_argument("--task-id", required=True, help="Task identifier (e.g. my-mod-localization-fix)")
     agent_test.add_argument("--infra-path", required=True, help="Path to sts2-dev-infra")
     agent_test.add_argument("--test-plan", help="Path to a test-plan YAML file (reads params from YAML)")
     agent_test.add_argument("--game-mods-path", help="Path to Steam STS2 mods directory (auto-detected if omitted)")
@@ -212,7 +212,8 @@ def _create_parser() -> Any:
 
     # autotest gen-report
     gen_report_parser = sub.add_parser("gen-report", help="Generate HTML test report via test-report-html skill")
-    gen_report_parser.add_argument("--task-id", help="Task ID (reads from automation/autotest/output/{task-id}/)")
+    gen_report_parser.add_argument("--task-id", help="Task ID (reads from {mod-project}/automation/autotest/output/{task-id}/)")
+    gen_report_parser.add_argument("--mod-project", default=".", help="MOD project root used with --task-id (default: current directory)")
     gen_report_parser.add_argument("--config", help="Path to test-results JSON config file")
     gen_report_parser.add_argument("--output", help="Output HTML path (default: auto-detect)")
     gen_report_parser.set_defaults(func=gen_report_cmd)
@@ -307,6 +308,10 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
     """
     if adapter_type == "agent":
         from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+        from sts2_autotest.adapters.project_extension import (
+            load_card_id_prefixes,
+            load_seed_command_template,
+        )
 
         transport_raw = _get_env(["STS2_ADAPTER__AGENT__TRANSPORT"], "http")
         if transport_raw not in ("http", "mcp"):
@@ -351,6 +356,8 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
             wait_path=_get_env(
                 ["STS2_ADAPTER__AGENT__WAIT_PATH"], "wait_until_actionable"
             ),
+            card_id_prefixes=load_card_id_prefixes(),
+            seed_command_template=load_seed_command_template(),
         )
     else:
         from sts2_autotest.adapters.cli_mod import CliModAdapter
@@ -1019,6 +1026,19 @@ def _load_workspace() -> Any | None:
     return None
 
 
+def _load_character_aliases() -> dict[str, str]:
+    """Load project-provided character aliases.
+
+    统一经 adapters.project_extension 读取：项目配置文件
+    （sts2-autotest.yaml 或 sts2-mod.yaml 指向的配置）为基，
+    ``STS2_PROJECT__CHARACTER_ALIASES`` 环境变量覆盖。
+    两者皆无时返回空映射（平台默认仅认识原游戏角色）。
+    """
+    from sts2_autotest.adapters.project_extension import load_character_aliases
+
+    return load_character_aliases()
+
+
 def _resolve_spec_dir(args: Any) -> str | None:
     """Resolve spec directory from args or workspace config."""
     spec_dir = getattr(args, "spec_dir", None)
@@ -1246,7 +1266,7 @@ def compile_cmd(args: Any) -> int:
         print(f"[autotest] No spec files found in {compile_input_dir}")
         return 0
 
-    generator = CodeGenerator()
+    generator = CodeGenerator(character_aliases=_load_character_aliases())
     generated: list[str] = []
     specs_by_id = {s.id: s for s in cases}
 
@@ -3069,6 +3089,11 @@ def agent_test_cmd(args: Any) -> int:
         skip_launch_game=cfg.skip_launch_game,
         skip_game_smoke=cfg.skip_game_smoke,
         require_game_running=require_game,
+        character_ids=cfg.character_ids,
+        character_names=cfg.character_names,
+        starter_relic=cfg.starter_relic,
+        starter_cards=cfg.starter_cards,
+        localization_key_prefixes=cfg.localization_key_prefixes,
     )
 
     result = runner.run()
@@ -3277,7 +3302,7 @@ def _resolve_gen_report_dirs(args: Any) -> tuple[str, str]:
         return config_path, output_path
 
     if args.task_id:
-        base = Path("STS2-GAWAIN") / "automation" / "autotest" / "output" / args.task_id
+        base = Path(args.mod_project) / "automation" / "autotest" / "output" / args.task_id
         resolved_config = base / "test-results.json"
         if not resolved_config.exists():
             resolved_config = base / "test-results.json"

@@ -42,6 +42,7 @@ def test_http_409_includes_server_message_for_set_seed() -> None:
         endpoint="http://127.0.0.1:8080",
         client=mock,
         debug_actions=True,
+        seed_command_template="seed {seed}",
     )
 
     result = _run(adapter.act("set_seed", {"seed": 3}))
