@@ -127,7 +127,7 @@
 ## 自动检查与真实验收
 
 - 小范围检查：受影响单元测试（适配器/代码生成/审查器/冒烟/配置）全部通过
-- 完整检查：单元全量 **1723 passed**（最终代码，含第四轮生命周期贯通的全部新增检查）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
+- 完整检查：单元全量 **1731 passed**（最终代码，含第五轮生命周期贯通与边界校验的全部新增检查）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
 - 跳过项及原因：集成测试 5 项需要真实游戏或外部控制服务的既有跳过（与 P1 基线相同）
 - 真实任务编号：见上表
 - 证据包：`tests/output/artifacts/` 中各 run 的 zip 均可读
@@ -191,6 +191,20 @@
 
 1. `first_battle` 旅程以 `project=../STS2-GAWAIN` 目录接入到达首战（run-20260724-095826-608d0870，PASSED）；
 2. 从平台仓库目录执行 Gawain 自包含套件 `test_suite_gawain_m2_multi_trigger.py`（`STS2_PROJECT_DIR` 传入，无其他项目环境变量）→ **PASSED**（42.5s）：`give_card("gawain:emergency_recruit")` 经项目前缀映射为 `GAWAINMOD-EMERGENCY_RECRUIT`、`set_seed` 经项目命令模板执行、三张牌真实打出、多仆从触发断言通过。
+
+**标准证据包（第五轮复核补强）**：`e2e-m2-multi-trigger-20260724-01`，经公共执行入口 `run_tests_in_dir` 重跑并打包——`tests/output/artifacts/e2e-m2-multi-trigger-20260724-01_passed.zip`（32 个文件：summary.json/md、reports/junit.xml、reports/run-result.json、套件汇总 SUITE-GAWAIN-M2-MULTI-TRIGGER.json（4/4 passed）、三个用例的逐步行为日志含 give_card/set_seed/出牌记录）。驱动脚本：`scripts/p2_e2e_pipeline_evidence.py`。
+
+## 第五轮 Review 复核响应（2026-07-25）
+
+第五轮复核指出 4 项代码问题 + 1 项证据问题，全部处理：
+
+| # | 复核问题 | 处理 | 证据 |
+|---|---|---|---|
+| 1 | 显式项目缺少规格/输出声明时仍回退平台目录（假通过风险） | 显式项目缺少声明或声明目录不存在时结构化失败 `PROJECT_CONFIG_INVALID`，绝不回退平台默认目录 | `test_explicit_project_without_declarations_fails_structurally`、`test_explicit_project_with_nonexistent_spec_dir_fails` |
+| 2 | 项目声明内部的规格/输出路径可越过允许范围 | 提交阶段解析项目声明，对声明的 spec_dir/output_dir 执行同一白名单校验 | `test_submit_rejects_declared_spec_outside_allowed_roots`、`test_submit_rejects_declared_output_outside_allowed_roots` |
+| 3 | Agent 可见的完整流程无法传入 project | `run_test`/`run_pipeline` 公开参数补登 `project`；run_pipeline 将 project 贯穿编译（角色别名）与执行（项目上下文），目录型 project 同白名单校验 | `test_run_test_and_pipeline_schemas_expose_project`、`test_run_pipeline_passes_project_to_compile_and_run` |
+| 4 | `_find_game_bundle` 忽略构造时传入的安装目录 | 优先使用 `self.game_dir`，其次环境变量与默认路径 | `test_find_game_bundle_prefers_constructor_game_dir`、`test_find_game_bundle_none_when_nothing_exists` |
+| 5 | 42.5s 端到端未形成标准证据包 | 经公共执行入口重跑并打包，run_id 与压缩包已登记（见上"标准证据包"段） | `tests/output/artifacts/e2e-m2-multi-trigger-20260724-01_passed.zip`（内容已逐项核验） |
 
 **端到端顺带修复的两个平台既有缺陷**（均有单元检查）：
 

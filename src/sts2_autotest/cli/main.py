@@ -1072,6 +1072,14 @@ def _load_character_aliases(project: str | None = None) -> dict[str, str]:
     return load_character_aliases(base_dir)
 
 
+class ProjectConfigError(Exception):
+    """显式项目缺少必要声明或声明无效（PROJECT_CONFIG_INVALID）。
+
+    显式携带 project 的任务绝不可回退到平台默认规格/输出目录——
+    那会造成"提交某项目却执行平台测试"的假通过。
+    """
+
+
 def _resolve_spec_dir(args: Any) -> str | None:
     """Resolve spec directory from args, the task's project, or workspace config."""
     spec_dir = getattr(args, "spec_dir", None)
@@ -1081,8 +1089,7 @@ def _resolve_spec_dir(args: Any) -> str | None:
         return str(spec_dir)
     project_name = getattr(args, "project", None)
     if project_name:
-        # 任务项目（目录或登记名）自己的声明决定规格来源，
-        # 不回退到平台默认目录（否则目录型项目会错误执行平台测试）。
+        # 任务项目（目录或登记名）自己的声明决定规格来源。
         project_base = _resolve_project_base_dir(project_name)
         if project_base is not None:
             from sts2_autotest.adapters.project_extension import (
@@ -1091,15 +1098,30 @@ def _resolve_spec_dir(args: Any) -> str | None:
 
             project_spec_dir, _ = load_project_spec_output(project_base)
             if project_spec_dir:
+                if not os.path.isdir(project_spec_dir):
+                    raise ProjectConfigError(
+                        f"project '{project_name}' declares spec_dir that does not exist: "
+                        f"{project_spec_dir}"
+                    )
                 return project_spec_dir
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
             project_spec_dir = getattr(project, "spec_dir", None) if project else None
-            if isinstance(project_spec_dir, str):
-                return project_spec_dir
-            if project_spec_dir:
-                return str(project_spec_dir)
+            if isinstance(project_spec_dir, str) and project_spec_dir:
+                resolved = str((Path.cwd() / project_spec_dir).resolve()) if not os.path.isabs(project_spec_dir) else project_spec_dir
+                if not os.path.isdir(resolved):
+                    raise ProjectConfigError(
+                        f"project '{project_name}' declares spec_dir that does not exist: "
+                        f"{resolved}"
+                    )
+                return resolved
+        # 显式项目但找不到任何规格声明：结构化失败，不回退平台目录。
+        raise ProjectConfigError(
+            f"project '{project_name}' does not declare a spec_dir "
+            f"(expected in its sts2-autotest.yaml workspace config or sts2-mod.yaml); "
+            f"pass --spec-dir explicitly to override"
+        )
     # Fall back to default spec directory
     default_spec = "docs/process/specs"
     if os.path.isdir(default_spec):
@@ -1133,6 +1155,12 @@ def _resolve_output_dir(args: Any, spec_dir: str) -> str:
                 return project_output_dir
             if project_output_dir:
                 return str(project_output_dir)
+        # 显式项目但找不到输出声明：结构化失败，不回退平台目录。
+        raise ProjectConfigError(
+            f"project '{project_name}' does not declare an output_dir "
+            f"(expected in its sts2-autotest.yaml workspace config or sts2-mod.yaml); "
+            f"pass --output-dir explicitly to override"
+        )
     return "tests/generated"
 
 
@@ -1221,7 +1249,11 @@ def review_cmd(args: Any) -> int:
     from sts2_autotest.core.markdown_parser import MarkdownParser
     from sts2_autotest.core.spec_reviewer import SpecReviewer
 
-    spec_dir = _resolve_spec_dir(args)
+    try:
+        spec_dir = _resolve_spec_dir(args)
+    except ProjectConfigError as exc:
+        print(f"[autotest] PROJECT_CONFIG_INVALID: {exc}")
+        return 1
     if not spec_dir:
         print("[autotest] Specify --spec-dir or configure workspace in sts2-autotest.yaml")
         return 1
@@ -1291,7 +1323,12 @@ def compile_cmd(args: Any) -> int:
     from sts2_autotest.core.markdown_parser import MarkdownParser
     from sts2_autotest.core.code_generator import CodeGenerator
 
-    spec_dir = _resolve_spec_dir(args)
+    try:
+        spec_dir = _resolve_spec_dir(args)
+        output_dir = _resolve_output_dir(args, spec_dir) if spec_dir else ""
+    except ProjectConfigError as exc:
+        print(f"[autotest] PROJECT_CONFIG_INVALID: {exc}")
+        return 1
     if not spec_dir:
         print("[autotest] Specify --spec-dir or configure workspace in sts2-autotest.yaml")
         return 1
@@ -1304,7 +1341,6 @@ def compile_cmd(args: Any) -> int:
     if not compile_input_dir:
         return 1
 
-    output_dir = _resolve_output_dir(args, spec_dir)
     _ensure_output_dir_writable(output_dir)
     parser = MarkdownParser()
     cases, suites = parser.discover_specs(compile_input_dir)
@@ -2840,7 +2876,14 @@ def _run_cmd_foreground(args: Any) -> int:
     # Normal run paths (all with progress_path set for AC1)
     if args.all:
         # Pipeline mode: review -> compile -> run, only if spec dir available
-        pipeline_spec_dir = _resolve_spec_dir(args)
+        try:
+            pipeline_spec_dir = _resolve_spec_dir(args)
+            pipeline_output_dir = (
+                _resolve_output_dir(args, pipeline_spec_dir) if pipeline_spec_dir else ""
+            )
+        except ProjectConfigError as exc:
+            print(f"[autotest] PROJECT_CONFIG_INVALID: {exc}")
+            return 1
         if pipeline_spec_dir:
             print("[autotest] Running full pipeline: review -> compile -> run")
             from argparse import Namespace
@@ -2851,7 +2894,7 @@ def _run_cmd_foreground(args: Any) -> int:
             if review_rc != 0:
                 print("[autotest] Review failed - aborting pipeline")
                 return 1
-            output_dir = _resolve_output_dir(args, pipeline_spec_dir)
+            output_dir = pipeline_output_dir
             compile_rc = compile_cmd(Namespace(
                 command="compile", spec_dir=pipeline_spec_dir,
                 output_dir=output_dir, project=getattr(args, "project", None),

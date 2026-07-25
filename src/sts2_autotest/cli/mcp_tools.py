@@ -366,16 +366,24 @@ def handle_submit_run(args: dict[str, Any]) -> dict[str, Any]:
     project = args.get("project")
     if isinstance(project, str) and ("/" in project or "\\" in project or project.startswith(".")):
         # 目录型 project 与 spec_dir 适用同一允许范围：
-        # 项目目录与其声明指向的配置文件都必须在白名单内，
-        # 防止公共 Agent 借 project 读取工作区外的本地配置。
+        # 项目目录、其声明指向的配置文件、以及配置内部声明的
+        # 规格目录与输出目录都必须在白名单内。
         resolved_project = _validate_path(project)
         if not resolved_project.is_dir():
             raise McpError(INVALID_PARAMS, f"project directory does not exist: {project}")
-        from sts2_autotest.adapters.project_extension import find_project_config_file
+        from sts2_autotest.adapters.project_extension import (
+            find_project_config_file,
+            load_project_spec_output,
+        )
 
         config_file = find_project_config_file(resolved_project)
         if config_file is not None:
             _validate_path(str(config_file))
+        declared_spec, declared_output = load_project_spec_output(resolved_project)
+        if declared_spec:
+            _validate_path(declared_spec)
+        if declared_output:
+            _validate_path(declared_output)
     if journey == "act_traversal" and not args.get("target_scene"):
         args = {**args, "target_scene": "NEXT_ACT"}
     return _submit_persistent_run(args)
@@ -455,19 +463,20 @@ def review_spec_file(spec_path: Path) -> Any:
         return reviewer.review(case_spec)
 
 
-def compile_spec_file(spec_path: Path, output_dir: Path | None = None) -> Path:
+def compile_spec_file(spec_path: Path, output_dir: Path | None = None, character_aliases: dict[str, str] | None = None) -> Path:
     """Compile a spec file into pytest code.
 
     Reads the Markdown file, parses it, and generates a pytest test file
     via the B25 code generator.  Returns the path of the generated file.
     Wrapped at module level for testability.
+    character_aliases：任务项目提供的角色别名映射（空=平台默认原游戏角色）。
     """
     from sts2_autotest.core.code_generator import CodeGenerator
     from sts2_autotest.core.markdown_parser import MarkdownParser, detect_level
 
     markdown = spec_path.read_text(encoding="utf-8")
     parser = MarkdownParser()
-    generator = CodeGenerator()
+    generator = CodeGenerator(character_aliases=character_aliases)
 
     resolved_output = output_dir or (spec_path.parent.parent / "generated")
 
@@ -885,8 +894,24 @@ def handle_compile_spec(args: dict[str, Any]) -> dict[str, Any]:
         output_dir = _validate_path(output)
     else:
         output_dir = resolved.parent.parent / "generated"
-    generated_file = compile_spec_file(resolved, output_dir)
+    generated_file = compile_spec_file(
+        resolved, output_dir, character_aliases=_aliases_from_args(args)
+    )
     return {"generated_file": str(generated_file), "warnings": []}
+
+
+def _aliases_from_args(args: dict[str, Any]) -> dict[str, str] | None:
+    """按任务 project 解析角色别名（无 project 时 None=平台默认）。"""
+    project = args.get("project")
+    if not isinstance(project, str) or not project:
+        return None
+    from sts2_autotest.cli.main import _resolve_project_base_dir
+    from sts2_autotest.adapters.project_extension import load_character_aliases
+
+    base_dir = _resolve_project_base_dir(project)
+    if base_dir is None:
+        return None
+    return load_character_aliases(base_dir)
 
 
 def handle_run_test(args: dict[str, Any]) -> dict[str, Any]:
@@ -936,6 +961,18 @@ def handle_run_pipeline(args: dict[str, Any]) -> dict[str, Any]:
     if not spec_dir:
         raise McpError(INVALID_PARAMS, "spec_dir is required")
     resolved = _validate_path(spec_dir)
+    # project 贯穿编译（角色别名）与执行（项目扩展配置）；
+    # 目录型 project 与提交入口同一白名单。
+    project = args.get("project")
+    if isinstance(project, str) and project and ("/" in project or "\\" in project or project.startswith(".")):
+        resolved_project = _validate_path(project)
+        if not resolved_project.is_dir():
+            raise McpError(INVALID_PARAMS, f"project directory does not exist: {project}")
+        from sts2_autotest.adapters.project_extension import find_project_config_file
+
+        config_file = find_project_config_file(resolved_project)
+        if config_file is not None:
+            _validate_path(str(config_file))
     stages: list[str] = args.get("stages", ["review", "compile", "run"])
     result: dict[str, Any] = {
         "review_issues": [],
@@ -945,15 +982,20 @@ def handle_run_pipeline(args: dict[str, Any]) -> dict[str, Any]:
     md_files = list(resolved.rglob("*.md"))
     if not md_files:
         return result
+    compile_args: dict[str, Any] = {"project": project} if project else {}
     for md_file in md_files:
         if "review" in stages:
             review_result = handle_review_spec({"spec_path": str(md_file)})
             result["review_issues"].extend(review_result["issues"])
         if "compile" in stages:
-            compile_result = handle_compile_spec({"spec_path": str(md_file)})
+            compile_result = handle_compile_spec(
+                {"spec_path": str(md_file), **compile_args}
+            )
             result["compiled_files"].append(compile_result["generated_file"])
     if "run" in stages:
-        result["test_result"] = handle_run_test({"spec_dir": spec_dir})
+        result["test_result"] = handle_run_test(
+            {"spec_dir": spec_dir, **({"project": project} if project else {})}
+        )
     return result
 
 
@@ -1123,6 +1165,13 @@ class ToolRegistry:
                                     "Timeout per test in seconds (default 60)"
                                 ),
                             },
+                            "project": {
+                                "type": "string",
+                                "description": (
+                                    "Task project (directory or registered name); "
+                                    "its project_extension config applies at runtime"
+                                ),
+                            },
                         },
                         "required": ["spec_dir"],
                     },
@@ -1151,6 +1200,14 @@ class ToolRegistry:
                                 },
                                 "description": (
                                     "Pipeline stages to execute (default: all)"
+                                ),
+                            },
+                            "project": {
+                                "type": "string",
+                                "description": (
+                                    "Task project (directory or registered name); "
+                                    "its character aliases and project_extension "
+                                    "config apply to compile and run phases"
                                 ),
                             },
                         },

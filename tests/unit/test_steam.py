@@ -121,6 +121,28 @@ class TestStartGame:
         _, kwargs = mock_popen.call_args
         assert kwargs["env"]["STS2_ENABLE_DEBUG_ACTIONS"] == "1"
 
+    def test_find_game_bundle_prefers_constructor_game_dir(self, tmp_path, monkeypatch) -> None:
+        """构造时传入的安装目录优先于环境变量与默认路径（自定义 Steam 库）。"""
+        if not _IS_MACOS:
+            return
+        custom_dir = tmp_path / "custom-library"
+        bundle = custom_dir / "SlayTheSpire2.app"
+        bundle.mkdir(parents=True)
+        monkeypatch.delenv("STS2_GAME_DIR", raising=False)
+        sc = SteamController(game_dir=str(custom_dir))
+
+        assert sc._find_game_bundle() == bundle
+
+    def test_find_game_bundle_none_when_nothing_exists(self, tmp_path, monkeypatch) -> None:
+        """构造目录、环境变量与默认路径均不存在时如实返回 None（回退 steam URI）。"""
+        if not _IS_MACOS:
+            return
+        monkeypatch.delenv("STS2_GAME_DIR", raising=False)
+        sc = SteamController(game_dir=str(tmp_path / "no-such-dir"))
+
+        with patch("pathlib.Path.is_dir", return_value=False):
+            assert sc._find_game_bundle() is None
+
     def test_start_game_timeout(self, sc: SteamController) -> None:
         sc.startup_timeout = 0.1
         with patch("subprocess.Popen"):

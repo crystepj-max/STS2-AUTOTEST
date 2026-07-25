@@ -91,8 +91,14 @@ class SteamController:
         return self._steam_pid
 
     def _find_game_bundle(self) -> Path | None:
-        """Locate the macOS game bundle for direct launch with debug env."""
+        """Locate the macOS game bundle for direct launch with debug env.
+
+        优先使用构造时传入的实际安装目录（自定义 Steam 库/测试机/CI），
+        其次 STS2_GAME_DIR 环境变量，最后固定默认路径。
+        """
         candidates: list[Path] = []
+        if self.game_dir:
+            candidates.append(Path(self.game_dir) / "SlayTheSpire2.app")
         game_dir = os.environ.get("STS2_GAME_DIR", "")
         if game_dir:
             candidates.append(Path(game_dir) / "SlayTheSpire2.app")
