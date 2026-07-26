@@ -79,12 +79,14 @@ submit_run（保留 run_id）
 
 ## 5. 当前证据
 
-截至 2026-07-20（P2 收口）：
+截至 2026-07-26（P2 最终收口）：
 
-- `tests/unit`：**1731 passed**（P2 收口最终全量回归）
-- `tests/integration`：30 passed, 5 skipped（与 P1 基线一致的跳过项）
+- `tests/unit`：**1752 passed**
+- `tests/integration`：**25 passed, 10 skipped**（当前复核环境；P1 基线环境为 30/5，差异为真实游戏/外部服务条件自动跳过）
 - 五类 Agent 均留下独立原始调用记录与证据包（见 `docs/p2/2026-07-20-p2-final-report.md` 验收矩阵）
+- 六操作无项目生命周期无回归：ORIG CANCELLED → RESUME PASSED → SECOND CANCELLED，`V11_PASS=true`，证据位于 `tests/output/cross-agent-p2/p2-final-six-ops-pass-20260726/`
 - P2-1 Gawain 专属迁移清单与承接验证：`docs/p2/2026-07-20-p2-1-gawain-migration-inventory.md`
+- 通用证据工具一次生成真实项目包：`p2-final-e2e-20260726-0405`，4/4 passed，压缩包 34 个文件且无损
 - 三角色短目标（IRONCLAD、SILENT、GAWAINMOD-GAWAIN）经同一公共入口通过：`tests/output/cross-agent-p2/short-goals-20260720-p2a*/`
 - 整章遍历 PASSED（258.6s 第一章到第二章稳定地图，win_combat 快速结束 7 场战斗）：`run-20260720-142730-23590575`
 - P1 三柱回归 PASSED（ORIG CANCELLED → RESUME PASSED → SECOND CANCELLED）：`tests/output/cross-agent-p1/p2-regression-v12-20260720/`

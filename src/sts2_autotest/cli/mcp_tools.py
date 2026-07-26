@@ -363,27 +363,9 @@ def handle_submit_run(args: dict[str, Any]) -> dict[str, Any]:
         resolved = _validate_path(str(spec_dir))
         if not resolved.is_dir():
             raise McpError(INVALID_PARAMS, f"spec_dir is not a directory: {spec_dir}")
-    project = args.get("project")
-    if isinstance(project, str) and ("/" in project or "\\" in project or project.startswith(".")):
-        # 目录型 project 与 spec_dir 适用同一允许范围：
-        # 项目目录、其声明指向的配置文件、以及配置内部声明的
-        # 规格目录与输出目录都必须在白名单内。
-        resolved_project = _validate_path(project)
-        if not resolved_project.is_dir():
-            raise McpError(INVALID_PARAMS, f"project directory does not exist: {project}")
-        from sts2_autotest.adapters.project_extension import (
-            find_project_config_file,
-            load_project_spec_output,
-        )
-
-        config_file = find_project_config_file(resolved_project)
-        if config_file is not None:
-            _validate_path(str(config_file))
-        declared_spec, declared_output = load_project_spec_output(resolved_project)
-        if declared_spec:
-            _validate_path(declared_spec)
-        if declared_output:
-            _validate_path(declared_output)
+    # 目录型/登记名称型 project 统一经公共解析校验入口
+    # （无法解析即 PROJECT_CONFIG_INVALID，不静默回退中性）
+    _resolve_and_validate_project(args)
     if journey == "act_traversal" and not args.get("target_scene"):
         args = {**args, "target_scene": "NEXT_ACT"}
     return _submit_persistent_run(args)
@@ -504,6 +486,7 @@ def run_tests_in_dir(
     output_dir: Path | str | None = None,
     run_id: str | None = None,
     project_dir: Path | str | None = None,
+    export_artifact: bool = True,
 ) -> dict[str, Any]:
     """Run pytest in a spec directory via subprocess.
 
@@ -604,7 +587,8 @@ def run_tests_in_dir(
             ),
             encoding="utf-8",
         )
-        packager.export_artifact(run_id, result=pack_result)
+        if export_artifact:
+            packager.export_artifact(run_id, result=pack_result)
         evidence_dir = str(pack_dir)
 
     return {
@@ -905,13 +889,62 @@ def _aliases_from_args(args: dict[str, Any]) -> dict[str, str] | None:
     project = args.get("project")
     if not isinstance(project, str) or not project:
         return None
-    from sts2_autotest.cli.main import _resolve_project_base_dir
     from sts2_autotest.adapters.project_extension import load_character_aliases
 
-    base_dir = _resolve_project_base_dir(project)
+    base_dir = _resolve_and_validate_project(args)
     if base_dir is None:
         return None
     return load_character_aliases(base_dir)
+
+
+def _resolve_and_validate_project(args: dict[str, Any]) -> Path | None:
+    """所有公开入口共用的项目解析与校验入口。
+
+    规则（无法解析即结构化失败 PROJECT_CONFIG_INVALID，绝不静默回退中性）：
+    - 未携带 project：返回 None（明确的中性任务）；
+    - 目录型 project：必须在允许范围内、真实存在；其声明指向的配置文件
+      及声明内部的规格/输出目录同样必须在允许范围内；
+    - 登记名称型 project：必须能经本地 workspace 配置解析出项目根目录。
+    """
+    project = args.get("project")
+    if not isinstance(project, str) or not project:
+        return None
+    from sts2_autotest.cli.main import _resolve_project_base_dir
+    from sts2_autotest.adapters.project_extension import (
+        find_project_config_file,
+        load_project_spec_output,
+    )
+
+    base_dir = _resolve_project_base_dir(project)
+    if base_dir is None:
+        raise McpError(
+            INVALID_PARAMS,
+            f"PROJECT_CONFIG_INVALID: project '{project}' cannot be resolved "
+            f"(not a directory and not registered in the local workspace config)",
+        )
+    try:
+        resolved_project = _validate_path(str(base_dir))
+        if not resolved_project.is_dir():
+            raise McpError(
+                INVALID_PARAMS,
+                f"project directory does not exist: {resolved_project}",
+            )
+        config_file = find_project_config_file(resolved_project)
+        if config_file is not None:
+            _validate_path(str(config_file))
+        declared_spec, declared_output = load_project_spec_output(resolved_project)
+        if declared_spec:
+            _validate_path(declared_spec)
+        if declared_output:
+            _validate_path(declared_output)
+    except McpError as exc:
+        if "PROJECT_CONFIG_INVALID" in exc.message:
+            raise
+        raise McpError(
+            INVALID_PARAMS,
+            f"PROJECT_CONFIG_INVALID: {exc.message}",
+        ) from exc
+    return resolved_project
 
 
 def handle_run_test(args: dict[str, Any]) -> dict[str, Any]:
@@ -924,12 +957,7 @@ def handle_run_test(args: dict[str, Any]) -> dict[str, Any]:
         raise McpError(INVALID_PARAMS, f"spec_dir is not a directory: {spec_dir}")
     timeout = int(args.get("timeout", 60))
     suite_filter = args.get("suite", "")
-    project_dir: Path | None = None
-    project = args.get("project")
-    if isinstance(project, str) and project:
-        from sts2_autotest.cli.main import _resolve_project_base_dir
-
-        project_dir = _resolve_project_base_dir(project)
+    project_dir = _resolve_and_validate_project(args)
     return run_tests_in_dir(
         resolved, suite=suite_filter, timeout=timeout, project_dir=project_dir
     )
@@ -962,17 +990,10 @@ def handle_run_pipeline(args: dict[str, Any]) -> dict[str, Any]:
         raise McpError(INVALID_PARAMS, "spec_dir is required")
     resolved = _validate_path(spec_dir)
     # project 贯穿编译（角色别名）与执行（项目扩展配置）；
-    # 目录型 project 与提交入口同一白名单。
+    # 与提交入口同一公共解析校验（无法解析即 PROJECT_CONFIG_INVALID）。
     project = args.get("project")
-    if isinstance(project, str) and project and ("/" in project or "\\" in project or project.startswith(".")):
-        resolved_project = _validate_path(project)
-        if not resolved_project.is_dir():
-            raise McpError(INVALID_PARAMS, f"project directory does not exist: {project}")
-        from sts2_autotest.adapters.project_extension import find_project_config_file
-
-        config_file = find_project_config_file(resolved_project)
-        if config_file is not None:
-            _validate_path(str(config_file))
+    if isinstance(project, str) and project:
+        _resolve_and_validate_project(args)
     stages: list[str] = args.get("stages", ["review", "compile", "run"])
     result: dict[str, Any] = {
         "review_issues": [],
@@ -1134,6 +1155,13 @@ class ToolRegistry:
                             "output_dir": {
                                 "type": "string",
                                 "description": "Optional output directory",
+                            },
+                            "project": {
+                                "type": "string",
+                                "description": (
+                                    "Task project (directory or registered name); "
+                                    "its character aliases apply during compilation"
+                                ),
                             },
                         },
                         "required": ["spec_path"],

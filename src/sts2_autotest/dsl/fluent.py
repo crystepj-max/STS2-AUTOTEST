@@ -143,7 +143,13 @@ class FluentBuilder:
         """
         all_actions = self._setup_actions + self._execute_actions
         if not all_actions:
-            return TestResult(case_id=self._case_id, status="pass")
+            case_log_path = _build_case_trace_path(self._case_id)
+            self._write_trace_files(case_log_path, [])
+            return TestResult(
+                case_id=self._case_id,
+                status="pass",
+                detail=_build_detail_message(case_log_path, 0),
+            )
 
         before_state: GameState | None = None
         trace_entries: list[_TraceEntry] = []
@@ -252,9 +258,6 @@ class FluentBuilder:
         trace_entries: list[_TraceEntry],
         failure_text: str | None = None,
     ) -> None:
-        if not trace_entries and not failure_text:
-            return
-
         case_log_path.parent.mkdir(parents=True, exist_ok=True)
         sections: list[str] = []
         for entry in trace_entries:
@@ -263,6 +266,12 @@ class FluentBuilder:
             step_path = case_log_path.parent / f"step-{entry.step_index:02d}.log"
             step_path.write_text(section + "\n", encoding="utf-8")
 
+        if not trace_entries:
+            sections.append(
+                "步骤记录：0\n"
+                f"结果：{'failed' if failure_text else 'passed'}\n"
+                "说明：本用例未产生可追踪的原子操作。"
+            )
         if failure_text:
             sections.append(f"执行结果：失败\n原因：{failure_text}")
 
@@ -576,7 +585,7 @@ def _slug(text: str) -> str:
 
 
 def _render_trace_entry(entry: _TraceEntry) -> str:
-    action_text = _describe_action(entry.action, entry.pre_state)
+    action_text = _describe_action(entry.action, entry.pre_state, entry.post_state)
     screen_change = f"{entry.pre_state.screen.value} -> {entry.post_state.screen.value}"
     lines = [
         f"步骤 {entry.step_index:02d}",
@@ -589,15 +598,21 @@ def _render_trace_entry(entry: _TraceEntry) -> str:
     return "\n".join(lines).strip()
 
 
-def _describe_action(action: ActionDescriptor, pre_state: GameState) -> str:
+def _describe_action(
+    action: ActionDescriptor,
+    pre_state: GameState,
+    post_state: GameState,
+) -> str:
     params = action.params or {}
     if action.action_type == "play_card":
         card_id = str(params.get("card_id", ""))
-        card_name = _find_hand_card_name(pre_state, card_id)
-        return f"打出卡牌 {card_name}（{card_id}）"
+        card = _find_hand_card(pre_state, card_id)
+        card_name = _card_name(card, card_id)
+        return f"打出卡牌 {card_name}（{_card_identity(card, card_id)}）"
     if action.action_type == "give_card":
         card_id = str(params.get("card_id", ""))
-        return f"加入手牌 {card_id}"
+        card = _find_hand_card(post_state, card_id)
+        return f"加入手牌 {_card_identity(card, card_id)}"
     if action.action_type == "set_seed":
         return f"设置固定种子 {params.get('seed')}"
     if action.action_type == "end_turn":
@@ -616,7 +631,7 @@ def _describe_action(action: ActionDescriptor, pre_state: GameState) -> str:
     return action.action_type
 
 
-def _find_hand_card_name(state: GameState, card_id: str) -> str:
+def _find_hand_card(state: GameState, card_id: str) -> dict[str, Any] | None:
     combat = getattr(state, "combat", None)
     hand = combat.get("hand") if isinstance(combat, dict) else None
     if isinstance(hand, list):
@@ -632,8 +647,23 @@ def _find_hand_card_name(state: GameState, card_id: str) -> str:
                 or target in normalized
                 or normalized in target
             ):
-                return str(card.get("card_name") or card.get("name") or card_id)
-    return card_id
+                return card
+    return None
+
+
+def _card_name(card: dict[str, Any] | None, fallback: str) -> str:
+    if card is None:
+        return fallback
+    return str(card.get("card_name") or card.get("name") or fallback)
+
+
+def _card_identity(card: dict[str, Any] | None, requested_id: str) -> str:
+    if card is None:
+        return requested_id
+    runtime_id = str(card.get("card_id") or card.get("id") or "")
+    if runtime_id and runtime_id != requested_id:
+        return f"{requested_id} → {runtime_id}"
+    return requested_id
 
 
 def _find_event_option(state: GameState, index: Any) -> str:

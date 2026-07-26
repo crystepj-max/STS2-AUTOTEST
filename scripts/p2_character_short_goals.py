@@ -6,8 +6,8 @@
 ``character_id``。每个角色独立幂等键，并实测相同键重复提交返回同一 run_id。
 
 用法：
-    python scripts/p2_character_short_goals.py                # 三角色完整验收
-    python scripts/p2_character_short_goals.py --characters IRONCLAD SILENT
+    python scripts/p2_character_short_goals.py \
+        --characters IRONCLAD SILENT <MOD_CHARACTER_ID>
 
 退出码：0 = 全部角色 PASSED 且幂等成立；1 = 任一失败或环境前置不满足。
 """
@@ -195,7 +195,7 @@ def main() -> int:
     parser.add_argument("--game-url", default="http://127.0.0.1:8080")
     parser.add_argument(
         "--characters", nargs="+",
-        default=["IRONCLAD", "SILENT", "GAWAINMOD-GAWAIN"],
+        required=True,
         help="角色标识列表（两个原游戏角色 + 一个 Mod 角色）",
     )
     parser.add_argument(

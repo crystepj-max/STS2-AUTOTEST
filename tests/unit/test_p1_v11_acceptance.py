@@ -5,11 +5,13 @@ import sys
 import zipfile
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-from p1_v11_acceptance import _jpeg_dimensions, _verify_final_screenshot  # noqa: E402
+from p1_v11_acceptance import (  # noqa: E402
+    _final_state_has_no_saved_run,
+    _jpeg_dimensions,
+    _verify_final_screenshot,
+)
 
 
 def _jpeg(width: int, height: int, total_kb: float = 60.0) -> bytes:
@@ -90,3 +92,28 @@ class TestVerifyFinalScreenshot:
     def test_no_report_fails(self) -> None:
         assert _verify_final_screenshot(None)["ok"] is False
         assert _verify_final_screenshot({})["ok"] is False
+
+
+class TestFinalStateHasNoSavedRun:
+    def test_explicit_no_save_passes(self) -> None:
+        assert _final_state_has_no_saved_run(
+            {"has_run_save": False, "has_new_run_action": True}
+        )
+
+    def test_missing_field_uses_clean_action_surface(self) -> None:
+        assert _final_state_has_no_saved_run(
+            {
+                "has_run_save": None,
+                "has_new_run_action": True,
+                "available_actions": ["open_character_select", "open_timeline"],
+            }
+        )
+
+    def test_missing_field_with_continue_run_fails(self) -> None:
+        assert not _final_state_has_no_saved_run(
+            {
+                "has_run_save": None,
+                "has_new_run_action": True,
+                "available_actions": ["continue_run", "abandon_run"],
+            }
+        )

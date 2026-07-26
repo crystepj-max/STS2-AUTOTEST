@@ -507,7 +507,15 @@ class AgentAdapter:
             result = await self._start_new_run()
             return result
         if action == "abandon_run" and self.debug_actions:
-            return await self._run_debug_console_command("die")
+            try:
+                current_state = await self.get_state()
+            except STS2Error:
+                current_state = None
+            if (
+                current_state is None
+                or current_state.screen != GameScreen.MAIN_MENU
+            ):
+                return await self._run_debug_console_command("die")
         if action == "win_combat":
             if not self.debug_actions:
                 return ActionResult(

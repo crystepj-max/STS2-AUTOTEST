@@ -10,9 +10,9 @@
 - P2-2 多 Agent 真实接入：**PASSED**（五类 Agent 全部完成真实接入验收；Hermes 于 2026-07-24 第四轮完成真正的「取消原任务 → 恢复原任务 → 恢复 PASSED」）
 - 是否仍存在角色或 Mod 隐性默认值：**否**（迁移清单 11 项 A 类全部处理完毕；剩余 Gawain 字样仅为边界声明文档字符串与中性测试样例）
 - 是否修改公共任务含义：**否**（六操作、状态名称、报告结构均未改变；`get_magic_web_layer` 为平台适配器上的项目专属只读接口，移除前全仓无调用方）
-- 是否需要用户补充权限：**否**（三个外部 Agent 环境本机齐全，用户已批准驱动）
+- 是否需要用户补充权限：**否**（本轮真实运行和公共生命周期回归均已完成）
 
-> 本报告为 Review 复核（2026-07-24，双 PASSED 被拒）后的修正版。复核指出的 5 项问题全部处理：Gawain 承接配置已解除忽略并提交（`9390081`）；平台新增统一项目配置读取（`adapters/project_extension.py`）；不可跳过网格选牌已修复（含失败路径检查）；Hermes 已完成真正的取消→恢复→PASSED（r4- 前缀独立存档）；报告数字已逐项按原始证据修正（详见文末"Review 复核响应"）。
+> 2026-07-26 最终收口：P2-2 保持原五类 Agent `VERIFIED`，本轮仅做六操作无项目生命周期无回归；P2-1 补齐统一项目校验、移除项目专属证据脚本，并用通用工具一次生成新的 4/4 真实证据包。最终结论仍为双 PASSED。
 
 ## P2-1 结果
 
@@ -127,8 +127,8 @@
 ## 自动检查与真实验收
 
 - 小范围检查：受影响单元测试（适配器/代码生成/审查器/冒烟/配置）全部通过
-- 完整检查：单元全量 **1731 passed**（最终代码，含第五轮生命周期贯通与边界校验的全部新增检查）；集成 30 passed, 5 skipped（本环境，与 P1 基线一致）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项，git stash 对照证实）
-- 跳过项及原因：集成测试 5 项需要真实游戏或外部控制服务的既有跳过（与 P1 基线相同）
+- 完整检查：单元全量 **1752 passed**；集成 **25 passed, 10 skipped**（当前复核环境；P1 基线环境为 30/5，差异均为真实游戏/外部服务条件自动跳过）；compileall OK；lint-imports KEPT；mypy 错误与基线一致（5 项均为 macOS 平台 stub 既有项）
+- 跳过项及原因：本环境集成测试 10 项因现场游戏或外部控制条件自动跳过；P1 基线为 5 项跳过，差异已单独登记
 - 真实任务编号：见上表
 - 证据包：`tests/output/artifacts/` 中各 run 的 zip 均可读
 
@@ -192,7 +192,7 @@
 1. `first_battle` 旅程以 `project=../STS2-GAWAIN` 目录接入到达首战（run-20260724-095826-608d0870，PASSED）；
 2. 从平台仓库目录执行 Gawain 自包含套件 `test_suite_gawain_m2_multi_trigger.py`（`STS2_PROJECT_DIR` 传入，无其他项目环境变量）→ **PASSED**（42.5s）：`give_card("gawain:emergency_recruit")` 经项目前缀映射为 `GAWAINMOD-EMERGENCY_RECRUIT`、`set_seed` 经项目命令模板执行、三张牌真实打出、多仆从触发断言通过。
 
-**标准证据包（第五轮复核补强）**：`e2e-m2-multi-trigger-20260724-01`，经公共执行入口 `run_tests_in_dir` 重跑并打包——`tests/output/artifacts/e2e-m2-multi-trigger-20260724-01_passed.zip`（32 个文件：summary.json/md、reports/junit.xml、reports/run-result.json、套件汇总 SUITE-GAWAIN-M2-MULTI-TRIGGER.json（4/4 passed）、三个用例的逐步行为日志含 give_card/set_seed/出牌记录）。驱动脚本：`scripts/p2_e2e_pipeline_evidence.py`。
+**最终标准证据包（2026-07-26 通用工具一次生成）**：`p2-final-e2e-20260726-0405`，由 `scripts/pipeline_evidence.py` 从平台目录接收外部项目目录、套件、任务编号和时限后执行。三个项目覆盖环境变量均已清空。结果为 **4/4 passed、19.516 秒、34 个文件**；压缩包 `tests/output/artifacts/p2-final-e2e-20260726-0405_passed.zip` 已重新解压并通过无损检查。四个逻辑用例均有独立记录，其中零原子步骤的导航用例也明确记录 `0 steps / passed`；卡牌记录直接显示 `gawain:emergency_recruit → GAWAINMOD-EMERGENCY_RECRUIT`，种子设置和三次真实出牌均可读。证据清单 `reports/pipeline-evidence.json` 在压缩前生成并包含于包内。
 
 ## 第五轮 Review 复核响应（2026-07-25）
 
@@ -217,11 +217,28 @@
 - 三角色短目标：仍为 2026-07-20 的 PASSED 证据（平台规则未再变动）
 - Hermes 恢复：r4 真恢复链（上表 #2）
 
+## 第六轮最终收口（2026-07-26）
+
+本轮不重复五类 Agent 验收，也不重跑完整第一章，只关闭 P2-1 的项目隔离与证据复现缺口，并对 P2-2 做公共契约无回归。
+
+| 收口项 | 最终处理 | 验收证据 |
+|---|---|---|
+| 所有公开入口的项目校验不一致 | 任务提交、规格编译、测试执行、完整流水线共用同一解析与允许范围；未知名称、目录越界、项目配置/规格/输出越界均返回 `PROJECT_CONFIG_INVALID`，禁止回退中性配置 | 项目解析与四入口一致性检查 |
+| 平台保留项目专属证据脚本 | 删除 `scripts/p2_e2e_pipeline_evidence.py`；保留完全参数化的 `scripts/pipeline_evidence.py`；其他 P2 驱动移除 Mod 角色默认值 | 通用工具源码无 Gawain 路径、套件、角色或任务编号默认值 |
+| 证据可事后拼装或混入旧文件 | 唯一任务编号、独立逐案目录、每案必有记录、汇总与记录新鲜度检查、压缩前清单、压缩后成员/任务编号/结果/用例列表复核；任一矛盾即失败并删除未通过压缩包 | `p2-final-e2e-20260726-0405`，4/4、34 文件、19.516 秒、ZIP 无损 |
+| 零操作用例缺记录 | 即使没有可追踪的原子操作，也生成“零步骤、最终结果”记录 | `TC-GAWAIN-NAVIGATE-TO-COMBAT/case.log` |
+| 动作证据看不到项目映射结果 | 逐步记录同时展示调用方标识和游戏实际标识 | `gawain:emergency_recruit → GAWAINMOD-EMERGENCY_RECRUIT` |
+| P2-2 公共生命周期无回归 | 不带 project 调用六操作，验证防重、两次取消、原任务恢复、三份报告和证据封存 | `tests/output/cross-agent-p2/p2-final-six-ops-pass-20260726/`；ORIG `run-20260726-041523-0a5ff435` CANCELLED → RESUME `run-20260726-041620-4a8517ec` PASSED；SECOND `run-20260726-041652-0911dc2c` CANCELLED；`V11_PASS=true` |
+
+真实复核中发现并修复两个公共生命周期缺口：开发态主菜单的“放弃旧局”曾错误走局内结束动作；验收脚本曾强制要求当前游戏版本未发布的存档布尔字段。最终判定同时要求主菜单可开始新局，且不存在继续/放弃旧局入口，不降低干净起点标准。
+
+P2-2 的五类 Agent 原始验收均保持有效，本轮仅确认六操作名称、参数含义、状态与报告结构未变化。
+
 ## 工作区
 
-- 修改范围：STS2-AUTOTEST（源码 9 文件 + 测试 6 文件 + 文档 + 移除 9 个过期生成文件 + scripts/p2_character_short_goals.py 新增）；STS2-GAWAIN（gitignore + 配置 2 文件 + 规格 1 文件 + _env.sh）
+- 修改范围：STS2-AUTOTEST（统一项目校验、通用证据工具、逐案记录、公共生命周期修复、检查与文档）；STS2-GAWAIN 本轮不再修改
 - 原有未提交内容如何保留：两个仓库均只做增量修改；Gawain 仓库中他人的未提交修改（AGENTS.md、MainFile.cs 等）未触碰
-- 是否提交：已提交。STS2-GAWAIN `9390081`（承接配置 5 文件）；STS2-AUTOTEST `b8b0173`（平台迁移 + 一轮复核修复，23 文件）+ `db8433b`（9 个过期 Gawain 生成文件删除补提交）+ `8ef63e2`（按任务解析项目配置 + 二轮复核收口，8 文件）+ `3510c91`（project 支持项目目录直接接入 + 配置全生命周期贯通，三轮收口）+ `7a686b9`（项目配置贯穿规格发现、执行、恢复与提交校验全链路，四轮收口）+ `a89a233`（项目配置边界收口：缺声明结构化失败、声明路径白名单、Agent 完整流程贯通，五轮收口）
+- 是否提交：STS2-GAWAIN `9390081`；STS2-AUTOTEST 既有收口提交 `b8b0173`、`db8433b`、`8ef63e2`、`3510c91`、`7a686b9`、`a89a233`；2026-07-26 最终收口由本报告所在提交承载
 - 是否推送：未推送（留待用户决定）
 
-第四轮收口提交：`7a686b9`（代码与检查）；本报告随后于文档提交登记。
+本轮最终收口由本报告所在提交统一承载；提交保留在本地，未推送。

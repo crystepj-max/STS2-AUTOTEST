@@ -1280,16 +1280,28 @@ class TestAgentAdapterAct:
 
     def test_abandon_run_uses_debug_die_for_safe_reset(self) -> None:
         mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "COMBAT"}})
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock, debug_actions=True)
 
         result = _run(adapter.act("abandon_run"))
 
         assert result.status == "success"
-        assert mock._requests[0]["kwargs"]["json"] == {
+        assert mock._requests[1]["kwargs"]["json"] == {
             "action": "run_console_command",
             "command": "die",
         }
+
+    def test_debug_abandon_run_uses_menu_action_on_main_menu(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAIN_MENU"}})
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("abandon_run"))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {"action": "abandon_run"}
 
     def test_enable_travel_uses_debug_console_command(self) -> None:
         mock = MockAsyncClient()
