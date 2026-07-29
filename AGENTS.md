@@ -172,3 +172,11 @@ Test Agent 原则：
 - 跨 Agent：`docs/unified-run-contract.md`、`docs/cross-agent-acceptance.md`、`docs/platform-capability-inventory.md`。
 - 自然语言测试：`docs/natural-language-testing/`；规格文件：`docs/process/specs/`。
 - Beta Epics/Story：`_bmad-output/planning-artifacts/beta-epics.md`；Sprint 状态：`_bmad-output/implementation-artifacts/sprint-status.yaml`。
+
+## Cursor Cloud specific instructions
+
+- 运行环境是 **Linux 云 VM**，而本框架目标平台是 Windows 11 / macOS。真实游戏《杀戮尖塔 2》（经由 Steam）在此无法运行，因此所有 `@pytest.mark.requires_game` 测试、`autotest doctor` / `serve` 的 readiness 检查、以及任何驱动游戏的流程都属于 **BLOCKED**（缺环境，而非 bug）。可离线验证的核心功能：单元测试、`mypy`、`lint-imports`，以及 NL 规格流水线 `autotest review` / `autotest compile`（把 `docs/process/specs/` 的 Markdown 编译成 pytest 文件）。
+- 依赖安装在仓库根的 **`.venv/`**（已 gitignore，由 update script 用 `pip install -e ".[dev,visual]"` 建立，含可选 `[visual]`=opencv 以让 `mypy --strict` 干净通过）。用 `source .venv/bin/activate` 或直接 `.venv/bin/<工具>`（如 `.venv/bin/pytest`、`.venv/bin/mypy`、`.venv/bin/autotest`）运行；命令本身见 README / 上文「构建与开发命令」，无需重复。
+- 创建 venv 需要系统包 `python3.12-venv`（`apt install python3.12-venv`），已装入快照；update script 只做 venv + pip，不装系统依赖。
+- 本 Linux VM 的单元测试基线：**1685 passed, 8 failed**。这 8 个失败均为平台/环境专属，非回归：`tests/unit/test_mcp_tools.py` 里 4 个用例硬编码 macOS 家目录路径（`/Users/chris/STS2-WORKSPACE/...`，在 Linux 上超出 `~/STS2-WORKSPACE` 白名单）；`tests/unit/test_smoke_card_validation.py` 里 4 个需要 macOS/Windows 的 Steam/Godot 可执行文件。
+- `ruff check src/ tests/` 在默认规则下有大量既存 style 报错（仓库无 ruff 配置），非本环境引入；改代码时以不新增为准。
