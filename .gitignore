@@ -88,3 +88,7 @@ tests/output/
 
 # Local agent collaboration protocol and handoffs
 .agent-collab/
+
+# 本地项目登记（机器相关的项目路径，不随平台分发）
+sts2-autotest.yaml
+sts2-autotest.yml

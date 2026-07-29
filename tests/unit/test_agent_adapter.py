@@ -1122,6 +1122,7 @@ class TestAgentAdapterAct:
             endpoint="http://127.0.0.1:8080",
             client=mock,
             debug_actions=True,
+            card_id_prefixes={"gawain": "GAWAINMOD-"},
         )
 
         result = _run(adapter.act("give_card", {"card_id": "gawain:emergency_recruit"}))
@@ -1132,6 +1133,25 @@ class TestAgentAdapterAct:
         assert mock._requests[1]["kwargs"]["json"] == {
             "action": "run_console_command",
             "command": "card GAWAINMOD-EMERGENCY_RECRUIT hand",
+        }
+
+    def test_give_card_passes_id_through_without_prefix_map(self) -> None:
+        """平台默认不内置任何 MOD 前缀：mod:card 写法原样透传。"""
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "COMBAT"}})
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(
+            endpoint="http://127.0.0.1:8080",
+            client=mock,
+            debug_actions=True,
+        )
+
+        result = _run(adapter.act("give_card", {"card_id": "gawain:emergency_recruit"}))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {
+            "action": "run_console_command",
+            "command": "card gawain:emergency_recruit hand",
         }
 
     def test_give_card_requires_debug_actions(self) -> None:
@@ -1149,6 +1169,7 @@ class TestAgentAdapterAct:
             endpoint="http://127.0.0.1:8080",
             client=mock,
             debug_actions=True,
+            seed_command_template="gawain_emergency_recruit_seed {seed}",
         )
 
         result = _run(adapter.act("set_seed", {"seed": 35}))
@@ -1159,6 +1180,15 @@ class TestAgentAdapterAct:
             "action": "run_console_command",
             "command": "gawain_emergency_recruit_seed 35",
         }
+
+    def test_set_seed_without_template_fails_honestly(self) -> None:
+        """平台默认没有种子命令：未配置时如实失败，不隐式调用项目命令。"""
+        adapter = AgentAdapter(debug_actions=True)
+
+        result = _run(adapter.act("set_seed", {"seed": 35}))
+
+        assert result.status == "failure"
+        assert "seed command template" in result.detail
 
     def test_set_seed_requires_debug_actions(self) -> None:
         adapter = AgentAdapter()
@@ -1250,16 +1280,28 @@ class TestAgentAdapterAct:
 
     def test_abandon_run_uses_debug_die_for_safe_reset(self) -> None:
         mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "COMBAT"}})
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock, debug_actions=True)
 
         result = _run(adapter.act("abandon_run"))
 
         assert result.status == "success"
-        assert mock._requests[0]["kwargs"]["json"] == {
+        assert mock._requests[1]["kwargs"]["json"] == {
             "action": "run_console_command",
             "command": "die",
         }
+
+    def test_debug_abandon_run_uses_menu_action_on_main_menu(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"ok": True, "data": {"screen": "MAIN_MENU"}})
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock, debug_actions=True)
+
+        result = _run(adapter.act("abandon_run"))
+
+        assert result.status == "success"
+        assert mock._requests[1]["kwargs"]["json"] == {"action": "abandon_run"}
 
     def test_enable_travel_uses_debug_console_command(self) -> None:
         mock = MockAsyncClient()

@@ -48,8 +48,6 @@ _IS_MACOS = platform.system() == "Darwin"
 _IS_WINDOWS = platform.system() == "Windows"
 _IS_LINUX = platform.system() == "Linux"
 _GAME_WINDOW_TITLE = "Slay the Spire 2"
-_GAWAIN_CHARACTER_IDS = {"gawain", "gawainmod-gawain", "gawain:character"}
-_GAWAIN_CHARACTER_NAMES = {"gawain", "高文"}
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -90,6 +88,16 @@ class TestPlanConfig:
     skip_launch_game: bool = False
     skip_game_smoke: bool = False
     require_game_running: bool = True
+    # 冒烟期望（项目经测试计划 YAML 的 smoke: 段提供，平台默认全部为空中性）：
+    # character_ids: 目标角色运行时标识候选（按优先级排序）；
+    # character_names: 目标角色显示名（用于模糊匹配）；
+    # starter_relic / starter_cards: 初始遗物与初始牌组期望（空=不做业务断言）；
+    # localization_key_prefixes: 本地化裸 Key 前缀（空=只按通用失败特征检查）。
+    character_ids: list[str] = field(default_factory=list)
+    character_names: list[str] = field(default_factory=list)
+    starter_relic: str = ""
+    starter_cards: list[str] = field(default_factory=list)
+    localization_key_prefixes: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +111,22 @@ def _resolve_path(base: Path, value: str) -> Path:
     if p.is_absolute():
         return p
     return (base / p).resolve()
+
+
+_SMOKE_LOOP: asyncio.AbstractEventLoop | None = None
+
+
+def _run(coro: Any) -> Any:
+    """在共享事件循环上执行适配器协程。
+
+    冒烟阶段对同一个 AgentAdapter 发起多次调用；逐次 ``asyncio.run`` 会关闭
+    循环，使适配器缓存的 HTTP 客户端绑定到已关闭的循环而报
+    "Event loop is closed"。共享单循环与 pytest 会话桥接的模型一致。
+    """
+    global _SMOKE_LOOP
+    if _SMOKE_LOOP is None or _SMOKE_LOOP.is_closed():
+        _SMOKE_LOOP = asyncio.new_event_loop()
+    return _SMOKE_LOOP.run_until_complete(coro)
 
 
 def _find_project_root() -> Path:
@@ -413,6 +437,7 @@ def _merge_config(cli_cfg: TestPlanConfig, plan: dict[str, Any] | None) -> TestP
     cfg = TestPlanConfig()
     inputs = plan.get("inputs", {}) or {}
     env = plan.get("environment", {}) or {}
+    smoke = plan.get("smoke", {}) or {}
 
     # Plan defaults
     cfg.task_id = plan.get("task_id", "") or ""
@@ -420,6 +445,15 @@ def _merge_config(cli_cfg: TestPlanConfig, plan: dict[str, Any] | None) -> TestP
     cfg.steam_app_id = str(env.get("steam_app_id", cfg.steam_app_id))
     cfg.require_game_running = bool(env.get("require_game_running", True))
     cfg.test_plan_path = str(plan.get("_source_path", ""))
+
+    # Smoke expectations provided by the MOD project (all optional)
+    cfg.character_ids = [str(v) for v in (smoke.get("character_ids") or [])]
+    cfg.character_names = [str(v) for v in (smoke.get("character_names") or [])]
+    cfg.starter_relic = str(smoke.get("starter_relic", "") or "")
+    cfg.starter_cards = [str(v) for v in (smoke.get("starter_cards") or [])]
+    cfg.localization_key_prefixes = [
+        str(v) for v in (smoke.get("localization_key_prefixes") or [])
+    ]
 
     # CLI overrides (non-empty / non-default wins)
     if cli_cfg.task_id:
@@ -709,8 +743,8 @@ class TestAgentRunner:
     Usage::
 
         runner = TestAgentRunner(
-            mod_project="../STS2-GAWAIN",
-            task_id="gawain-localization-key-fix",
+            mod_project="../MY-MOD-PROJECT",
+            task_id="my-mod-smoke",
             infra_path="../sts2-dev-infra",
         )
         result = runner.run()
@@ -732,6 +766,11 @@ class TestAgentRunner:
         skip_launch_game: bool = False,
         skip_game_smoke: bool = False,
         require_game_running: bool = True,
+        character_ids: list[str] | None = None,
+        character_names: list[str] | None = None,
+        starter_relic: str = "",
+        starter_cards: list[str] | None = None,
+        localization_key_prefixes: list[str] | None = None,
     ):
         project_root = _find_project_root()
         self._mod_project_path = _resolve_path(project_root, mod_project)
@@ -749,6 +788,14 @@ class TestAgentRunner:
         self._skip_launch_game = skip_launch_game
         self._skip_game_smoke = skip_game_smoke
         self._require_game_running = require_game_running
+        # 冒烟期望（项目提供；为空时只做通用检查，不做项目业务断言）
+        # character_ids 保留原始大小写用于 select_character 参数；
+        # 匹配判断在 _is_target_character_value 中统一忽略大小写。
+        self._character_ids = list(character_ids or [])
+        self._character_names = list(character_names or [])
+        self._starter_relic = starter_relic
+        self._starter_cards = list(starter_cards or [])
+        self._localization_key_prefixes = list(localization_key_prefixes or [])
 
         # Derive mod name for deployment (Issue 1 fix)
         self._mod_name = mod_name or _derive_mod_name(self._mod_project_path)
@@ -781,6 +828,11 @@ class TestAgentRunner:
         except _Failed as exc:
             self._conclusion = "FAILED"
             self._failure_details = str(exc)
+        except Exception as exc:  # noqa: BLE001 — 未分类异常一律如实判 FAILED，禁止默认 PASSED
+            self._conclusion = "FAILED"
+            self._failure_details = (
+                f"Unhandled runner error: {type(exc).__name__}: {exc}"
+            )
         finally:
             self._write_report()
             self._generate_html_report()
@@ -1051,20 +1103,26 @@ class TestAgentRunner:
             }
         return {}
 
-    def _is_gawain_character_value(self, value: Any) -> bool:
+    def _is_target_character_value(self, value: Any) -> bool:
+        """判断给定标识是否指向测试计划配置的目标角色。
+
+        未配置目标角色时返回 False（调用方应跳过角色业务断言）。
+        """
         text = str(value or "").strip()
         if not text:
             return False
         lower = text.lower()
-        return (
-            lower in _GAWAIN_CHARACTER_IDS
-            or lower in _GAWAIN_CHARACTER_NAMES
-            or "高文" in text
-            or "gawain" in lower
+        ids = [v.lower() for v in self._character_ids]
+        names = [v.lower() for v in self._character_names]
+        if lower in ids or lower in names:
+            return True
+        # 容忍 "MODPREFIX-CHARACTER" 与裸标识之间的差异
+        return any(token and token in lower for token in ids) or any(
+            token and token in lower for token in names
         )
 
-    def _resolve_gawain_character_option_index(self, state: dict[str, Any]) -> int:
-        """Find Gawain's character-select option index in an STS2-Agent state payload."""
+    def _resolve_target_character_option_index(self, state: dict[str, Any]) -> int:
+        """Find the configured character's option index in an STS2-Agent state payload."""
         character_select = state.get("character_select") or state.get("multiplayer_lobby") or {}
         characters = character_select.get("characters", []) if isinstance(character_select, dict) else []
         for fallback_index, character in enumerate(characters):
@@ -1077,17 +1135,25 @@ class TestAgentRunner:
                 character.get("name"),
                 character.get("line"),
             )
-            if not any(self._is_gawain_character_value(value) for value in identity_fields):
+            if not any(self._is_target_character_value(value) for value in identity_fields):
                 continue
             index = character.get("index", fallback_index)
             if isinstance(index, int):
                 return index
-        raise _Failed("Gawain character option was not found in character_select state")
+        raise _Failed("Target character option was not found in character_select state")
 
     def _find_unresolved_localization_keys(self, payload: Any) -> list[str]:
-        """Return unresolved localization-like strings found in runtime state."""
+        """Return unresolved localization-like strings found in runtime state.
+
+        裸 Key 前缀由项目测试计划提供（localization_key_prefixes）；
+        未提供时仅按通用失败特征检查，不内置任何 MOD 前缀。
+        """
         findings: list[str] = []
-        raw_key = re.compile(r"\bGAWAINMOD-[A-Z0-9_]+(?:\.[A-Za-z0-9_.-]+)+")
+        raw_key_patterns = [
+            re.compile(rf"\b{re.escape(prefix)}[A-Z0-9_]+(?:\.[A-Za-z0-9_.-]+)+")
+            for prefix in self._localization_key_prefixes
+            if prefix
+        ]
         generic_failures = ("missing localization", "KeyNotFound")
 
         def visit(value: Any, path: str) -> None:
@@ -1102,7 +1168,9 @@ class TestAgentRunner:
             if not isinstance(value, str):
                 return
             lower = value.lower()
-            if raw_key.search(value) or any(pattern.lower() in lower for pattern in generic_failures):
+            if any(pattern.search(value) for pattern in raw_key_patterns) or any(
+                pattern.lower() in lower for pattern in generic_failures
+            ):
                 findings.append(f"{path}: {value}")
 
         visit(payload, "")
@@ -1121,85 +1189,96 @@ class TestAgentRunner:
         if self._find_unresolved_localization_keys(text):
             raise _Failed(f"Raw localization key found for {label}: {text}")
 
-    def _assert_gawain_selected(self, state: dict[str, Any]) -> None:
+    def _assert_target_character_selected(self, state: dict[str, Any]) -> None:
+        if not self._character_ids and not self._character_names:
+            return  # 未配置目标角色：跳过角色业务断言
         combat = state.get("combat", {}) or {}
         players = combat.get("players", []) if isinstance(combat, dict) else []
         for player in players:
             if not isinstance(player, dict):
                 continue
             if (
-                self._is_gawain_character_value(player.get("character_id"))
-                or self._is_gawain_character_value(player.get("character_name"))
+                self._is_target_character_value(player.get("character_id"))
+                or self._is_target_character_value(player.get("character_name"))
             ):
                 return
-        raise _Failed("Expected active combat player to be Gawain")
+        raise _Failed("Expected active combat player to be the configured character")
 
-    def _assert_gawain_runtime_text_state(self, state: dict[str, Any]) -> None:
-        """Validate the runtime payload exposes Gawain text for character, relic, and deck."""
-        self._assert_no_unresolved_localization_keys("gawain-runtime-text", state)
+    def _assert_runtime_text_state(self, state: dict[str, Any]) -> None:
+        """Validate the runtime payload exposes localized character, relic, and deck text.
+
+        角色/初始遗物/初始牌组期望均由项目测试计划提供；
+        未提供的项跳过业务断言，只保留通用裸 Key 检查。
+        """
+        self._assert_no_unresolved_localization_keys("runtime-text", state)
 
         run = state.get("run", {}) or {}
         if not isinstance(run, dict):
             raise _Failed("Runtime state is missing run payload")
-        if not self._is_gawain_character_value(run.get("character_id")):
-            raise _Failed(f"Expected run.character_id to be Gawain, got {run.get('character_id')}")
-        self._require_localized_text(run.get("character_name"), "run.character_name")
+        if self._character_ids or self._character_names:
+            if not self._is_target_character_value(run.get("character_id")):
+                raise _Failed(
+                    f"Expected run.character_id to be the configured character, "
+                    f"got {run.get('character_id')}"
+                )
+            self._require_localized_text(run.get("character_name"), "run.character_name")
 
-        relics = run.get("relics", [])
-        relic = next(
-            (
-                item for item in relics
-                if isinstance(item, dict)
-                and str(item.get("relic_id", "")).strip() == "GAWAINMOD-MAGIC_TERMINAL"
-            ),
-            None,
-        )
-        if relic is None:
-            raise _Failed("Starter relic GAWAINMOD-MAGIC_TERMINAL was not found in run.relics")
-        self._require_localized_text(relic.get("name"), "starter relic name")
-        self._require_localized_text(relic.get("description"), "starter relic description")
+        if self._starter_relic:
+            relics = run.get("relics", [])
+            relic = next(
+                (
+                    item for item in relics
+                    if isinstance(item, dict)
+                    and str(item.get("relic_id", "")).strip() == self._starter_relic
+                ),
+                None,
+            )
+            if relic is None:
+                raise _Failed(f"Starter relic {self._starter_relic} was not found in run.relics")
+            self._require_localized_text(relic.get("name"), "starter relic name")
+            self._require_localized_text(relic.get("description"), "starter relic description")
 
-        required_cards = {
-            "GAWAINMOD-STRIKE_GAWAIN",
-            "GAWAINMOD-DEFEND_GAWAIN",
-            "GAWAINMOD-EMERGENCY_RECRUIT",
-            "GAWAINMOD-MAGIC_DRAW",
-            "GAWAINMOD-PORTABLE_MAGIC_TERMINAL",
-        }
-        deck = run.get("deck", [])
-        if not isinstance(deck, list):
-            raise _Failed("Runtime state run.deck is missing or malformed")
-        cards_by_id = {
-            str(card.get("card_id", "")).strip(): card
-            for card in deck
-            if isinstance(card, dict)
-        }
-        missing = sorted(card_id for card_id in required_cards if card_id not in cards_by_id)
-        if missing:
-            raise _Failed(f"Starter deck is missing cards: {', '.join(missing)}")
-        for card_id in sorted(required_cards):
-            card = cards_by_id[card_id]
-            self._require_localized_text(card.get("name"), f"{card_id} name")
-            rules_text = card.get("resolved_rules_text") or card.get("rules_text")
-            self._require_localized_text(rules_text, f"{card_id} rules text")
+        if self._starter_cards:
+            required_cards = set(self._starter_cards)
+            deck = run.get("deck", [])
+            if not isinstance(deck, list):
+                raise _Failed("Runtime state run.deck is missing or malformed")
+            cards_by_id = {
+                str(card.get("card_id", "")).strip(): card
+                for card in deck
+                if isinstance(card, dict)
+            }
+            missing = sorted(card_id for card_id in required_cards if card_id not in cards_by_id)
+            if missing:
+                raise _Failed(f"Starter deck is missing cards: {', '.join(missing)}")
+            for card_id in sorted(required_cards):
+                card = cards_by_id[card_id]
+                self._require_localized_text(card.get("name"), f"{card_id} name")
+                rules_text = card.get("resolved_rules_text") or card.get("rules_text")
+                self._require_localized_text(rules_text, f"{card_id} rules text")
 
     def _act_and_wait(self, agent: AgentAdapter, action_name: str, params: dict[str, Any]) -> None:
-        result = asyncio.run(agent.act(action_name, params))
+        result = _run(agent.act(action_name, params))
         if result.status != "success":
             raise _Failed(f"Navigation failed at '{action_name}': {result.detail}")
-        asyncio.run(agent.wait_until_actionable(timeout=15))
+        _run(agent.wait_until_actionable(timeout=15))
 
-    def _is_existing_gawain_run_state(self, state: dict[str, Any]) -> bool:
+    def _is_existing_target_run_state(self, state: dict[str, Any]) -> bool:
         run = state.get("run", {}) or {}
-        return isinstance(run, dict) and self._is_gawain_character_value(run.get("character_id"))
+        if not isinstance(run, dict):
+            return False
+        if not self._character_ids and not self._character_names:
+            # 未配置目标角色：任何进行中的对局都视为可复用旧局
+            return bool(str(run.get("character_id") or "").strip())
+        return self._is_target_character_value(run.get("character_id"))
 
     def _is_character_select_ready(self, agent: AgentAdapter) -> bool:
-        state = self._state_to_dict(asyncio.run(agent.get_state()))
+        state = self._state_to_dict(_run(agent.get_state()))
         screen = str(state.get("screen", "")).upper()
         if "CHARACTER_SELECT" in screen or "START_RUN_LOBBY" in screen:
             self._save_state_snapshot("character-select", state)
             return True
-        actions = asyncio.run(agent.get_available_actions())
+        actions = _run(agent.get_available_actions())
         if "select_character" in actions and "embark" in actions:
             self._save_state_snapshot("character-select", state)
             return True
@@ -1211,31 +1290,36 @@ class TestAgentRunner:
         for _ in range(12):
             if self._is_character_select_ready(agent):
                 return
-            result = asyncio.run(agent.act("open_character_select", {}))
+            result = _run(agent.act("open_character_select", {}))
             if result.status == "success":
-                asyncio.run(agent.wait_until_actionable(timeout=15))
+                _run(agent.wait_until_actionable(timeout=15))
                 if self._is_character_select_ready(agent):
                     return
             last_detail = result.detail or ""
             time.sleep(2)
         raise _Failed(f"Navigation failed at 'open_character_select': {last_detail}")
 
-    def _select_gawain_character(self, agent: AgentAdapter) -> None:
-        """Select Gawain, preferring stable ids over UI option positions."""
-        for params in (
-            {"character_id": "GAWAINMOD-GAWAIN"},
-            {"character_id": "gawain"},
-            {"character": "GAWAINMOD-GAWAIN"},
-            {"character": "gawain"},
-        ):
-            result = asyncio.run(agent.act("select_character", params))
+    def _select_target_character(self, agent: AgentAdapter) -> None:
+        """Select the configured character, preferring stable ids over UI option positions.
+
+        未配置目标角色时选择首个选项（通用默认）。
+        """
+        if not self._character_ids:
+            self._act_and_wait(agent, "select_character", {"option_index": 0})
+            return
+        candidate_params: list[dict[str, Any]] = []
+        for character_id in self._character_ids:
+            candidate_params.append({"character_id": character_id})
+            candidate_params.append({"character": character_id})
+        for params in candidate_params:
+            result = _run(agent.act("select_character", params))
             if result.status == "success":
-                asyncio.run(agent.wait_until_actionable(timeout=15))
+                _run(agent.wait_until_actionable(timeout=15))
                 return
 
-        character_select_state = self._state_to_dict(asyncio.run(agent.get_state()))
+        character_select_state = self._state_to_dict(_run(agent.get_state()))
         self._save_state_snapshot("character-select", character_select_state)
-        option_index = self._resolve_gawain_character_option_index(character_select_state)
+        option_index = self._resolve_target_character_option_index(character_select_state)
         self._act_and_wait(agent, "select_character", {"option_index": option_index})
 
     def _advance_to_first_combat(self, agent: AgentAdapter, state_dict: dict[str, Any]) -> dict[str, Any]:
@@ -1243,30 +1327,49 @@ class TestAgentRunner:
         for _ in range(12):
             screen = str(state_dict.get("screen", "")).upper()
             if screen == "COMBAT":
-                self._assert_gawain_selected(state_dict)
-                self._assert_gawain_runtime_text_state(state_dict)
+                self._assert_target_character_selected(state_dict)
+                self._assert_runtime_text_state(state_dict)
                 return state_dict
             if screen == "EVENT":
                 self._save_state_snapshot("navigation-event", state_dict)
                 self._act_and_wait(agent, "choose_event_option", {"option_index": 0})
-                state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
+                state_dict = self._state_to_dict(_run(agent.get_state()))
                 continue
             if screen == "MAP":
                 self._save_state_snapshot("navigation-map", state_dict)
                 self._act_and_wait(agent, "choose_map_node", {"option_index": 0})
-                state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
+                state_dict = self._state_to_dict(_run(agent.get_state()))
                 continue
-            raise _Failed(f"Expected COMBAT, EVENT, or MAP screen, got {state_dict.get('screen')}")
+            if screen == "CARD_REWARD":
+                # 事件/战斗后的卡牌奖励页：通用离开路径（跳过优先，其次继续/领取），
+                # 目标只是抵达首场战斗，不做项目级选牌判断。
+                self._save_state_snapshot("navigation-card-reward", state_dict)
+                available = _run(agent.get_available_actions())
+                if "skip_card_reward" in available:
+                    self._act_and_wait(agent, "skip_card_reward", {})
+                elif "reward_skip_card" in available:
+                    self._act_and_wait(agent, "reward_skip_card", {})
+                elif "collect_rewards_and_proceed" in available:
+                    self._act_and_wait(agent, "collect_rewards_and_proceed", {})
+                elif "proceed" in available:
+                    self._act_and_wait(agent, "proceed", {})
+                elif "reward_choose_card" in available:
+                    self._act_and_wait(agent, "reward_choose_card", {"option_index": 0})
+                else:
+                    raise _Failed(f"No known action to leave CARD_REWARD: {available}")
+                state_dict = self._state_to_dict(_run(agent.get_state()))
+                continue
+            raise _Failed(f"Expected COMBAT, EVENT, MAP, or CARD_REWARD screen, got {state_dict.get('screen')}")
         raise _Failed(f"Expected COMBAT screen, got {state_dict.get('screen')}")
 
     def _navigate_to_first_combat(self, agent: AgentAdapter) -> dict[str, Any]:
         """Navigate from MAIN_MENU to first combat. Raises _Failed on failure."""
-        state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
-        if not self._is_existing_gawain_run_state(state_dict):
+        state_dict = self._state_to_dict(_run(agent.get_state()))
+        if not self._is_existing_target_run_state(state_dict):
             self._open_character_select(agent)
-            self._select_gawain_character(agent)
+            self._select_target_character(agent)
             self._act_and_wait(agent, "embark", {})
-            state_dict = self._state_to_dict(asyncio.run(agent.get_state()))
+            state_dict = self._state_to_dict(_run(agent.get_state()))
         return self._advance_to_first_combat(agent, state_dict)
 
     def _verify_card_and_screenshot(
@@ -1304,7 +1407,7 @@ class TestAgentRunner:
 
         result["screenshot_before"] = self._capture_screenshot(f"card-{card_id}-before.png")
 
-        before = asyncio.run(agent.get_state())
+        before = _run(agent.get_state())
         before_dict = self._state_to_dict(before)
         combat_before = before_dict.get("combat", {}) or {}
         enemies_before = combat_before.get("enemies", [])
@@ -1313,7 +1416,7 @@ class TestAgentRunner:
         self._save_state_snapshot(f"card-{card_id}-before", before_dict)
 
         try:
-            play_result = asyncio.run(
+            play_result = _run(
                 agent.act("play_card", {"card_id": card_id, "target_index": target_index})
             )
         except Exception as exc:
@@ -1326,9 +1429,9 @@ class TestAgentRunner:
             result["error"] = f"play_card: {play_result.status}: {play_result.detail}"
             return result
 
-        asyncio.run(agent.wait_until_actionable(timeout=10))
+        _run(agent.wait_until_actionable(timeout=10))
 
-        after = asyncio.run(agent.get_state())
+        after = _run(agent.get_state())
         after_dict = self._state_to_dict(after)
         combat_after = after_dict.get("combat", {}) or {}
         enemies_after = combat_after.get("enemies", [])
@@ -1416,7 +1519,7 @@ class TestAgentRunner:
         deadline = time.time() + self._ping_timeout
         while time.time() < deadline:
             try:
-                health = asyncio.run(agent.health_check())
+                health = _run(agent.health_check())
                 if health.healthy:
                     health_ok = True
                     break
@@ -1430,7 +1533,7 @@ class TestAgentRunner:
                 "Ensure the game is running with STS2AIAgent mod loaded."
             )
         self._add("STS2-Agent Health", "PASSED", "http://127.0.0.1:8080/health")
-        if not asyncio.run(agent.wait_until_actionable(timeout=self._ping_timeout)):
+        if not _run(agent.wait_until_actionable(timeout=self._ping_timeout)):
             raise _Blocked(
                 f"STS2-Agent did not become actionable within {self._ping_timeout}s after health passed."
             )
@@ -1440,16 +1543,24 @@ class TestAgentRunner:
         self._add("First Combat Reached", "PASSED",
                   self._save_state_snapshot("combat-start", state))
 
-        # --- 6c: Read hand ---
-        combat = state.get("combat", {}) or {}
-        hand = combat.get("hand", [])
+        # --- 6c: Read hand（战斗开场动画后才发牌，需等手牌真实出现） ---
+        hand: list[Any] = []
+        deal_deadline = time.time() + 30
+        while time.time() < deal_deadline:
+            combat = state.get("combat", {}) or {}
+            hand = combat.get("hand", []) if isinstance(combat.get("hand"), list) else []
+            if hand:
+                break
+            time.sleep(2)
+            state = self._state_to_dict(_run(agent.get_state()))
         if not hand:
+            self._save_state_snapshot("combat-no-hand", state)
             raise _Failed("No cards in hand at combat start")
 
         # --- 6d: Verify each card ---
         self._card_results = []
         for card in hand:
-            current_state = self._state_to_dict(asyncio.run(agent.get_state()))
+            current_state = self._state_to_dict(_run(agent.get_state()))
             current_card = self._resolve_current_hand_card(current_state, card)
             if current_card is None:
                 continue
@@ -1481,11 +1592,11 @@ class TestAgentRunner:
                   f"screenshots in automation/autotest/output/{self._task_id}/screenshots/")
 
         # --- 6e: Clean up ---
-        asyncio.run(agent.act("abandon_run"))
+        _run(agent.act("abandon_run"))
         self._add("Abandon Run", "PASSED", "")
 
         # --- 6f: Scan for raw keys in final state ---
-        final_state = asyncio.run(agent.get_state())
+        final_state = _run(agent.get_state())
         final_dict = self._state_to_dict(final_state)
         self._assert_no_unresolved_localization_keys("final-state", final_dict)
 

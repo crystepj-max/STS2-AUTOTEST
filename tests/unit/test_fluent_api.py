@@ -246,7 +246,35 @@ class TestFluentBuilder:
         assert os.path.exists(step_log)
         text = case_log.read_text(encoding="utf-8")
         assert "打出卡牌 打击" in text
+        assert "gawain:strike → GAWAINMOD-STRIKE_GAWAIN" in text
         assert "敌方总生命减少 6" in text
+
+    def test_writes_case_log_when_no_atomic_action_is_recorded(
+        self,
+        orch: TestOrchestrator,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """零步骤用例也必须留下明确结果，不能只在汇总中声称通过。"""
+        monkeypatch.setenv("STS2_CASE_TRACE_ROOT", str(tmp_path))
+        monkeypatch.setenv(
+            "PYTEST_CURRENT_TEST",
+            "tests/unit/test_fluent_api.py::test_zero_step_suite (call)",
+        )
+
+        result = define("TC-ZERO-STEP", orch).assert_that()
+
+        case_log = (
+            tmp_path
+            / "test_fluent_api-test_zero_step_suite"
+            / "TC-ZERO-STEP"
+            / "case.log"
+        )
+        assert result.passed is True
+        assert case_log.is_file()
+        text = case_log.read_text(encoding="utf-8")
+        assert "步骤记录：0" in text
+        assert "结果：passed" in text
 
 
 class TestAssertionFunctions:

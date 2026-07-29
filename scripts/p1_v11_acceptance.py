@@ -328,11 +328,8 @@ def _cancel_column_checks(
     )
     checks[f"{prefix}_restart_count_is_one"] = recovery.get("restart_count") == 1
     checks[f"{prefix}_clean_main_menu"] = recovery.get("clean_main_menu") is True
-    # 信任层级（V11 实测）：内省字段 has_run_save=False + 开新局能力存在即为无旧局；
-    # continue/abandon 动作在菜单重建期可能是陈旧伪影，仅作参考不作判据。
-    checks[f"{prefix}_final_state_no_saved_run"] = bool(final_state) and (
-        final_state.get("has_run_save") is False
-        and final_state.get("has_new_run_action") is True
+    checks[f"{prefix}_final_state_no_saved_run"] = _final_state_has_no_saved_run(
+        final_state
     )
     checks[f"{prefix}_final_screenshot_in_pack"] = any(
         "recovery_final" in name for name in members
@@ -354,6 +351,17 @@ def _cancel_column_checks(
         "final_state": final_state or None,
     }
     return checks
+
+
+def _final_state_has_no_saved_run(final_state: dict[str, Any]) -> bool:
+    """兼容有/无存档内省字段的主菜单干净判定。"""
+    if not final_state or final_state.get("has_new_run_action") is not True:
+        return False
+    has_save = final_state.get("has_run_save")
+    if has_save is not None:
+        return has_save is False
+    actions = [str(action) for action in final_state.get("available_actions") or []]
+    return "continue_run" not in actions and "abandon_run" not in actions
 
 
 def _trace_first_menu_is_clean(report: dict[str, Any] | None) -> bool:

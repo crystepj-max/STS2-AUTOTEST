@@ -146,11 +146,16 @@ class TestPersistentRunTools:
 
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_submit_run_persists_and_is_idempotent(self, mock_worker, monkeypatch, tmp_path):
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run
 
+        project = tmp_path / "examplemod"
+        project.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
         args = {
-            "project": "examplemod",
+            "project": str(project),
             "suite": "smoke",
             "timeout": 120,
             "idempotency_key": "examplemod-smoke-1",
@@ -164,10 +169,15 @@ class TestPersistentRunTools:
 
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_submit_suite_does_not_append_all_target(self, mock_worker, monkeypatch, tmp_path):
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run
 
-        handle_submit_run({"project": "examplemod", "suite": "smoke"})
+        project = tmp_path / "examplemod"
+        project.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
+        handle_submit_run({"project": str(project), "suite": "smoke"})
 
         argv = mock_worker.call_args.args[2]
         assert "--suite" in argv
@@ -200,8 +210,279 @@ class TestPersistentRunTools:
         with pytest.raises(McpError, match="evidence"):
             handle_submit_run({"evidence": "verbose"})
 
+    def test_submit_rejects_directory_project_outside_allowed_roots(self, monkeypatch, tmp_path):
+        """目录型 project 必须位于允许范围内（与 spec_dir 同一白名单）。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        outside = tmp_path / "outside" / "mod"
+        outside.mkdir(parents=True)
+
+        with pytest.raises(McpError, match="allowed roots"):
+            handle_submit_run({"project": str(outside), "journey": "new_run"})
+
+    def test_submit_rejects_project_config_outside_allowed_roots(self, monkeypatch, tmp_path):
+        """项目声明指向的配置文件越出允许范围时同样拒绝。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        # 项目目录在白名单内，但 manifest 指向白名单外的配置文件
+        mod_dir = allowed / "mod"
+        mod_dir.mkdir()
+        outside_config = tmp_path / "outside-config.yaml"
+        outside_config.write_text("project_extension: {}\n", encoding="utf-8")
+        (mod_dir / "sts2-mod.yaml").write_text(
+            f"mod:\n  id: mod\nautotest:\n  config: {outside_config}\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(McpError, match="allowed roots"):
+            handle_submit_run({"project": str(mod_dir), "journey": "new_run"})
+
+    def test_run_tests_in_dir_injects_project_dir_env(self, monkeypatch, tmp_path):
+        """执行生成测试时，项目上下文经 STS2_PROJECT_DIR 传入子进程。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
+        captured: dict = {}
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            captured["cmd"] = cmd
+            return FakeCompleted()
+
+        monkeypatch.setattr(mcp_tools.subprocess, "run", fake_run)
+        project_dir = tmp_path / "my-mod"
+        project_dir.mkdir()
+
+        mcp_tools.run_tests_in_dir(
+            tmp_path, timeout=10, project_dir=project_dir, output_dir=tmp_path / "out"
+        )
+
+        assert captured["env"]["STS2_PROJECT_DIR"] == str(project_dir.resolve())
+
+    def test_run_tests_in_dir_without_project_keeps_default_env(self, monkeypatch, tmp_path):
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
+        captured: dict = {}
+
+        class FakeCompleted:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            captured["env"] = kwargs.get("env")
+            return FakeCompleted()
+
+        monkeypatch.setattr(mcp_tools.subprocess, "run", fake_run)
+
+        mcp_tools.run_tests_in_dir(tmp_path, timeout=10, output_dir=tmp_path / "out")
+
+        assert captured["env"] is None
+
+    def test_submit_rejects_declared_spec_outside_allowed_roots(self, monkeypatch, tmp_path):
+        """项目声明的规格目录指向允许范围外时拒绝（白名单覆盖声明内部路径）。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        mod_dir = allowed / "mod"
+        mod_dir.mkdir()
+        outside_specs = tmp_path / "outside-specs"
+        outside_specs.mkdir()
+        (mod_dir / "sts2-mod.yaml").write_text(
+            "mod:\n  id: mod\n"
+            "autotest:\n"
+            f"  spec_dirs:\n    - {outside_specs}\n"
+            "  evidence_dir: automation/autotest/output\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(McpError, match="allowed roots"):
+            handle_submit_run({"project": str(mod_dir), "journey": "new_run"})
+
+    def test_submit_rejects_declared_output_outside_allowed_roots(self, monkeypatch, tmp_path):
+        """项目声明的输出目录指向允许范围外时拒绝。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_submit_run
+
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        mod_dir = allowed / "mod"
+        mod_dir.mkdir()
+        outside_output = tmp_path / "outside-output"
+        outside_output.mkdir()
+        (mod_dir / "sts2-mod.yaml").write_text(
+            "mod:\n  id: mod\n"
+            "autotest:\n"
+            "  spec_dirs:\n    - automation/autotest/specs\n"
+            f"  evidence_dir: {outside_output}\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(McpError, match="allowed roots"):
+            handle_submit_run({"project": str(mod_dir), "journey": "new_run"})
+
+    def test_run_test_rejects_project_outside_allowed_roots(self, monkeypatch, tmp_path):
+        """run_test 与 submit_run 同一校验：白名单外项目目录拒绝。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_run_test
+
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        specs = allowed / "specs"
+        specs.mkdir()
+        outside = tmp_path / "outside" / "mod"
+        outside.mkdir(parents=True)
+
+        with pytest.raises(McpError, match="allowed roots"):
+            handle_run_test({"spec_dir": str(specs), "project": str(outside)})
+
+    def test_run_test_rejects_unresolvable_project_name(self, monkeypatch, tmp_path):
+        """无法解析的登记名称结构化失败（PROJECT_CONFIG_INVALID），不静默中性执行。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_run_test
+
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
+        monkeypatch.chdir(tmp_path)
+        specs = tmp_path / "specs"
+        specs.mkdir()
+
+        with pytest.raises(McpError, match="PROJECT_CONFIG_INVALID"):
+            handle_run_test({"spec_dir": str(specs), "project": "no-such-registered-name"})
+
+    def test_registered_project_is_validated_after_resolution(self, monkeypatch, tmp_path):
+        """登记名称解析出的真实目录同样必须位于允许范围内。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli.mcp_tools import handle_run_test
+
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        specs = allowed / "specs"
+        specs.mkdir()
+        outside = tmp_path / "outside-project"
+        outside.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
+        monkeypatch.setattr(
+            "sts2_autotest.cli.main._resolve_project_base_dir",
+            lambda _project: outside,
+        )
+
+        with pytest.raises(McpError, match="PROJECT_CONFIG_INVALID.*allowed roots"):
+            handle_run_test({"spec_dir": str(specs), "project": "registered-mod"})
+
+    def test_all_public_project_entries_reject_unknown_name(self, monkeypatch, tmp_path):
+        """提交、编译、执行、完整流水线对未知项目使用同一结构化失败。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
+        monkeypatch.chdir(tmp_path)
+        specs = tmp_path / "specs"
+        specs.mkdir()
+        spec = specs / "TC-X.md"
+        spec.write_text("# TC-X", encoding="utf-8")
+        calls = [
+            lambda: mcp_tools.handle_submit_run(
+                {"project": "unknown-project", "journey": "new_run"}
+            ),
+            lambda: mcp_tools.handle_compile_spec(
+                {"project": "unknown-project", "spec_path": str(spec)}
+            ),
+            lambda: mcp_tools.handle_run_test(
+                {"project": "unknown-project", "spec_dir": str(specs)}
+            ),
+            lambda: mcp_tools.handle_run_pipeline(
+                {"project": "unknown-project", "spec_dir": str(specs)}
+            ),
+        ]
+
+        for call in calls:
+            with pytest.raises(McpError, match="PROJECT_CONFIG_INVALID"):
+                call()
+
+    def test_run_test_and_pipeline_schemas_expose_project(self) -> None:
+        """编译、执行与完整流水线均公开 project（Agent 可发现）。"""
+        from sts2_autotest.cli.mcp_tools import ToolRegistry
+
+        registry = ToolRegistry()
+        tools = {tool.name: tool for tool in registry.list_tools()}
+
+        for name in ("compile_spec", "run_test", "run_pipeline"):
+            props = tools[name].input_schema.get("properties", {})
+            assert "project" in props, f"{name} 的公开参数缺少 project"
+
+    def test_run_pipeline_passes_project_to_compile_and_run(self, monkeypatch, tmp_path) -> None:
+        """Agent 完整流程：project 贯穿编译（别名）与执行（项目上下文）。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
+        monkeypatch.delenv("STS2_PROJECT__CHARACTER_ALIASES", raising=False)
+        mod_dir = tmp_path / "my-mod"
+        config_dir = mod_dir / "automation/autotest/config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "sts2-autotest.yaml").write_text(
+            "project_extension:\n"
+            "  character_aliases:\n"
+            "    MyChar: MYMOD-MYCHAR\n",
+            encoding="utf-8",
+        )
+        (mod_dir / "sts2-mod.yaml").write_text(
+            "mod:\n  id: mymod\nautotest:\n  config: automation/autotest/config/sts2-autotest.yaml\n",
+            encoding="utf-8",
+        )
+        spec_dir = tmp_path / "specs"
+        spec_dir.mkdir()
+        (spec_dir / "TC-X.md").write_text(
+            "# TC-X\n\n## Metadata\n- id: TC-X\n- level: case\n- priority: P0\n\n"
+            "## Start State\n- MAIN_MENU\n\n## End State\n- EVENT\n\n"
+            "## When\n1. 选择 MyChar\n2. 开始冒险\n\n## Then\n- 不 crash\n",
+            encoding="utf-8",
+        )
+        captured: dict = {}
+
+        def fake_run_tests_in_dir(spec_dir_arg, suite="", timeout=60, **kwargs):
+            captured["project_dir"] = kwargs.get("project_dir")
+            return {"run_id": "fake", "status": "OK"}
+
+        monkeypatch.setattr(mcp_tools, "run_tests_in_dir", fake_run_tests_in_dir)
+
+        result = mcp_tools.handle_run_pipeline({
+            "spec_dir": str(spec_dir),
+            "project": str(mod_dir),
+            "stages": ["compile", "run"],
+        })
+
+        # 编译产物使用了项目别名（MyChar → MYMOD-MYCHAR）
+        generated = result["compiled_files"][0]
+        code = open(generated, encoding="utf-8").read()
+        assert 'select_character("MYMOD-MYCHAR")' in code
+        # 执行阶段收到项目上下文
+        assert captured["project_dir"] is not None
+        assert str(mod_dir) in str(captured["project_dir"])
+
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_resume_run_preserves_resume_mode_in_worker_argv(self, mock_worker, monkeypatch, tmp_path):
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import (
             _run_store,
@@ -209,7 +490,10 @@ class TestPersistentRunTools:
             handle_submit_run,
         )
 
-        original = handle_submit_run({"project": "examplemod", "suite": "smoke"})
+        project = tmp_path / "examplemod"
+        project.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
+        original = handle_submit_run({"project": str(project), "suite": "smoke"})
         # 修复四：只有取消/失败收尾完成（终态 + 证据封存）的任务才可恢复。
         _run_store().finish_cancel(original["run_id"], reason=None, sealed=True)
         resumed = handle_resume_run({"run_id": original["run_id"]})
@@ -225,11 +509,16 @@ class TestPersistentRunTools:
         self, mock_worker, monkeypatch, tmp_path
     ):
         """修复四：原任务还在跑（未终态/证据未封存）时，恢复必须被拒。"""
+        import sts2_autotest.cli.mcp_tools as mcp_tools
+
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_protocol import McpError
         from sts2_autotest.cli.mcp_tools import handle_resume_run, handle_submit_run
 
-        original = handle_submit_run({"project": "examplemod", "suite": "smoke"})
+        project = tmp_path / "examplemod"
+        project.mkdir()
+        monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
+        original = handle_submit_run({"project": str(project), "suite": "smoke"})
         with pytest.raises(McpError, match="cannot be resumed"):
             handle_resume_run({"run_id": original["run_id"]})
 

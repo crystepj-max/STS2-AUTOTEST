@@ -185,7 +185,7 @@ def _create_parser() -> Any:
     # autotest agent-test (cross-platform Test Agent Runner, replaces run-test-agent.ps1)
     agent_test = sub.add_parser("agent-test", help="Run the full test-agent workflow (build + localization + deploy + smoke)")
     agent_test.add_argument("--mod-project", required=True, help="Path to the mod project root")
-    agent_test.add_argument("--task-id", required=True, help="Task identifier (e.g. gawain-localization-key-fix)")
+    agent_test.add_argument("--task-id", required=True, help="Task identifier (e.g. my-mod-localization-fix)")
     agent_test.add_argument("--infra-path", required=True, help="Path to sts2-dev-infra")
     agent_test.add_argument("--test-plan", help="Path to a test-plan YAML file (reads params from YAML)")
     agent_test.add_argument("--game-mods-path", help="Path to Steam STS2 mods directory (auto-detected if omitted)")
@@ -212,7 +212,8 @@ def _create_parser() -> Any:
 
     # autotest gen-report
     gen_report_parser = sub.add_parser("gen-report", help="Generate HTML test report via test-report-html skill")
-    gen_report_parser.add_argument("--task-id", help="Task ID (reads from automation/autotest/output/{task-id}/)")
+    gen_report_parser.add_argument("--task-id", help="Task ID (reads from {mod-project}/automation/autotest/output/{task-id}/)")
+    gen_report_parser.add_argument("--mod-project", default=".", help="MOD project root used with --task-id (default: current directory)")
     gen_report_parser.add_argument("--config", help="Path to test-results JSON config file")
     gen_report_parser.add_argument("--output", help="Output HTML path (default: auto-detect)")
     gen_report_parser.set_defaults(func=gen_report_cmd)
@@ -293,7 +294,34 @@ def _is_agent_default() -> bool:
     return raw.lower() in ("true", "1", "yes")
 
 
-def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
+def _resolve_project_base_dir(project: str | None) -> Path | None:
+    """按任务项目输入解析项目根目录。
+
+    支持两种通用输入（公共契约：项目标识或项目目录）：
+    1. 直接项目目录（含路径分隔符或以 ``.`` 开头，且目录真实存在）；
+    2. 已登记的项目名称（当前目录本地 workspace 配置中的 manifest 指针；
+       平台不预置任何项目登记，登记属于本地设置）。
+    未提供或解析失败时返回 None（调用方回退当前目录）。
+    """
+    if not project:
+        return None
+    if "/" in project or "\\" in project or project.startswith("."):
+        candidate = Path(project).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        if candidate.is_dir():
+            return candidate.resolve()
+        return None
+    ws = _load_workspace()
+    if ws is None:
+        return None
+    manifest = ws.mod_manifest_path(project)
+    if not manifest:
+        return None
+    return Path(manifest).resolve().parent
+
+
+def _create_adapter(adapter_type: str, project: str | None = None) -> GameAdapterProtocol:
     """Create adapter based on type.
 
     Reads configuration from STS2_ prefixed environment variables,
@@ -301,12 +329,21 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
 
     Args:
         adapter_type: "cli" or "agent" — which adapter to instantiate.
+        project: 任务携带的项目名；提供时按该项目自己的配置目录读取
+            项目扩展规则（卡牌前缀、种子命令模板），实现按任务隔离。
 
     Returns:
         A GameAdapterProtocol-compliant adapter instance.
     """
     if adapter_type == "agent":
         from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+        from sts2_autotest.adapters.project_extension import (
+            load_card_id_prefixes,
+            load_seed_command_template,
+            resolve_base_dir,
+        )
+
+        extension_base_dir = _resolve_project_base_dir(project) or resolve_base_dir()
 
         transport_raw = _get_env(["STS2_ADAPTER__AGENT__TRANSPORT"], "http")
         if transport_raw not in ("http", "mcp"):
@@ -351,6 +388,8 @@ def _create_adapter(adapter_type: str) -> GameAdapterProtocol:
             wait_path=_get_env(
                 ["STS2_ADAPTER__AGENT__WAIT_PATH"], "wait_until_actionable"
             ),
+            card_id_prefixes=load_card_id_prefixes(extension_base_dir),
+            seed_command_template=load_seed_command_template(extension_base_dir),
         )
     else:
         from sts2_autotest.adapters.cli_mod import CliModAdapter
@@ -1019,8 +1058,30 @@ def _load_workspace() -> Any | None:
     return None
 
 
+def _load_character_aliases(project: str | None = None) -> dict[str, str]:
+    """Load project-provided character aliases.
+
+    统一经 adapters.project_extension 读取：按任务 project（项目目录或
+    已登记名称）解析项目配置；未携带 project 时读取当前目录配置。
+    ``STS2_PROJECT__CHARACTER_ALIASES`` 环境变量为覆盖层。
+    两者皆无时返回空映射（平台默认仅认识原游戏角色）。
+    """
+    from sts2_autotest.adapters.project_extension import load_character_aliases
+
+    base_dir = _resolve_project_base_dir(project) or Path.cwd()
+    return load_character_aliases(base_dir)
+
+
+class ProjectConfigError(Exception):
+    """显式项目缺少必要声明或声明无效（PROJECT_CONFIG_INVALID）。
+
+    显式携带 project 的任务绝不可回退到平台默认规格/输出目录——
+    那会造成"提交某项目却执行平台测试"的假通过。
+    """
+
+
 def _resolve_spec_dir(args: Any) -> str | None:
-    """Resolve spec directory from args or workspace config."""
+    """Resolve spec directory from args, the task's project, or workspace config."""
     spec_dir = getattr(args, "spec_dir", None)
     if isinstance(spec_dir, str) and spec_dir:
         return spec_dir
@@ -1028,14 +1089,39 @@ def _resolve_spec_dir(args: Any) -> str | None:
         return str(spec_dir)
     project_name = getattr(args, "project", None)
     if project_name:
+        # 任务项目（目录或登记名）自己的声明决定规格来源。
+        project_base = _resolve_project_base_dir(project_name)
+        if project_base is not None:
+            from sts2_autotest.adapters.project_extension import (
+                load_project_spec_output,
+            )
+
+            project_spec_dir, _ = load_project_spec_output(project_base)
+            if project_spec_dir:
+                if not os.path.isdir(project_spec_dir):
+                    raise ProjectConfigError(
+                        f"project '{project_name}' declares spec_dir that does not exist: "
+                        f"{project_spec_dir}"
+                    )
+                return project_spec_dir
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
             project_spec_dir = getattr(project, "spec_dir", None) if project else None
-            if isinstance(project_spec_dir, str):
-                return project_spec_dir
-            if project_spec_dir:
-                return str(project_spec_dir)
+            if isinstance(project_spec_dir, str) and project_spec_dir:
+                resolved = str((Path.cwd() / project_spec_dir).resolve()) if not os.path.isabs(project_spec_dir) else project_spec_dir
+                if not os.path.isdir(resolved):
+                    raise ProjectConfigError(
+                        f"project '{project_name}' declares spec_dir that does not exist: "
+                        f"{resolved}"
+                    )
+                return resolved
+        # 显式项目但找不到任何规格声明：结构化失败，不回退平台目录。
+        raise ProjectConfigError(
+            f"project '{project_name}' does not declare a spec_dir "
+            f"(expected in its sts2-autotest.yaml workspace config or sts2-mod.yaml); "
+            f"pass --spec-dir explicitly to override"
+        )
     # Fall back to default spec directory
     default_spec = "docs/process/specs"
     if os.path.isdir(default_spec):
@@ -1052,6 +1138,15 @@ def _resolve_output_dir(args: Any, spec_dir: str) -> str:
         return str(output_dir)
     project_name = getattr(args, "project", None)
     if project_name:
+        project_base = _resolve_project_base_dir(project_name)
+        if project_base is not None:
+            from sts2_autotest.adapters.project_extension import (
+                load_project_spec_output,
+            )
+
+            _, project_output_dir = load_project_spec_output(project_base)
+            if project_output_dir:
+                return project_output_dir
         ws = _load_workspace()
         if ws:
             project = ws.resolve_project(project_name)
@@ -1060,6 +1155,12 @@ def _resolve_output_dir(args: Any, spec_dir: str) -> str:
                 return project_output_dir
             if project_output_dir:
                 return str(project_output_dir)
+        # 显式项目但找不到输出声明：结构化失败，不回退平台目录。
+        raise ProjectConfigError(
+            f"project '{project_name}' does not declare an output_dir "
+            f"(expected in its sts2-autotest.yaml workspace config or sts2-mod.yaml); "
+            f"pass --output-dir explicitly to override"
+        )
     return "tests/generated"
 
 
@@ -1148,7 +1249,11 @@ def review_cmd(args: Any) -> int:
     from sts2_autotest.core.markdown_parser import MarkdownParser
     from sts2_autotest.core.spec_reviewer import SpecReviewer
 
-    spec_dir = _resolve_spec_dir(args)
+    try:
+        spec_dir = _resolve_spec_dir(args)
+    except ProjectConfigError as exc:
+        print(f"[autotest] PROJECT_CONFIG_INVALID: {exc}")
+        return 1
     if not spec_dir:
         print("[autotest] Specify --spec-dir or configure workspace in sts2-autotest.yaml")
         return 1
@@ -1218,7 +1323,12 @@ def compile_cmd(args: Any) -> int:
     from sts2_autotest.core.markdown_parser import MarkdownParser
     from sts2_autotest.core.code_generator import CodeGenerator
 
-    spec_dir = _resolve_spec_dir(args)
+    try:
+        spec_dir = _resolve_spec_dir(args)
+        output_dir = _resolve_output_dir(args, spec_dir) if spec_dir else ""
+    except ProjectConfigError as exc:
+        print(f"[autotest] PROJECT_CONFIG_INVALID: {exc}")
+        return 1
     if not spec_dir:
         print("[autotest] Specify --spec-dir or configure workspace in sts2-autotest.yaml")
         return 1
@@ -1231,7 +1341,6 @@ def compile_cmd(args: Any) -> int:
     if not compile_input_dir:
         return 1
 
-    output_dir = _resolve_output_dir(args, spec_dir)
     _ensure_output_dir_writable(output_dir)
     parser = MarkdownParser()
     cases, suites = parser.discover_specs(compile_input_dir)
@@ -1246,7 +1355,9 @@ def compile_cmd(args: Any) -> int:
         print(f"[autotest] No spec files found in {compile_input_dir}")
         return 0
 
-    generator = CodeGenerator()
+    generator = CodeGenerator(
+        character_aliases=_load_character_aliases(getattr(args, "project", None))
+    )
     generated: list[str] = []
     specs_by_id = {s.id: s for s in cases}
 
@@ -1296,6 +1407,7 @@ def _dispatch_orchestrator(
     resumed_from: str | None = None,
     use_agent: bool = False,
     run_id: str | None = None,
+    project: str | None = None,
 ) -> int:
     """Route to the correct orchestrator with the given adapter.
 
@@ -1303,10 +1415,12 @@ def _dispatch_orchestrator(
     instance from _create_adapter() (which respects STS2_ env vars)
     is actually used. When adapter is None (from --resume branches
     that haven't built it yet), creates it from default env config.
+    任务携带的 project 同时传入恢复重建入口，确保连接恢复后
+    项目扩展规则（卡牌前缀、种子命令模板）不丢失。
     """
     if adapter is None:
         use_agent = _is_agent_default()
-        adapter = _create_adapter("agent") if use_agent else _create_adapter("cli")
+        adapter = _create_adapter("agent", project=project) if use_agent else _create_adapter("cli")
 
     kwargs: dict[str, str | None] = {"progress_path": progress_path}
     if resumed_from is not None:
@@ -1316,7 +1430,9 @@ def _dispatch_orchestrator(
         adapter,
         case_ids,
         timeout=timeout,
-        adapter_factory=lambda: _create_adapter("agent" if use_agent else "cli"),
+        adapter_factory=lambda: _create_adapter(
+            "agent" if use_agent else "cli", project=project
+        ),
         run_id=run_id,
         **kwargs,
     )
@@ -1419,6 +1535,8 @@ def _child_argv(args: Any, run_id: str) -> list[str]:
         argv.extend(["--route-policy", str(args.route_policy)])
     if getattr(args, "combat_mode", None):
         argv.extend(["--combat-mode", str(args.combat_mode)])
+    if getattr(args, "card_id", None):
+        argv.extend(["--card-id", str(args.card_id)])
     argv.extend(["--internal-run-id", run_id])
     return argv
 
@@ -1443,6 +1561,7 @@ def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> i
             **({"target_scene": getattr(args, "target_scene")} if getattr(args, "target_scene", None) else {}),
             "route_policy": getattr(args, "route_policy", "leftmost"),
             "combat_mode": getattr(args, "combat_mode", "traversal"),
+            **({"card_id": getattr(args, "card_id")} if getattr(args, "card_id", None) else {}),
         },
     )
     record = store.create(request)
@@ -1549,6 +1668,7 @@ def resume_run_cmd(args: Any) -> int:
         target_scene=request.metadata.get("target_scene"),
         route_policy=request.metadata.get("route_policy", "leftmost"),
         combat_mode=request.metadata.get("combat_mode", "traversal"),
+        card_id=request.metadata.get("card_id"),
         evidence=request.evidence,
         idempotency_key=None,
     )
@@ -2691,7 +2811,7 @@ def _run_cmd_foreground(args: Any) -> int:
     # Determine adapter type: --adapter flag takes precedence, then env var default
     adapter_type: str = args.adapter or ("agent" if _is_agent_default() else "cli")
     use_agent = adapter_type == "agent"
-    adapter = _create_adapter(adapter_type)
+    adapter = _create_adapter(adapter_type, project=getattr(args, "project", None))
 
     if getattr(args, "journey", None) or getattr(args, "target_scene", None):
         journey_kwargs: dict[str, Any] = {
@@ -2742,6 +2862,7 @@ def _run_cmd_foreground(args: Any) -> int:
                 progress_path=use_progress, resumed_from=resumed_from,
                 use_agent=use_agent,
                 run_id=getattr(args, "internal_run_id", None),
+                project=getattr(args, "project", None),
             )
 
     # Auto-detect: progress file exists but no explicit flag
@@ -2755,7 +2876,14 @@ def _run_cmd_foreground(args: Any) -> int:
     # Normal run paths (all with progress_path set for AC1)
     if args.all:
         # Pipeline mode: review -> compile -> run, only if spec dir available
-        pipeline_spec_dir = _resolve_spec_dir(args)
+        try:
+            pipeline_spec_dir = _resolve_spec_dir(args)
+            pipeline_output_dir = (
+                _resolve_output_dir(args, pipeline_spec_dir) if pipeline_spec_dir else ""
+            )
+        except ProjectConfigError as exc:
+            print(f"[autotest] PROJECT_CONFIG_INVALID: {exc}")
+            return 1
         if pipeline_spec_dir:
             print("[autotest] Running full pipeline: review -> compile -> run")
             from argparse import Namespace
@@ -2766,7 +2894,7 @@ def _run_cmd_foreground(args: Any) -> int:
             if review_rc != 0:
                 print("[autotest] Review failed - aborting pipeline")
                 return 1
-            output_dir = _resolve_output_dir(args, pipeline_spec_dir)
+            output_dir = pipeline_output_dir
             compile_rc = compile_cmd(Namespace(
                 command="compile", spec_dir=pipeline_spec_dir,
                 output_dir=output_dir, project=getattr(args, "project", None),
@@ -2787,6 +2915,7 @@ def _run_cmd_foreground(args: Any) -> int:
                 targets=[Path(target) for target in pytest_targets],
                 output_dir=output_dir,
                 run_id=getattr(args, "internal_run_id", None),
+                project_dir=_resolve_project_base_dir(getattr(args, "project", None)),
             )
             return 0 if run_result.get("status") == "OK" else 1
         print("[autotest] Running all cases (no spec pipeline)...")
@@ -2794,6 +2923,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, ["all"], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     elif args.cases:
         print(f"[autotest] Running cases: {', '.join(args.cases)}")
@@ -2801,6 +2931,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, args.cases, timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     elif args.suite:
         print(f"[autotest] Running suite: {args.suite}")
@@ -2808,6 +2939,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, [args.suite], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     elif args.failed:
         print("[autotest] Re-running failed cases...")
@@ -2815,6 +2947,7 @@ def _run_cmd_foreground(args: Any) -> int:
             adapter, ["failed"], timeout=args.timeout,
             progress_path=use_progress, use_agent=use_agent,
             run_id=getattr(args, "internal_run_id", None),
+            project=getattr(args, "project", None),
         )
     else:
         print("[autotest] No run option specified. "
@@ -3069,6 +3202,11 @@ def agent_test_cmd(args: Any) -> int:
         skip_launch_game=cfg.skip_launch_game,
         skip_game_smoke=cfg.skip_game_smoke,
         require_game_running=require_game,
+        character_ids=cfg.character_ids,
+        character_names=cfg.character_names,
+        starter_relic=cfg.starter_relic,
+        starter_cards=cfg.starter_cards,
+        localization_key_prefixes=cfg.localization_key_prefixes,
     )
 
     result = runner.run()
@@ -3277,7 +3415,7 @@ def _resolve_gen_report_dirs(args: Any) -> tuple[str, str]:
         return config_path, output_path
 
     if args.task_id:
-        base = Path("STS2-GAWAIN") / "automation" / "autotest" / "output" / args.task_id
+        base = Path(args.mod_project) / "automation" / "autotest" / "output" / args.task_id
         resolved_config = base / "test-results.json"
         if not resolved_config.exists():
             resolved_config = base / "test-results.json"

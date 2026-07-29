@@ -9,6 +9,7 @@ _assign_to_job stubs — full implementation in Epic 4 Beta.
 """
 
 import ctypes
+import os
 import platform
 import subprocess
 import time
@@ -89,6 +90,28 @@ class SteamController:
         logger.info("Steam started (PID %s)", self._steam_pid)
         return self._steam_pid
 
+    def _find_game_bundle(self) -> Path | None:
+        """Locate the macOS game bundle for direct launch with debug env.
+
+        优先使用构造时传入的实际安装目录（自定义 Steam 库/测试机/CI），
+        其次 STS2_GAME_DIR 环境变量，最后固定默认路径。
+        """
+        candidates: list[Path] = []
+        if self.game_dir:
+            candidates.append(Path(self.game_dir) / "SlayTheSpire2.app")
+        game_dir = os.environ.get("STS2_GAME_DIR", "")
+        if game_dir:
+            candidates.append(Path(game_dir) / "SlayTheSpire2.app")
+        candidates.append(
+            Path.home()
+            / "Library/Application Support/Steam/steamapps/common/Slay the Spire 2"
+            / "SlayTheSpire2.app"
+        )
+        for candidate in candidates:
+            if candidate.is_dir():
+                return candidate
+        return None
+
     def start_game(
         self,
         *,
@@ -104,10 +127,20 @@ class SteamController:
             self._assign_to_job(pid)
             logger.info("Game is already running (PID %s) — reusing existing session", pid)
             return pid
+        # 与 GameLifecycleManager 一致：macOS 直接打开游戏包并注入调试 API
+        # 环境。open steam://run 经已在运行的 Steam 客户端转发，env 无法
+        # 到达游戏进程，硬重启后会静默丢失调试控制台（2026-07-24 暴露）。
+        launch_env = dict(os.environ)
+        launch_env.setdefault("STS2_API_PORT", "8080")
+        launch_env.setdefault("STS2_ENABLE_DEBUG_ACTIONS", "1")
         if _IS_MACOS:
-            subprocess.Popen(["open", f"steam://run/{self.app_id}"])
+            bundle = self._find_game_bundle()
+            if bundle is not None:
+                subprocess.Popen(["open", str(bundle)], env=launch_env)
+            else:
+                subprocess.Popen(["open", f"steam://run/{self.app_id}"], env=launch_env)
         else:
-            subprocess.Popen([self.steam_exe, "-applaunch", self.app_id])
+            subprocess.Popen([self.steam_exe, "-applaunch", self.app_id], env=launch_env)
         # Wait for game process to appear.
         start = time.monotonic()
         while time.monotonic() - start < self.startup_timeout:

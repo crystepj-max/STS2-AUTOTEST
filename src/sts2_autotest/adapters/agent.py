@@ -154,6 +154,8 @@ class AgentAdapter:
         wait_path: str = "wait_until_actionable",
         transport: Literal["http", "mcp"] = "http",
         mcp_client: AgentMcpClientProtocol | None = None,
+        card_id_prefixes: dict[str, str] | None = None,
+        seed_command_template: str = "",
     ) -> None:
         if transport not in ("http", "mcp"):
             raise ValueError("transport must be 'http' or 'mcp'")
@@ -171,6 +173,11 @@ class AgentAdapter:
         self._wait_path = wait_path
         self._client = client
         self._mcp_client = mcp_client
+        # 项目扩展（由 MOD 项目配置提供，平台默认全部为空中性）：
+        # card_id_prefixes: 规格写法到运行时 ID 前缀的映射，空映射=原样透传；
+        # seed_command_template: set_seed 的调试命令模板，空=set_seed 不可用。
+        self._card_id_prefixes = dict(card_id_prefixes or {})
+        self._seed_command_template = seed_command_template
         self._version_checked = False
         self._supported_version = supported_version if supported_version is not None else self.SUPPORTED_MAJOR_VERSION
 
@@ -500,7 +507,15 @@ class AgentAdapter:
             result = await self._start_new_run()
             return result
         if action == "abandon_run" and self.debug_actions:
-            return await self._run_debug_console_command("die")
+            try:
+                current_state = await self.get_state()
+            except STS2Error:
+                current_state = None
+            if (
+                current_state is None
+                or current_state.screen != GameScreen.MAIN_MENU
+            ):
+                return await self._run_debug_console_command("die")
         if action == "win_combat":
             if not self.debug_actions:
                 return ActionResult(
@@ -531,8 +546,19 @@ class AgentAdapter:
                     state_changed=False,
                     detail="set_seed requires integer seed",
             )
+            if not self._seed_command_template:
+                return ActionResult(
+                    status="failure",
+                    state_changed=False,
+                    detail=(
+                        "set_seed has no platform-default command; the MOD project must "
+                        "provide a seed command template "
+                        "(project_extension.seed_command_template / "
+                        "STS2_PROJECT__SEED_COMMAND_TEMPLATE)"
+                    ),
+                )
             return await self._run_debug_console_command(
-                f"gawain_emergency_recruit_seed {seed}"
+                self._seed_command_template.format(seed=seed)
             )
         if action == "set_hp":
             if not self.debug_actions:
@@ -591,13 +617,13 @@ class AgentAdapter:
                     state_changed=False,
                     detail="give_card requires card_id",
                 )
-            # Translate spec-style card IDs (gawain:cecil_militia) to
-            # runtime IDs (GAWAINMOD-CECIL_MILITIA) for the console command.
+            # 规格写法（mod_alias:card_name）按项目配置的前缀映射翻译为运行时
+            # ID；映射为空时原样透传，平台不内置任何 MOD 前缀。
             if ":" in card_id:
-                parts = card_id.split(":", 1)
-                runtime_id = parts[1].strip().upper()
-                # Gawain cards use GAWAINMOD- prefix
-                card_id = f"GAWAINMOD-{runtime_id}"
+                alias, raw_name = card_id.split(":", 1)
+                prefix = self._card_id_prefixes.get(alias.strip().lower())
+                if prefix:
+                    card_id = f"{prefix}{raw_name.strip().upper()}"
             try:
                 await self._request("GET", self._state_path)
             except STS2Error as exc:
@@ -870,12 +896,12 @@ class AgentAdapter:
     async def _resolve_select_character_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """Resolve select_character args: character_id → option_index.
 
-        STS2-Agent v0.7.2+ returns CHARACTER_SELECT options with character_id
-        that may omit the MOD prefix (e.g. 'GAWAIN' instead of 'GAWAINMOD-GAWAIN').
+        STS2-Agent v0.7.2+ returns CHARACTER_SELECT options whose character_id
+        may omit the MOD prefix (e.g. 'MYCHAR' instead of 'MYMOD-MYCHAR').
         We match by:
         1. Exact character_id match (case-insensitive)
         2. Fuzzy match: if the requested ID contains a mod prefix, try matching
-           the suffix only (e.g. 'GAWAINMOD-GAWAIN' → match 'GAWAIN')
+           the suffix only (e.g. 'MYMOD-MYCHAR' → match 'MYCHAR')
         3. Name-based fallback using the 'name' field
         """
         if "option_index" in args:
@@ -895,7 +921,7 @@ class AgentAdapter:
             return args
 
         target_upper = character_id.upper()
-        # Extract the part after the last '-' or '/' — handles "GAWAINMOD-GAWAIN" → "GAWAIN"
+        # Extract the part after the last '-' or '/' — handles "MYMOD-MYCHAR" → "MYCHAR"
         suffix = target_upper.split("-")[-1] if "-" in target_upper else target_upper
 
         for char in characters:
@@ -910,14 +936,14 @@ class AgentAdapter:
                     return {"option_index": index}
                 return args
 
-            # Fuzzy match: suffix matches (e.g. "GAWAINMOD-GAWAIN" → "GAWAIN" matches "GAWAIN")
+            # Fuzzy match: suffix matches (e.g. "MYMOD-MYCHAR" → "MYCHAR" matches "MYCHAR")
             if suffix and suffix in char_id:
                 index = char.get("index")
                 if isinstance(index, int):
                     return {"option_index": index}
                 return args
 
-            # Name-based fuzzy match (e.g. "gawain" matches "GAWAIN") — skip empty names
+            # Name-based fuzzy match (e.g. "mychar" matches "MYCHAR") — skip empty names
             if char_name and (character_id.upper() in char_name or char_name in target_upper):
                 index = char.get("index")
                 if isinstance(index, int):
@@ -981,40 +1007,6 @@ class AgentAdapter:
             reason="DEBUG_CONSOLE_UNAVAILABLE",
             checked_at=checked_at,
         )
-
-    async def get_magic_web_layer(self) -> int | None:
-        """只读读取当前 run 态“局内魔网层数”。
-
-        经调试命令 ``gawain_magic_web_status`` 读取 ``GawainMagicWebRunState`` 维护的
-        ``SavedSpireField``（key = ``Gawain_RunMagicWebLayer``），即魔网共鸣
-        ``OnSelect`` 实际写入的同一字段，因此能真实反映操作后的层数，而非依赖
-        rest 选项 description 中的“预计”值。需要 ``debug_actions=True``。
-
-        返回当前层数；命令不可用 / 解析失败 / 无 run 态时返回 ``None``。
-        """
-        if not self.debug_actions:
-            return None
-        try:
-            data = await self._request(
-                "POST",
-                self._act_path,
-                {"action": "run_console_command", "command": "gawain_magic_web_status"},
-            )
-        except STS2Error:
-            return None
-        message = (data.get("data") or {}).get("message") or ""
-        import json as _json
-        import re as _re
-
-        m = _re.search(r"\{.*\}", message)
-        if not m:
-            return None
-        try:
-            snap = _json.loads(m.group(0))
-        except _json.JSONDecodeError:
-            return None
-        layer = snap.get("Layer")
-        return int(layer) if isinstance(layer, int) else None
 
     async def wait_until_actionable(self, timeout: float) -> bool:
         """Poll real Agent health/actions endpoints until the game is actionable.

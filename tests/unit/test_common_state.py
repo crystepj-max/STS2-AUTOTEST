@@ -92,6 +92,16 @@ class TestAllowedTransitions:
         transitions = GameScreen.EVENT.allowed_transitions
         assert GameScreen.CARD_REWARD in transitions
 
+    def test_event_can_transition_to_bundle_and_tri_select(self) -> None:
+        """涅奥/事件的捆绑选择与三选一子页面是 EVENT 的合法后继。
+
+        2026-07-24 端到端执行 Gawain 套件时真实遇到 EVENT→BUNDLE_SELECTION
+        被判非法转移；Hermes r3 轨迹中亦有 EVENT→TRI_SELECT→EVENT 记录。
+        """
+        transitions = GameScreen.EVENT.allowed_transitions
+        assert GameScreen.BUNDLE_SELECTION in transitions
+        assert GameScreen.TRI_SELECT in transitions
+
     def test_terminal_states_have_no_transitions(self) -> None:
         for state in (GameScreen.GAME_OVER, GameScreen.VICTORY, GameScreen.CRASHED):
             assert state.allowed_transitions == frozenset()

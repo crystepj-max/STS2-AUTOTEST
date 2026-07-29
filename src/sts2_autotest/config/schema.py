@@ -189,6 +189,27 @@ class WorkspaceConfigModel(BaseModel):
     projects: list[ProjectConfigModel] = []
 
 
+class ProjectExtensionConfig(BaseModel):
+    """项目扩展：由 MOD 项目提供的专属规则，平台默认全部为空中性。
+
+    平台不内置任何 MOD 专属默认值。以下内容必须由项目配置显式提供：
+
+    - card_id_prefixes：规格写法到运行时 ID 前缀的映射（如 {"mymod": "MYMOD-"}），
+      空映射表示 ``give_card`` 对卡牌 ID 原样透传；
+    - seed_command_template：``set_seed`` 动作对应的调试控制台命令模板
+      （如 "mymod_seed {seed}"），空字符串表示该项目未提供种子命令，
+      ``set_seed`` 将如实返回失败；
+    - character_aliases：自然语言角色别名到运行时角色标识的映射
+      （如 {"MyChar": "MYMOD-MYCHAR"}），供 NL 规格编译使用。
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    card_id_prefixes: dict[str, str] = {}
+    seed_command_template: str = ""
+    character_aliases: dict[str, str] = {}
+
+
 class STS2Config(BaseModel):
     """Top-level configuration model with four-layer inheritance support.
 
@@ -208,6 +229,7 @@ class STS2Config(BaseModel):
     notifications: NotificationsConfig = NotificationsConfig()
     server: ServerConfig = ServerConfig()
     workspace: WorkspaceConfigModel = WorkspaceConfigModel()
+    project_extension: ProjectExtensionConfig = ProjectExtensionConfig()
 
     @model_validator(mode="after")
     def _check_adapter_mutual_exclusion(self) -> "STS2Config":

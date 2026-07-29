@@ -113,6 +113,21 @@ class TestCodeGenerator:
         assert "skip_card_reward()" in code
 
     def test_gawain_character_selection_uses_mod_character_id(self) -> None:
+        """MOD 角色别名由项目配置注入后，按配置解析为运行时角色标识。"""
+        spec = TestSpec(
+            id="TC-GAWAIN-PREPARE",
+            title="Prepare Gawain",
+            steps=["开始新局", "选择 Gawain", "开始冒险"],
+        )
+
+        generator = CodeGenerator(character_aliases={"Gawain": "GAWAINMOD-GAWAIN"})
+        code = generator.generate_case_test(spec)
+
+        assert 'select_character("GAWAINMOD-GAWAIN")' in code
+        assert 'select_character("IRONCLAD")' not in code
+
+    def test_unknown_ascii_character_passes_through_uppercased(self) -> None:
+        """平台默认不含 MOD 角色别名：未配置的 ASCII 角色名按大写透传。"""
         spec = TestSpec(
             id="TC-GAWAIN-PREPARE",
             title="Prepare Gawain",
@@ -121,8 +136,20 @@ class TestCodeGenerator:
 
         code = self.generator.generate_case_test(spec)
 
-        assert 'select_character("GAWAINMOD-GAWAIN")' in code
-        assert 'select_character("IRONCLAD")' not in code
+        assert 'select_character("GAWAIN")' in code
+        assert 'select_character("GAWAINMOD-GAWAIN")' not in code
+
+    def test_rest_option_step_maps_to_choose_rest_option(self) -> None:
+        """通用营火选项写法映射为 choose_rest_option（项目机制词汇不入平台）。"""
+        spec = TestSpec(
+            id="TC-REST-OPTION",
+            title="Rest option",
+            steps=["选择营火选项 2", "离开营火返回地图"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert 'ActionDescriptor(action_type="choose_rest_option", params={"option_index": 2})' in code
 
     def test_chinese_ironclad_selection_allows_no_space(self) -> None:
         spec = TestSpec(

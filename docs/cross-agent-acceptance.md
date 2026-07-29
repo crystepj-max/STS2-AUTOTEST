@@ -67,30 +67,34 @@ submit_run（保留 run_id）
 
 ## 4. 互操作验收矩阵
 
-| 客户端 | 推荐入口 | 平台级验证 | 仍需外部环境实测 |
-|---|---|---|---|
-| ChatGPT | MCP | `tests/integration/test_cross_agent_contract.py` | 在 ChatGPT 的 MCP 配置中完成一次真实提交—查询—取报告 |
-| WorkBuddy | MCP；不能使用时 CLI JSON | 公共协议测试；WorkBuddy 共享回归页面已确认复用 `AgentAdapter` 和公共导航入口 | 用新 `submit_run/get_run/get_report` 契约完成一次真实任务；现有页面主要证明了 Gawain 驱动脚本复用公共导航，不能替代新任务服务验收 |
-| Claude Code | MCP 或 CLI JSON | 与其他客户端共用同一契约 | 在 Claude Code 会话中完成一次真实任务 |
-| OpenClaw | MCP 或 CLI JSON | 与其他客户端共用同一契约 | 在 OpenClaw 环境中完成一次真实任务 |
-| Hermes | MCP 或 CLI JSON | 与其他客户端共用同一契约 | 在 Hermes 环境中完成一次真实任务 |
+| 客户端 | 推荐入口 | 平台级验证 | 外部环境实测 | 当前状态 |
+|---|---|---|---|---|
+| ChatGPT/Codex | MCP | `tests/integration/test_cross_agent_contract.py` | `p2-codex-short-20260720-01` / `p2-codex-cancel-20260720-01`：提交、防重、局内取消 CANCELLED、恢复 PASSED、报告可读 | **已验证**（2026-07-20） |
+| WorkBuddy | MCP；CLI JSON 备选 | 公共协议测试 + M1-M7 共享回归 | `workbuddy-v11-replication-20260720-145438`：三柱全绿 | **已验证**（2026-07-20，P1 基线） |
+| Claude Code | MCP 或 CLI JSON | 与公共契约一致 | `p2-claudecode-short-20260720-01`：CLI JSON 通道，提交、防重、取消 CANCELLED、恢复 PASSED、报告可读 | **已验证**（2026-07-20） |
+| OpenClaw | MCP | 软件包定义验证；CLI 能力发现 | `p2-openclaw-short-20260720-01` / `p2-openclaw-cancel-20260720-01`：两轮全通 | **已验证**（2026-07-20） |
+| Hermes | MCP | 公共契约 + 运行时兼容性 | `p2-hermes-short-20260720-01`：提交、防重；第四轮真恢复链——原任务 run-20260724-021557-7bca75e8 局内取消 CANCELLED → resume 原任务 run-20260724-021744-e2bed936 PASSED（resumed_from 正确指向），双报告可读 | **已验证**（2026-07-24） |
 
 “平台级验证”证明的是协议和服务行为一致；“外部环境实测”还要证明对应 Agent 能正确配置服务地址、保存 `run_id`、轮询任务并读取报告，不能用平台单测冒充。
 
 ## 5. 当前证据
 
-截至 2026-07-15：
+截至 2026-07-26（P2 最终收口）：
 
-- `tests/unit`：`1500 passed`，仅有 2 个既有的测试收集警告；
-- `tests/integration`：`30 passed, 5 skipped`，跳过项需要真实游戏或外部控制服务；
-- `tests/integration/test_cross_agent_contract.py`：验证 MCP 幂等提交、同一 `run_id` 查询、终态报告读取，以及 CLI 能力发现；
-- `compileall`、`git diff --check` 和 import 边界检查通过；
-- 在忽略本机未安装的第三方类型文件后，项目自身类型检查通过；完整类型检查仍需安装 `types-PyYAML`、`types-psutil` 以及可选视觉库类型依赖；
-- WorkBuddy 共享回归页面显示，实际 Gawain 驱动已调用 `AgentAdapter` 和公共 `progress_until`，并用公共卡牌奖励入口完成连续 7 轮回地图；但页面同时说明崩溃重启、phantom combat、旅行挂起看门狗仍在任务专用脚本中，因此这部分不能算作平台已经完成的跨 Agent 生命周期验收。
+- `tests/unit`：**1752 passed**
+- `tests/integration`：**25 passed, 10 skipped**（当前复核环境；P1 基线环境为 30/5，差异为真实游戏/外部服务条件自动跳过）
+- 五类 Agent 均留下独立原始调用记录与证据包（见 `docs/p2/2026-07-20-p2-final-report.md` 验收矩阵）
+- 六操作无项目生命周期无回归：ORIG CANCELLED → RESUME PASSED → SECOND CANCELLED，`V11_PASS=true`，证据位于 `tests/output/cross-agent-p2/p2-final-six-ops-pass-20260726/`
+- P2-1 Gawain 专属迁移清单与承接验证：`docs/p2/2026-07-20-p2-1-gawain-migration-inventory.md`
+- 通用证据工具一次生成真实项目包：`p2-final-e2e-20260726-0405`，4/4 passed，压缩包 34 个文件且无损
+- 三角色短目标（IRONCLAD、SILENT、GAWAINMOD-GAWAIN）经同一公共入口通过：`tests/output/cross-agent-p2/short-goals-20260720-p2a*/`
+- 整章遍历 PASSED（258.6s 第一章到第二章稳定地图，win_combat 快速结束 7 场战斗）：`run-20260720-142730-23590575`
+- P1 三柱回归 PASSED（ORIG CANCELLED → RESUME PASSED → SECOND CANCELLED）：`tests/output/cross-agent-p1/p2-regression-v12-20260720/`
+- 迁移后 Gawain 冒烟回归 PASSED：`STS2-GAWAIN/automation/autotest/output/gawain-smoke-v3/`
 
 ## 6. 进入稳定支持的门槛
 
-在五类 Agent 都完成一次外部真实验收前，平台对外应使用“协议已兼容、具体客户端待实测”的表述。完成外部验收后，才可以把对应客户端标记为“已验证”。
+**五类 Agent 全部完成外部真实验收后，平台对外使用“所有已验证客户端均已通过真实接入验收”的表述。**
 
 每个客户端的验收凭证至少包含：
 

@@ -78,6 +78,11 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
     """
     if _is_agent_enabled():
         from sts2_autotest.adapters.agent import AgentAdapter, FastMcpAgentClient
+        from sts2_autotest.adapters.project_extension import (
+            load_card_id_prefixes,
+            load_seed_command_template,
+            resolve_base_dir,
+        )
 
         transport_raw = os.environ.get("STS2_ADAPTER__AGENT__TRANSPORT", "http")
         if transport_raw not in ("http", "mcp"):
@@ -91,6 +96,7 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
             if transport == "mcp"
             else None
         )
+        extension_base_dir = resolve_base_dir()
         return AgentAdapter(
             endpoint=endpoint,
             timeout=float(os.environ.get("STS2_ADAPTER__AGENT__TIMEOUT", "30")),
@@ -99,6 +105,8 @@ def _create_adapter_from_env() -> GameAdapterProtocol:
             in ("true", "1", "yes"),
             mcp_client=mcp_client,
             transport=transport,  # type: ignore[arg-type]
+            card_id_prefixes=load_card_id_prefixes(extension_base_dir),
+            seed_command_template=load_seed_command_template(extension_base_dir),
         )
     return CliModAdapter()
 

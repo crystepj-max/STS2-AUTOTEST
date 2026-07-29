@@ -51,7 +51,6 @@ def test_mcp_submit_query_report_contract_is_client_neutral(monkeypatch, tmp_pat
             1,
             "submit_run",
             {
-                "project": "examplemod",
                 "suite": "smoke",
                 "timeout": 60,
                 "evidence": "full",
@@ -63,7 +62,6 @@ def test_mcp_submit_query_report_contract_is_client_neutral(monkeypatch, tmp_pat
             2,
             "submit_run",
             {
-                "project": "examplemod",
                 "suite": "smoke",
                 "timeout": 60,
                 "evidence": "full",
