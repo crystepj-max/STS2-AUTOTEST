@@ -1,0 +1,40 @@
+{
+  "darwin": [
+    "tests/unit/test_mcp_tools.py::TestCompileSpec::test_compile_spec_calls_generator",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_returns_result",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_timeout",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_failure",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_steam_desktop_fallback_can_start_steam_executable"
+  ],
+  "linux": [
+    "tests/unit/test_mcp_tools.py::TestCompileSpec::test_compile_spec_calls_generator",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_returns_result",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_timeout",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_failure",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_find_godot_path_prefers_user_godot_app_before_global_mono",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_steam_desktop_fallback_can_start_steam_executable",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_desktop_fallback_uses_steam_applaunch_when_url_handler_is_broken",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_desktop_fallback_invalid_delay_uses_default"
+  ],
+  "win32": [
+    "tests/unit/test_agent_runner_visual_qa.py::test_build_html_report_card_results_includes_ocr_without_changing_result",
+    "tests/unit/test_agent_runner_visual_qa.py::test_analyze_html_report_screenshots_populates_cache",
+    "tests/unit/test_cli_discovery.py::TestDiscoverSts2Cli::test_returns_none_when_not_found",
+    "tests/unit/test_mcp_tools.py::TestCompileSpec::test_compile_spec_calls_generator",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_returns_result",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_timeout",
+    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_failure",
+    "tests/unit/test_mcp_tools.py::TestRunPipeline::test_run_pipeline_executes_stages",
+    "tests/unit/test_pipeline_evidence.py::test_execution_accepts_relative_evidence_directory",
+    "tests/unit/test_run_service.py::test_reap_if_worker_gone_marks_failed_platform_when_control_alive",
+    "tests/unit/test_run_service.py::test_reap_if_worker_gone_marks_blocked_when_control_unreachable",
+    "tests/unit/test_session_queue.py::TestSessionQueue::test_fifo_within_same_priority",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_screenshot_saves_file",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_screenshot_uses_macos_window_capture",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_find_godot_path_prefers_user_godot_app_before_global_mono",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_steam_desktop_fallback_can_start_steam_executable",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_desktop_fallback_uses_steam_applaunch_when_url_handler_is_broken",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_desktop_fallback_invalid_delay_uses_default",
+    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_build_html_report_config_includes_card_results_and_skip_status"
+  ]
+}
