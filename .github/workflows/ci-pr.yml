@@ -46,13 +46,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout historical baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-baseline
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install project
         run: pip install -e ".[dev,visual]"
-      - name: Run mypy
-        run: mypy src/sts2_autotest --strict
+      - name: Check no new mypy debt
+        run: python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir .
 
   lint-imports:
     name: Import Layer Check
