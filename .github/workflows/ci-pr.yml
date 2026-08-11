@@ -18,9 +18,10 @@ jobs:
   lint:
     name: Lint (ruff)
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -40,9 +41,10 @@ jobs:
   mypy:
     name: Type Check (mypy)
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -62,9 +64,10 @@ jobs:
   lint-imports:
     name: Import Layer Check
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -82,9 +85,10 @@ jobs:
     name: Unit Tests
     needs: [lint, mypy, lint-imports]
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -102,7 +106,7 @@ jobs:
           name: junit-unit-${{ matrix.os }}
           path: junit-unit.xml
 
-  # ── 阶段 3：CLI 集成测试（Mac only）──
+  # ── 阶段 3：真实 CLI 集成测试（需要自托管 Mac）──
 
   cli-integration:
     name: CLI Integration Tests
