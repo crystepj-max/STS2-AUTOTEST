@@ -97,8 +97,8 @@ jobs:
           python-version: '3.11'
       - name: Install project
         run: pip install -e ".[dev]"
-      - name: Run unit tests
-        run: python -m pytest tests/unit/ -v --junitxml=junit-unit.xml
+      - name: Check no new unit-test failures
+        run: python .github/scripts/check_pytest_baseline.py
       - name: Upload JUnit artifact
         if: always()
         uses: actions/upload-artifact@v4
