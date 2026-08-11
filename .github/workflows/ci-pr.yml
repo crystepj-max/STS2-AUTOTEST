@@ -24,13 +24,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout historical baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-baseline
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install project
         run: pip install -e ".[dev]"
-      - name: Run ruff
-        run: ruff check src/ tests/
+      - name: Check no new Ruff debt
+        run: python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir .
 
   mypy:
     name: Type Check (mypy)
@@ -45,7 +50,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install project
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,visual]"
       - name: Run mypy
         run: mypy src/sts2_autotest --strict
 
