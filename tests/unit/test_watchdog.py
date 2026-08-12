@@ -177,7 +177,11 @@ class TestTerminateSession:
 
     def test_timing_budget_constraint(self) -> None:
         """Prove _MAX_DETECTION_INTERVAL + _TERM_GRACE + _KILL_WAIT ≤ 35s."""
-        from sts2_autotest.core.watchdog import _TERM_GRACE, _KILL_WAIT, _MAX_DETECTION_INTERVAL
+        from sts2_autotest.core.watchdog import (
+            _KILL_WAIT,
+            _MAX_DETECTION_INTERVAL,
+            _TERM_GRACE,
+        )
         worst_case_total = _MAX_DETECTION_INTERVAL + _TERM_GRACE + _KILL_WAIT
         assert worst_case_total <= 35.0, (
             f"Budget exceeded: {_MAX_DETECTION_INTERVAL}s + {_TERM_GRACE}s + "
@@ -202,7 +206,11 @@ class TestTerminateSession:
 
     def test_monitoring_interval_respects_budget(self) -> None:
         """Verify monitor interval formula ensures detection + termination ≤ 35s."""
-        from sts2_autotest.core.watchdog import _MAX_DETECTION_INTERVAL, _TERM_GRACE, _KILL_WAIT
+        from sts2_autotest.core.watchdog import (
+            _KILL_WAIT,
+            _MAX_DETECTION_INTERVAL,
+            _TERM_GRACE,
+        )
         # Worst case: longest detection interval + both waits
         worst_case = _MAX_DETECTION_INTERVAL + _TERM_GRACE + _KILL_WAIT
         assert worst_case <= 35.0, f"Budget exceeded: {worst_case}s > 35s"

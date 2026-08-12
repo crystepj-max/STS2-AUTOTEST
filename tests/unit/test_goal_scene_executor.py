@@ -7,7 +7,11 @@ from dataclasses import dataclass
 
 from sts2_autotest.adapters.base import ActionResult
 from sts2_autotest.core.journeys import GenericJourneys, JourneyFailure
-from sts2_autotest.core.navigation import NavigationBlocked, choose_progress_action, progress_until
+from sts2_autotest.core.navigation import (
+    NavigationBlocked,
+    choose_progress_action,
+    progress_until,
+)
 
 
 def test_leftmost_route_uses_horizontal_coordinate_not_list_order() -> None:

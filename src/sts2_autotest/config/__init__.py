@@ -5,7 +5,7 @@ from sts2_autotest.config.loader import load_config
 from sts2_autotest.config.schema import STS2Config
 
 __all__ = [
+    "ConfigValidationError",
     "STS2Config",
     "load_config",
-    "ConfigValidationError",
 ]

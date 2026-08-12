@@ -10,12 +10,11 @@ from unittest.mock import patch
 import pytest
 
 from sts2_autotest.evidence.logs import (
+    _GODOT_PATTERN,
     LogCollectionResult,
     LogCollector,
     LogEntry,
-    _GODOT_PATTERN,
 )
-
 
 # ── LogEntry / LogCollectionResult ──────────────────────────
 
@@ -804,6 +803,7 @@ class TestFrameworkConfigLog:
 
     def test_invalid_log_max_entries(self) -> None:
         from pydantic import ValidationError
+
         from sts2_autotest.config.schema import FrameworkConfig
 
         with pytest.raises(ValidationError):
@@ -811,6 +811,7 @@ class TestFrameworkConfigLog:
 
     def test_invalid_lock_retries(self) -> None:
         from pydantic import ValidationError
+
         from sts2_autotest.config.schema import FrameworkConfig
 
         with pytest.raises(ValidationError):

@@ -15,12 +15,12 @@ import sys
 from typing import Any, cast
 
 from sts2_autotest.cli.health_server import (
-    _HttpServer,
-    _json_response,
     _HTML_200,
     _HTML_404,
     _HTML_405,
     _HTML_500,
+    _HttpServer,
+    _json_response,
 )
 from sts2_autotest.cli.mcp_protocol import (
     INTERNAL_ERROR,

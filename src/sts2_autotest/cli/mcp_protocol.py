@@ -11,7 +11,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # Stable protocol version used by the cross-agent service. The server keeps
 # the old JSON-RPC shape for existing local clients while exposing the newer
 # transport/version contract to new clients.

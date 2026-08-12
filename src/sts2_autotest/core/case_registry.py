@@ -17,7 +17,6 @@ from typing import Awaitable, Callable
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.orchestrator import TestOrchestrator
 
-
 # Type alias for programmatic case runners
 CaseRunner = Callable[[TestOrchestrator], Awaitable[TestResult]]
 

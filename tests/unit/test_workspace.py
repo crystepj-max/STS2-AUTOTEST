@@ -1,9 +1,11 @@
 """Tests for workspace.py — MOD project discovery."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import yaml
-from pathlib import Path
+
 from sts2_autotest.core.workspace import Workspace, WorkspaceError
 
 

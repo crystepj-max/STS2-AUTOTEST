@@ -14,8 +14,8 @@ from typing import Any, Callable, Generator
 import pytest
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
-from sts2_autotest.adapters.discovery import find_game_dir, steam_roots
 from sts2_autotest.adapters.cli_mod import CliModAdapter
+from sts2_autotest.adapters.discovery import find_game_dir, steam_roots
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameState
 from sts2_autotest.core.evidence_hooks import build_evidence_hooks

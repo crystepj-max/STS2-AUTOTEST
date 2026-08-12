@@ -6,8 +6,8 @@ main chain (FluentBuilder -> ActionDescriptor -> Orchestrator).
 
 from __future__ import annotations
 
-import re
 import json
+import re
 from pathlib import Path
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
@@ -310,7 +310,7 @@ class CodeGenerator:
                 [
                     f"def test_{func_name}():",
                     f'    """{spec.title}"""',
-                    f'    pytest.skip("No steps defined")',
+                    '    pytest.skip("No steps defined")',
                 ]
             )
 

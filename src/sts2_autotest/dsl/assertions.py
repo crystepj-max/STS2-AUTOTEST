@@ -98,7 +98,7 @@ def enemy_hp_decreased_by(amount: int) -> AssertionFn:
         current = _resolve_enemy_field(state, "hp")
         previous = getattr(state, "previous_enemy_hp", None)
         if previous is None:
-            return False, f"previous_enemy_hp not in state, cannot verify decrease"
+            return False, "previous_enemy_hp not in state, cannot verify decrease"
         actual = previous - current if current is not None else 0
         ok = actual >= amount  # >= because RNG can cause extra damage
         msg = "" if ok else f"Expected enemy HP decrease ≥ {amount}, got {actual}"
@@ -142,7 +142,7 @@ def player_energy_decreased_by(amount: int) -> AssertionFn:
         current = _resolve_player_field(state, "energy")
         previous = getattr(state, "previous_energy", None)
         if previous is None:
-            return False, f"previous_energy not in state, cannot verify decrease"
+            return False, "previous_energy not in state, cannot verify decrease"
         actual = previous - current if current is not None else 0
         ok = actual == amount
         msg = "" if ok else f"Expected energy decrease {amount}, got {actual}"
@@ -158,7 +158,7 @@ def player_hp_changed_by(amount: int) -> AssertionFn:
         current = _resolve_player_field(state, "hp")
         previous = getattr(state, "previous_hp", None)
         if previous is None:
-            return False, f"previous_hp not in state, cannot verify change"
+            return False, "previous_hp not in state, cannot verify change"
         actual = current - previous if current is not None else 0
         ok = actual == amount
         msg = "" if ok else f"Expected HP change {amount}, got {actual}"
@@ -174,7 +174,7 @@ def player_block_increased_by(amount: int) -> AssertionFn:
         current = _resolve_player_field(state, "block")
         previous = getattr(state, "previous_block", None)
         if previous is None:
-            return False, f"previous_block not in state, cannot verify increase"
+            return False, "previous_block not in state, cannot verify increase"
         actual = current - previous if current is not None else 0
         ok = actual == amount
         msg = "" if ok else f"Expected block increase {amount}, got {actual}"
@@ -190,7 +190,7 @@ def hand_size_changed_by(amount: int) -> AssertionFn:
         current = _resolve_player_field(state, "hand_count")
         previous = getattr(state, "previous_hand_count", None)
         if previous is None:
-            return False, f"previous_hand_count not in state, cannot verify change"
+            return False, "previous_hand_count not in state, cannot verify change"
         actual = current - previous if current is not None else 0
         ok = actual == amount
         msg = "" if ok else f"Expected hand size change {amount}, got {actual}"
@@ -323,7 +323,7 @@ def no_crash_detected() -> AssertionFn:
 
     def check(state: GameState) -> tuple[bool, str]:
         ok = state.screen != GameScreen.CRASHED
-        msg = "" if ok else f"Game is in CRASHED state"
+        msg = "" if ok else "Game is in CRASHED state"
         return ok, msg
 
     return check

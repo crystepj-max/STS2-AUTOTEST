@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, IO
+from typing import IO, Any, Callable
 from urllib.parse import urlparse
 
 import psutil

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from sts2_autotest.common.spec_models import TestSpec, SuiteSpec
+from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
 
 
 class ParsingError(ValueError):

@@ -8,6 +8,7 @@ import pytest
 
 from sts2_autotest.adapters.base import HealthStatus
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
+from sts2_autotest.core.popup_disposal import PopupDisposition
 from sts2_autotest.core.recovery import (
     DefaultRecoveryStrategy,
     FailureRecord,
@@ -16,8 +17,6 @@ from sts2_autotest.core.recovery import (
     crash_signature,
     is_p0_exception,
 )
-from sts2_autotest.core.popup_disposal import PopupDisposition
-
 
 # ── RecoveryAction enum ────────────────────────────────────
 

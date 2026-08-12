@@ -9,12 +9,12 @@ from sts2_autotest.pytest_plugin.fixtures import (
 from sts2_autotest.pytest_plugin.hooks import HookFn, clear, fire, register
 
 __all__ = [
-    "autotest",
-    "game_state",
     "HookFn",
     "SessionInitError",
     "UserError",
+    "autotest",
     "clear",
     "fire",
+    "game_state",
     "register",
 ]

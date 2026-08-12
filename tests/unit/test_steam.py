@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import psutil
 import pytest
 
-from sts2_autotest.core.steam import SteamController, _GAME_EXE, _IS_MACOS
+from sts2_autotest.core.steam import _GAME_EXE, _IS_MACOS, SteamController
 
 
 @pytest.fixture

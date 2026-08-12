@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-
 from sts2_autotest.core.lock_manager import LockManager
 
 

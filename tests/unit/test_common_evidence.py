@@ -298,6 +298,7 @@ class TestRepairSuggestion:
 
     def test_frozen(self) -> None:
         from pydantic import ValidationError
+
         from sts2_autotest.common.evidence import RepairSuggestion
 
         s = RepairSuggestion(
@@ -308,6 +309,7 @@ class TestRepairSuggestion:
 
     def test_confidence_must_be_float(self) -> None:
         from pydantic import ValidationError
+
         from sts2_autotest.common.evidence import RepairSuggestion
 
         with pytest.raises(ValidationError):
@@ -370,6 +372,7 @@ class TestRepairReport:
 
     def test_frozen(self) -> None:
         from pydantic import ValidationError
+
         from sts2_autotest.common.evidence import RepairReport
 
         r = RepairReport(
@@ -407,7 +410,9 @@ class TestSummaryJsonWithRepairReport:
 
     def test_default_is_none(self) -> None:
         from sts2_autotest.common.evidence import (
-            SummaryJson, RunInfo, EnvironmentInfo,
+            EnvironmentInfo,
+            RunInfo,
+            SummaryJson,
         )
 
         s = SummaryJson(
@@ -426,7 +431,10 @@ class TestSummaryJsonWithRepairReport:
 
     def test_with_repair_report(self) -> None:
         from sts2_autotest.common.evidence import (
-            SummaryJson, RunInfo, EnvironmentInfo, RepairReport,
+            EnvironmentInfo,
+            RepairReport,
+            RunInfo,
+            SummaryJson,
         )
 
         report = RepairReport(
@@ -454,7 +462,11 @@ class TestSummaryJsonWithRepairReport:
 
     def test_roundtrip_with_repair_report(self) -> None:
         from sts2_autotest.common.evidence import (
-            SummaryJson, RunInfo, EnvironmentInfo, RepairReport, RepairSuggestion,
+            EnvironmentInfo,
+            RepairReport,
+            RepairSuggestion,
+            RunInfo,
+            SummaryJson,
         )
 
         suggestion = RepairSuggestion(

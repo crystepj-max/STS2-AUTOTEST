@@ -1,11 +1,12 @@
 """Unit tests for MCP protocol encoding/decoding."""
 
 import json
+
 import pytest
 
 from sts2_autotest.cli.mcp_protocol import (
-    McpResponse,
     McpError,
+    McpResponse,
     McpTool,
     decode_request,
     encode_response,

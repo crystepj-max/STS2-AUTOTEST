@@ -3,7 +3,6 @@
 import json
 import os
 
-
 from sts2_autotest.cli.mcp_protocol import MCP_PROTOCOL_VERSION
 from sts2_autotest.cli.mcp_server import McpServer
 

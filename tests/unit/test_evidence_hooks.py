@@ -13,7 +13,6 @@ from sts2_autotest.common.types import CaptureResult
 from sts2_autotest.core.action_model import TestResult
 from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
 
-
 # ── Helpers ────────────────────────────────────────────────────
 
 

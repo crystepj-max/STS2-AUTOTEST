@@ -18,7 +18,6 @@ from sts2_autotest.evidence.capture import (
     _restore_window,
 )
 
-
 # ── Helpers ──────────────────────────────────────────────────
 
 
@@ -725,8 +724,8 @@ class TestFrameworkConfigScreenshot:
 
 class TestRealEvidenceHooks:
     def test_on_case_end_captures(self) -> None:
-        from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
         from sts2_autotest.core.action_model import TestResult
+        from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
 
         mock_capture = MagicMock()
         mock_capture.capture_with_validation.return_value = CaptureResult(
@@ -740,8 +739,8 @@ class TestRealEvidenceHooks:
         mock_capture.capture_with_validation.assert_called_once_with("TestGame", "test-1")
 
     def test_on_case_end_skipped(self) -> None:
-        from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
         from sts2_autotest.core.action_model import TestResult
+        from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
 
         mock_capture = MagicMock()
         mock_capture.capture_with_validation.return_value = CaptureResult(
@@ -798,8 +797,8 @@ class TestRealEvidenceHooks:
         )
 
     def test_on_case_end_collects_logs_on_failure(self) -> None:
-        from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
         from sts2_autotest.core.action_model import TestResult
+        from sts2_autotest.core.evidence_hooks import RealEvidenceHooks
 
         mock_capture = MagicMock()
         mock_capture.capture_with_validation.return_value = CaptureResult(status="ok", path=Path("/tmp/s.png"))
@@ -825,8 +824,8 @@ class TestRealEvidenceHooks:
 
 class TestCaptureScreenshotHandler:
     def test_with_real_evidence_hooks(self) -> None:
-        from sts2_autotest.dsl.handlers import capture_screenshot
         from sts2_autotest.core.orchestrator import TestOrchestrator
+        from sts2_autotest.dsl.handlers import capture_screenshot
 
         mock_capture = MagicMock()
         mock_capture.capture_with_validation.return_value = CaptureResult(
@@ -844,9 +843,9 @@ class TestCaptureScreenshotHandler:
         mock_capture.capture_with_validation.assert_called_once()
 
     def test_without_capture_fallback(self) -> None:
-        from sts2_autotest.dsl.handlers import capture_screenshot
         from sts2_autotest.core.evidence_hooks import StubEvidenceHooks
         from sts2_autotest.core.orchestrator import TestOrchestrator
+        from sts2_autotest.dsl.handlers import capture_screenshot
 
         mock_adapter = MagicMock()
         stub_hooks = StubEvidenceHooks()

@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-
 from sts2_autotest.evidence.metrics import MetricEvent, MetricsCollector
-
 
 # ── MetricEvent ─────────────────────────────────────────────
 

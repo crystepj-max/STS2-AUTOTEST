@@ -1,7 +1,9 @@
 """Tests for spec_reviewer.py — ReviewReport + RevisedDraft generation."""
 from sts2_autotest.common.spec_models import (
-    TestSpec, SuiteSpec, RevisedDraft,
     IssueCategory,
+    RevisedDraft,
+    SuiteSpec,
+    TestSpec,
 )
 from sts2_autotest.core.spec_reviewer import SpecReviewer
 

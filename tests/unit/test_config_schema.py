@@ -3,6 +3,11 @@
 import pytest
 from pydantic import ValidationError
 
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
 from sts2_autotest.config.schema import (
     AdapterConfig,
     AgentAdapterConfig,
@@ -10,11 +15,6 @@ from sts2_autotest.config.schema import (
     ExecutionConfig,
     FrameworkConfig,
     STS2Config,
-)
-from sts2_autotest.common.visual_qa import (
-    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
-    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
-    DEFAULT_LOW_VARIANCE_THRESHOLD,
 )
 
 

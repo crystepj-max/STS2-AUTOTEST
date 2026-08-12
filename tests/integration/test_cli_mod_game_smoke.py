@@ -14,7 +14,6 @@ from sts2_autotest.common.state import GameScreen, GameState
 
 from .conftest import _run
 
-
 pytestmark = [pytest.mark.integration, pytest.mark.requires_game]
 
 
