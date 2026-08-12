@@ -81,6 +81,17 @@ def _fingerprints(
     return counts, details
 
 
+def _rule_counts(findings: list[dict[str, Any]]) -> Counter[str]:
+    return Counter(str(finding.get("code") or "unknown") for finding in findings)
+
+
+def _print_rule_counts(label: str, findings: list[dict[str, Any]]) -> None:
+    counts = _rule_counts(findings)
+    print(f"{label} Ruff findings by rule:")
+    for code, count in counts.most_common():
+        print(f"  {code}: {count}")
+
+
 def _print_new_findings(
     new_findings: Counter[IssueKey],
     details: dict[IssueKey, dict[str, Any]],
@@ -107,8 +118,10 @@ def main() -> int:
     baseline_dir = args.baseline_dir.resolve()
     current_dir = args.current_dir.resolve()
 
-    baseline_counts, _ = _fingerprints(baseline_dir, _run_ruff(baseline_dir))
-    current_counts, current_details = _fingerprints(current_dir, _run_ruff(current_dir))
+    baseline_findings = _run_ruff(baseline_dir)
+    current_findings = _run_ruff(current_dir)
+    baseline_counts, _ = _fingerprints(baseline_dir, baseline_findings)
+    current_counts, current_details = _fingerprints(current_dir, current_findings)
 
     new_findings = current_counts - baseline_counts
     resolved_findings = baseline_counts - current_counts
@@ -117,6 +130,7 @@ def main() -> int:
     print(f"Current PR: {sum(current_counts.values())} finding(s)")
     print(f"Resolved by this PR: {sum(resolved_findings.values())}")
     print(f"New in this PR: {sum(new_findings.values())}")
+    _print_rule_counts("Current", current_findings)
 
     if new_findings:
         _print_new_findings(new_findings, current_details)
