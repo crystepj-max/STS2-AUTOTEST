@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Fail CI only when a pull request introduces new Ruff findings."""
+"""Fail CI only when a pull request introduces new Ruff findings.
+
+During Ruff debt cleanup, also print the current finding count by rule so each
+batch can be selected by risk instead of applying every available auto-fix.
+"""
 
 from __future__ import annotations
 
