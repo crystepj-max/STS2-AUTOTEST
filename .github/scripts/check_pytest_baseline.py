@@ -76,7 +76,7 @@ def _load_final_failures() -> set[str]:
 
 
 def _run_pytest() -> int:
-    result = subprocess.run(
+    process = subprocess.Popen(
         [
             sys.executable,
             "-m",
@@ -85,9 +85,17 @@ def _run_pytest() -> int:
             "-v",
             f"--junitxml={JUNIT_PATH}",
         ],
-        check=False,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
-    return result.returncode
+    try:
+        return process.wait()
+    except KeyboardInterrupt:
+        if sys.platform != "win32":
+            raise
+        exit_code = process.poll()
+        if exit_code is None:
+            raise
+        return exit_code
 
 
 def main() -> int:
