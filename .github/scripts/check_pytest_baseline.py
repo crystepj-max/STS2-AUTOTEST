@@ -14,14 +14,14 @@ when they are not failures of this outer unit-test run.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import pytest
-
-
 JUNIT_PATH = Path("junit-unit.xml")
+PYTEST_OK = 0
+PYTEST_TESTS_FAILED = 1
 
 
 def _load_baseline() -> set[str] | None:
@@ -75,20 +75,30 @@ def _load_final_failures() -> set[str]:
     return failures
 
 
+def _run_pytest() -> int:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/unit/",
+            "-v",
+            f"--junitxml={JUNIT_PATH}",
+        ],
+        check=False,
+    )
+    return result.returncode
+
+
 def main() -> int:
     allowed = _load_baseline()
     if allowed is None:
         print(f"::error::No unit-test baseline for platform: {sys.platform}")
         return 2
 
-    exit_code = int(
-        pytest.main(["tests/unit/", "-v", f"--junitxml={JUNIT_PATH}"])
-    )
+    exit_code = _run_pytest()
 
-    if exit_code not in (
-        int(pytest.ExitCode.OK),
-        int(pytest.ExitCode.TESTS_FAILED),
-    ):
+    if exit_code not in (PYTEST_OK, PYTEST_TESTS_FAILED):
         print(f"::error::Pytest exited with collection/infrastructure error: {exit_code}")
         return exit_code or 2
 
@@ -98,10 +108,10 @@ def main() -> int:
         print(f"::error::{exc}")
         return 2
 
-    if exit_code == int(pytest.ExitCode.TESTS_FAILED) and not current:
+    if exit_code == PYTEST_TESTS_FAILED and not current:
         print("::error::Pytest reported failed tests but JUnit contains no final failures.")
         return 2
-    if exit_code == int(pytest.ExitCode.OK) and current:
+    if exit_code == PYTEST_OK and current:
         print("::error::Pytest exited successfully but JUnit contains failed tests.")
         return 2
 
