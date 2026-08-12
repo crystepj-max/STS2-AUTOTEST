@@ -62,16 +62,26 @@ def test_fresh_summary_accepts_file_changed_by_this_run(tmp_path: Path) -> None:
     summary_dir = tmp_path / "suite-summaries"
     summary_dir.mkdir()
     summary = summary_dir / "SUITE-X.json"
-    summary.write_text("{}", encoding="utf-8")
+    summary.write_text(json.dumps(_passed_summary(["TC-A"])), encoding="utf-8")
+    before_mtime_ns = summary.stat().st_mtime_ns
+    before_size = summary.stat().st_size
     before = pipeline_evidence._snapshot_summaries(summary_dir)
-    summary.write_text(json.dumps(_passed_summary()), encoding="utf-8")
-    os.utime(summary, None)
+    run_started_ns = time.time_ns()
+
+    summary.write_text(json.dumps(_passed_summary(["TC-B"])), encoding="utf-8")
+    os.utime(
+        summary,
+        ns=(summary.stat().st_atime_ns, before_mtime_ns),
+    )
+
+    assert summary.stat().st_mtime_ns == before_mtime_ns
+    assert summary.stat().st_size == before_size
 
     assert (
         pipeline_evidence._find_fresh_summary(
             summary_dir,
             before,
-            time.time_ns(),
+            run_started_ns,
         )
         == summary
     )

@@ -18,43 +18,56 @@ jobs:
   lint:
     name: Lint (ruff)
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout historical baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-baseline
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install project
         run: pip install -e ".[dev]"
-      - name: Run ruff
-        run: ruff check src/ tests/
+      - name: Check no new Ruff debt
+        run: python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir .
 
   mypy:
     name: Type Check (mypy)
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout historical baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-baseline
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install project
-        run: pip install -e ".[dev]"
-      - name: Run mypy
-        run: mypy src/sts2_autotest --strict
+        run: pip install -e ".[dev,visual]"
+      - name: Check no new mypy debt
+        run: python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir .
 
   lint-imports:
     name: Import Layer Check
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -72,9 +85,10 @@ jobs:
     name: Unit Tests
     needs: [lint, mypy, lint-imports]
     strategy:
+      fail-fast: false
       matrix:
-        os: [self-hosted-macos, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os == 'self-hosted-macos' && fromJSON('["self-hosted","macos","autotest"]') || matrix.os }}
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -83,8 +97,8 @@ jobs:
           python-version: '3.11'
       - name: Install project
         run: pip install -e ".[dev]"
-      - name: Run unit tests
-        run: python -m pytest tests/unit/ -v --junitxml=junit-unit.xml
+      - name: Check no new unit-test failures
+        run: python .github/scripts/check_pytest_baseline.py
       - name: Upload JUnit artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -92,7 +106,7 @@ jobs:
           name: junit-unit-${{ matrix.os }}
           path: junit-unit.xml
 
-  # ── 阶段 3：CLI 集成测试（Mac only）──
+  # ── 阶段 3：真实 CLI 集成测试（需要自托管 Mac）──
 
   cli-integration:
     name: CLI Integration Tests
@@ -101,13 +115,25 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
       - name: Install project
-        run: pip install -e ".[dev]"
+        run: |
+          python3.11 -m venv .venv-ci
+          .venv-ci/bin/python -m pip install -e ".[dev]"
+      - name: Verify real STS2 CLI is available
+        run: |
+          .venv-ci/bin/python - <<'PY'
+          from sts2_autotest.adapters.discovery import discover_sts2_cli
+
+          cli_path = discover_sts2_cli()
+          if cli_path is None:
+              raise SystemExit(
+                  "STS2 CLI was not found on the self-hosted Mac. "
+                  "Set STS2_CLI_PATH for the runner service or install the CLI in a discoverable path."
+              )
+          print(f"Using STS2 CLI: {cli_path}")
+          PY
       - name: Run CLI-only integration tests
-        run: python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
+        run: .venv-ci/bin/python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
       - name: Upload JUnit artifact
         if: always()
         uses: actions/upload-artifact@v4

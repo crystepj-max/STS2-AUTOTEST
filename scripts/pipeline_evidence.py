@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -45,11 +46,14 @@ def _default_run_id(suite_file: Path) -> str:
     return f"{suite_file.stem}-{timestamp}-{uuid.uuid4().hex[:8]}"
 
 
-def _snapshot_summaries(summary_dir: Path) -> dict[Path, int]:
+def _snapshot_summaries(summary_dir: Path) -> dict[Path, tuple[int, str]]:
     if not summary_dir.is_dir():
         return {}
     return {
-        path.resolve(): path.stat().st_mtime_ns
+        path.resolve(): (
+            path.stat().st_mtime_ns,
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
         for path in summary_dir.glob("*.json")
         if path.is_file()
     }
@@ -57,7 +61,7 @@ def _snapshot_summaries(summary_dir: Path) -> dict[Path, int]:
 
 def _find_fresh_summary(
     summary_dir: Path,
-    before: dict[Path, int],
+    before: dict[Path, tuple[int, str]],
     run_started_ns: int,
 ) -> Path:
     if not summary_dir.is_dir():
@@ -68,7 +72,12 @@ def _find_fresh_summary(
             continue
         resolved = path.resolve()
         mtime_ns = path.stat().st_mtime_ns
-        if mtime_ns != before.get(resolved) and mtime_ns >= run_started_ns - 2_000_000_000:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        previous = before.get(resolved)
+        content_changed = previous is not None and digest != previous[1]
+        if (mtime_ns, digest) != previous and (
+            mtime_ns >= run_started_ns - 2_000_000_000 or content_changed
+        ):
             fresh.append(path)
     if not fresh:
         raise EvidenceValidationError("suite summary was not produced in this run")
