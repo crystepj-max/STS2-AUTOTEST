@@ -13,7 +13,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 并行阶段 1：代码质量检查 ──
+  ruff-debt-autofix:
+    name: Ruff Debt Autofix (batch 1)
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'quality/ruff-debt-batch-1'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Ruff
+        run: pip install 'ruff==0.16.2'
+      - name: Apply selected low-risk fixes
+        run: ruff check src tests --fix --select I001,RUF022,F541 --exit-zero
+      - name: Commit fixes when needed
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No selected Ruff fixes remain."
+            exit 0
+          fi
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests
+          git commit -m "quality: remove safe Ruff debt batch"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
 
   lint:
     name: Lint (ruff)
@@ -79,8 +109,6 @@ jobs:
       - name: Run lint-imports
         run: lint-imports
 
-  # ── 阶段 2：单元测试（等待阶段 1 全部通过）──
-
   unit-test:
     name: Unit Tests
     needs: [lint, mypy, lint-imports]
@@ -105,8 +133,6 @@ jobs:
         with:
           name: junit-unit-${{ matrix.os }}
           path: junit-unit.xml
-
-  # ── 阶段 3：真实 CLI 集成测试（需要自托管 Mac）──
 
   cli-integration:
     name: CLI Integration Tests
@@ -140,8 +166,6 @@ jobs:
         with:
           name: junit-integration
           path: junit-integration.xml
-
-  # ── Job Summary ──
 
   summary:
     name: PR Check Summary
