@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 _SCRIPT = Path(__file__).resolve().parents[2] / ".github/scripts/check_pytest_baseline.py"
 _SPEC = importlib.util.spec_from_file_location("check_pytest_baseline_script", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
