@@ -13,7 +13,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 并行阶段 1：代码质量检查 ──
+  ruff-debt-autofix:
+    name: Ruff Debt Autofix (lifecycle UP035)
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'quality/ruff-debt-batch-1'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Ruff
+        run: pip install 'ruff==0.16.2'
+      - name: Fix lifecycle Callable import
+        run: ruff check src/sts2_autotest/core/lifecycle.py --fix --select UP035,I001 --exit-zero
+      - name: Commit fix when needed
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No lifecycle import fix needed."
+            exit 0
+          fi
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/sts2_autotest/core/lifecycle.py
+          git commit -m "quality: fix lifecycle Callable import"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
 
   lint:
     name: Lint (ruff)
@@ -79,8 +109,6 @@ jobs:
       - name: Run lint-imports
         run: lint-imports
 
-  # ── 阶段 2：单元测试（等待阶段 1 全部通过）──
-
   unit-test:
     name: Unit Tests
     needs: [lint, mypy, lint-imports]
@@ -105,8 +133,6 @@ jobs:
         with:
           name: junit-unit-${{ matrix.os }}
           path: junit-unit.xml
-
-  # ── 阶段 3：真实 CLI 集成测试（需要自托管 Mac）──
 
   cli-integration:
     name: CLI Integration Tests
@@ -140,8 +166,6 @@ jobs:
         with:
           name: junit-integration
           path: junit-integration.xml
-
-  # ── Job Summary ──
 
   summary:
     name: PR Check Summary
