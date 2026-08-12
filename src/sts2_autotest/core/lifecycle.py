@@ -28,8 +28,9 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import IO, Any, Callable
+from typing import IO, Any
 from urllib.parse import urlparse
 
 import psutil
