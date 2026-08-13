@@ -2,12 +2,37 @@
 
 - task_id: issue-13-restore-main-ci
 - 来源 Issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/13
-- 交接时间：2026-08-13
+- 交接时间：2026-08-13（attempt-003 增量：2026-08-14）
 - 下一阶段：测试（local-test-runner）——**第一件事读本文件与 `developer-handoff.md`、`STATE.md`、`task.yaml`**
 
 ## 结论
 
-本地开发完成：T1–T3 已交付且 runner 环境修复已实机生效；本地门禁全绿；Draft PR 已建。T4–T6 远程验收待执行。
+本地开发完成：T1–T3 已交付；attempt-003 完成 runner 环境链实机加固与端到端验证
+（代理、tool cache、部署路径、summary 自托管化）；本地门禁全绿；Draft PR #22 已更新。
+T4–T6 远程验收待**用户修复 GitHub 计费 + Reviewer 合并后**执行。
+
+## attempt-003 增量要点（2026-08-14）
+
+1. **runner 环境链已实测打通**（探针 run 31718147872，证据 `evidence/runner-probe-20260814.md`）：
+   代理（F2）✅ / setup-python 3.11.9 缓存命中（F1 实机化，tool cache 预置于
+   `/Users/runner/hostedtoolcache/Python/3.11.9/arm64`）✅ / pip install ✅ / sts2 CLI ✅。
+   **T4/T5/T6 的 runner 侧前置条件全部满足。**
+2. **关键认知**：job 级 tool cache 路径由 runner 内部机制确定为 `/Users/runner/hostedtoolcache`
+   （plist 注入非权威值）；setup-python 缓存未命中时 macOS 流程需要免密 sudo
+   （`sudo installer -pkg`）——本机无，已通过缓存预置规避（幂等，无需 sudo）。
+3. **仓库改动（commit 6849298）**：ci-main.yml 部署 GAME_DIR 回退路径修正为
+   "Slay the Spire 2"（旧路径不存在，会静默部署到幻影目录）；summary job 迁移自托管
+   （托管计费故障下主分支验收不再被信息性 job 拖红）；setup-mac-runner.sh 模板同步。
+4. **runner 侧**：plist 补代理 env（备份 `*.plist.bak-20260813-before-proxy`，服务已重启生效）。
+5. 本地门禁：单测 1757 passed / lint-imports / ruff+mypy baseline 全绿。
+
+## S3 注意（相对上一版变化）
+
+- **计费仍是唯一硬前置**（08-14 15:13 UTC 重跑验证仍阻断托管 job）；自托管 job 不受影响。
+- 合入 main 后主分支 workflow 的 quick-checks / cli-integration / deploy 均走自托管，
+  前置已就绪；deploy 将部署到真实 mods 目录（路径已修正）。
+- `autotest doctor` 在本机报告 steam/disk 不健康——requires_game 类验收仍属环境 BLOCKED，
+  但 T4（四项快速验收）/ T5（CLI 集成）/ T6（部署执行）不依赖游戏健康。
 
 ## 上一轮（测试 attempt-001）BLOCKED 的解除情况
 

@@ -81,6 +81,54 @@ ps eww -p <listener-pid> | grep RUNNER_TOOL_CACHE               # runner 进程�
 4. **F2 抖动仍在**：代理间歇 TLS 断连未消除（无法从本机根治），依赖 GitHub Actions 重试自愈；若再遇连续失败需单独记录网络失败，不得误判为代码失败。
 5. **外部阻塞（22:55 新增）**：PR CI 全部托管 job 因 GitHub 账户计费失败无法启动（注解「recent account payments have failed or your spending limit needs to be increased」），仓库级影响所有托管 runner，需用户修复 Billing；证据：`evidence/billing-blocker-20260813.md`。自托管 runner 不受影响。
 
+## attempt-003 增量（2026-08-14，本轮开发节点）
+
+### 新增修复
+
+1. **部署目标路径修正（T6 前置）**：`ci-main.yml` deploy job 的 `GAME_DIR` 回退路径
+   由 `SlayTheSpire2`（无空格，不存在）改为实际游戏目录 `Slay the Spire 2`（带空格，
+   已实测存在且含已部署 mods）。旧路径会 `mkdir -p` 幻影目录并静默部署到错误位置。
+   `scripts/setup-mac-runner.sh` 模板同步修正。TDD 式验证：修复前路径解析失败
+   （TDD-RED）→ 修复后解析到真实目录（TDD-GREEN）。
+2. **`summary` job 移至自托管 runner**：该 job 仅写 step summary 为信息性输出；
+   托管 runner 因 GitHub 账户计费故障无法分配，保留 `ubuntu-latest` 会使自托管验收链
+   全绿时主分支运行仍整体标红。若评审方希望回退，可一键改回 `ubuntu-latest`。
+3. **runner 侧代理注入（F2 实机化）**：T3 此前仅写入 `.env`（交互模式），
+   服务模式（实际运行形态）plist 未注入代理。实测本机直连 github.com 超时、
+   走 ClashX 代理 3/3 成功 → 已向 plist `EnvironmentVariables` 补
+   `HTTP(S)_PROXY=http://127.0.0.1:7890` + `NO_PROXY=127.0.0.1,localhost`
+   （备份 `.plist.bak-20260813-before-proxy`），服务已重启，`ps eww` 确认生效。
+4. **tool cache 预置 Python 3.11.9（F1 实机化，核心修复）**：探针实证 job 级
+   tool cache 路径为 `/Users/runner/hostedtoolcache`（runner 内部机制，
+   plist 注入并非权威值），且 setup-python 缓存未命中时 macOS 流程执行
+   `sudo installer -pkg`（本机 chris 无免密 sudo → 失败）。修复：
+   - 在 `/Users/runner/hostedtoolcache/Python/3.11.9/arm64/`（job 权威路径）
+     与 `_tool/Python/3.11.9/arm64/`（plist 值兜底）双处预置可重定位
+     Python 3.11.9（`uv python install 3.11.9`，python-build-standalone 构建），
+     布局含 `arm64.complete` 标记；移除 `EXTERNALLY-MANAGED`（PEP 668）标记。
+   - 效果：setup-python 命中缓存，完全跳过 sudo 流程。实测验证见
+     `evidence/runner-probe-20260814.md`（run 31718147872 链路全通）。
+5. **本地门禁复跑全绿**：单测 1757 passed / lint-imports 1 kept 0 broken /
+   ruff baseline 0 新增 / mypy baseline 0 新增 / `bash -n` + 4 个 workflow YAML 解析 OK。
+
+### Runner 环境验证结论（T4–T6 前置条件）
+
+| 前置条件 | 状态 | 证据 |
+|---|---|---|
+| 代理（F2） | ✅ 生效 | job 日志「Runner is running behind proxy server 127.0.0.1:7890」+ action 下载/checkout 成功 |
+| setup-python 3.11（F1） | ✅ 缓存命中 | run 31718147872 `pythonLocation: /Users/runner/hostedtoolcache/Python/3.11.9/arm64` |
+| pip install `[dev]` | ✅ | run 31718147872 Install project 成功 |
+| sts2 CLI（T5 前置） | ✅ | `/Users/chris/.local/bin/sts2` 在 runner 进程 PATH，`sts2 --version` = 0.102.1 |
+| 游戏目录路径（T6） | ✅ | 修正后路径解析到真实 mods 目录（含已部署 Gawain） |
+| `autotest doctor` | ⚠️ 环境健康失败 | `steam_installed/steam_login_state/disk_space` 不健康——游戏环境限制，非基础设施 |
+
+### 剩余阻塞（未变）
+
+1. **GitHub 托管计费**（用户侧，Billing & plans）：08-14 15:13 UTC 重跑探针仍秒败。
+   影响所有托管 job（ci-pr 矩阵、ci-main summary——后者已改为自托管规避）。
+2. **评审 + 合并**（Reviewer 角色）：Draft PR #22 MERGEABLE，需评审通过后合入 main。
+3. 合并后触发主分支 workflow（自然 push 或 `workflow_dispatch`）完成 T4–T6 远程验收。
+
 ## 建议 Reviewer 重点检查
 
 - ci-main.yml：`github.event.before || github.sha` 的 checkout 基线逻辑；`[dev,visual]` 依赖变更必要性
