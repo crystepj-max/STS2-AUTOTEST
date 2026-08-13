@@ -129,9 +129,51 @@ ps eww -p <listener-pid> | grep RUNNER_TOOL_CACHE               # runner 进程�
 2. **评审 + 合并**（Reviewer 角色）：Draft PR #22 MERGEABLE，需评审通过后合入 main。
 3. 合并后触发主分支 workflow（自然 push 或 `workflow_dispatch`）完成 T4–T6 远程验收。
 
+## attempt-004 增量（2026-08-14，本轮开发节点）
+
+### 实测主分支验收链（关键进展：T4/T5 远程实机全绿，T6 暴露并修复跨仓库 token 缺口）
+
+此前 T4–T6 均标注「待合并后远程执行」。本轮利用 ci-main.yml 新增的
+`workflow_dispatch`，在 fix 分支当前提交上直接触发完整主分支验收链，
+全部 job 走自托管 runner（不依赖托管计费）：
+
+| 运行 | 提交 | 结果 |
+|---|---|---|
+| [31720176886](https://github.com/crystepj-max/STS2-AUTOTEST/actions/runs/31720176886)（dispatch） | c30dcfd | 四项快速检查 ✅ · CLI 集成 ✅ · Deploy ❌（暴露私有仓库 checkout 缺口） |
+| [31721182515](https://github.com/crystepj-max/STS2-AUTOTEST/actions/runs/31721182515)（dispatch） | e1ac64d | 四项快速检查 ✅ · CLI 集成 ✅ · Deploy ⏸ 快速失败（GH_PAT 诊断，预期） |
+
+- **T4 实证**：lint / mypy / lint-imports / unit-test 在真实 runner 上执行并全绿（此前仅有本地证据）。
+- **T5 实证**：CLI Integration Tests（`-m "not requires_game"`）真实执行并全绿。
+- **T6 实证 + 新发现缺口（commit e1ac64d）**：Deploy 首次实跑失败，根因
+  `Repository not found`——**STS2-GAWAIN 为私有仓库**，STS2-AUTOTEST 无跨仓库
+  凭据（仓库 secrets 为空），默认 GITHUB_TOKEN 不可跨仓库访问。修复：
+  1. deploy job 新增 `Check cross-repo token (GH_PAT)` 预检——未配置时快速失败并输出明确诊断；
+  2. `Checkout Gawain` 传入 `token: ${{ secrets.GH_PAT }}`。
+  复跑已验证诊断路径（日志：`GH_PAT secret is not set ...`）。
+  剩余前置：用户在 STS2-AUTOTEST 配置 `GH_PAT`（对 crystepj-max/STS2-GAWAIN
+  有 `contents:read` 的 PAT）。配置后部署链无需再改代码。
+
+### 本地门禁复跑（本 attempt 新鲜证据，提交 e1ac64d）
+
+| 检查项 | 结果 |
+|---|---|
+| 单元测试 | PASSED（`1757 passed, 2 warnings in 200.46s`） |
+| 导入边界 | PASSED（`1 kept, 0 broken`） |
+| Ruff 基线门禁 | PASSED（新增 0） |
+| mypy 基线门禁 | PASSED（新增 0，另解决 2 项） |
+| ci-main.yml 结构校验 | PASSED（YAML 解析 + 断言：预检在 checkout 前、token 已传递） |
+
+### 剩余阻塞（较上轮收窄）
+
+1. **用户侧（本轮新发现）**：配置 `GH_PAT` secret——T6 最后一步前置。
+2. **用户侧（既有）**：GitHub Billing & plans 修复（影响托管 job；主分支验收链已全部自托管，不受影响）。
+3. **评审合并**：PR #22（Draft，MERGEABLE）→ 合入 main 后自然 push 触发主分支运行，
+   届时部署链在 GH_PAT 配置后预计全绿。
+
 ## 建议 Reviewer 重点检查
 
 - ci-main.yml：`github.event.before || github.sha` 的 checkout 基线逻辑；`[dev,visual]` 依赖变更必要性
+- ci-main.yml deploy job（e1ac64d）：GH_PAT 预检与 token 传递——确认无敏感信息暴露（日志已确认仅打印错误消息）；确认配置 GH_PAT 后行为正确
 - scripts/setup-mac-runner.sh：`RUNNER_TOOL_CACHE` 在 .env 与 plist 双写一致性（服务模式只读 plist）
 - tests/unit/test_cli.py：monkeypatch `build_lifecycle_manager` 是否过度隔离（掩盖真实 precheck 路径问题）
 - 五个 tests/generated 文件：确认仅 import 排序、无行为/断言变化
