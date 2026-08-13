@@ -41,16 +41,27 @@
 - 分支：`fix/issue-13-restore-main-ci`（基于 origin/main f68d6f2，Draft）
 - 变更内容：见 `developer-handoff.md`「修改文件」
 
+## ⚠️ 新增外部阻塞（22:55 记录，详见 `evidence/billing-blocker-20260813.md`）
+
+- PR CI run 31712107063（两次 attempt）全部托管 job 3–6 秒即失败、runner 未分配；注解原文：
+  「The job was not started because recent account payments have failed or your spending
+  limit needs to be increased」。
+- 定性：**GitHub 账户计费/支付失败**（用户侧，需在 Settings → Billing & plans 修复），仓库级影响
+  所有托管 runner job；非本 PR 改动引起（ci-pr.yml 未改，06:54 UTC 前的运行分配正常）。
+- 自托管 runner 不受影响（online）；T5/T6 的自托管 job 无技术阻塞，只等托管前置 job 能跑。
+
 ## S3 必做（远程验收，本地不可替代）
 
 1. 复核本地门禁（单测/mypy/ruff 基线/lint-imports）。
-2. **先合并 Draft PR（或经评审后合并）到 main**，然后在自托管 runner 上触发主分支 workflow：
+2. **先请用户修复 GitHub Billing & plans**（支付失败 / 消费上限）。
+3. 计费解除后，对 PR #22 重跑失败 job（`gh run rerun 31712107063 --failed`）验证 PR CI。
+4. **评审通过后合并 Draft PR 到 main**，然后触发主分支 workflow：
    - 合入后自然 push 触发；或 `gh workflow run "CI — Push to Main"`（已支持 dispatch，对同一提交可重复重跑）。
-3. 确认四项快速验收全绿（lint/mypy/lint-imports/unit-test）。
-4. 确认 CLI Integration Tests 实际执行（`-m "not requires_game"`）并通过。
-5. 确认 Deploy Gawain Mod 实际执行；独立失败须附证据（不能以跳过冒充）。
-6. 若 F2 TLS 再现：单独记录网络失败，重试后继续，不把跳过误判为代码失败。
-7. 更新 Issue #13 完成状态，回填运行链接。
+5. 确认四项快速验收全绿（lint/mypy/lint-imports/unit-test）。
+6. 确认 CLI Integration Tests 实际执行（`-m "not requires_game"`）并通过。
+7. 确认 Deploy Gawain Mod 实际执行；独立失败须附证据（不能以跳过冒充）。
+8. 若 F2 TLS 再现：单独记录网络失败，重试后继续，不把跳过误判为代码失败。
+9. 更新 Issue #13 完成状态，回填运行链接。
 
 ## 禁止
 

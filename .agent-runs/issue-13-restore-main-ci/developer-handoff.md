@@ -79,6 +79,7 @@ ps eww -p <listener-pid> | grep RUNNER_TOOL_CACHE               # runner 进程�
 2. **tests/generated 为流水线产物**（AGENTS.md「勿手改」）：本次仅排序修正以过 ruff 债务门禁，无行为变化；建议后续从 NL 规格重新编译消除手改差异。
 3. **ci-main.yml baseline 语义**：push 时基线=父提交（`github.event.before`），dispatch 时基线=当前提交（`github.sha`）——手动重跑为 0 diff 通过，符合「同提交再验证」语义。
 4. **F2 抖动仍在**：代理间歇 TLS 断连未消除（无法从本机根治），依赖 GitHub Actions 重试自愈；若再遇连续失败需单独记录网络失败，不得误判为代码失败。
+5. **外部阻塞（22:55 新增）**：PR CI 全部托管 job 因 GitHub 账户计费失败无法启动（注解「recent account payments have failed or your spending limit needs to be increased」），仓库级影响所有托管 runner，需用户修复 Billing；证据：`evidence/billing-blocker-20260813.md`。自托管 runner 不受影响。
 
 ## 建议 Reviewer 重点检查
 
