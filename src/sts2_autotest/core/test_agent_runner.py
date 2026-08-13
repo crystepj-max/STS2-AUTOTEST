@@ -221,7 +221,7 @@ def _capture_macos_window_png(path: Path, window_title: str) -> bool:
     """Capture a specific macOS window directly into a PNG file."""
     try:
         import Quartz
-        from AppKit import (  # type: ignore[import-not-found]
+        from AppKit import (  # type: ignore[import-untyped]
             NSBitmapImageRep,
             NSPNGFileType,
         )

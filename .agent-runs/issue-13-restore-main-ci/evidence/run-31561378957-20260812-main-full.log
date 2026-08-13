@@ -1,0 +1,586 @@
+Quick Checks (unit-test)	UNKNOWN STEP	﻿2026-08-12T03:52:30.5788850Z Current runner version: '2.336.0'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5791200Z Runner name: 'Chris-Mac-mini-STS2-AUTOTEST'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5791540Z Runner group name: 'Default'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5791950Z Machine name: 'ChrisdeMac-mini'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5793060Z ##[group]GITHUB_TOKEN Permissions
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5793760Z Contents: read
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5793980Z Metadata: read
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5794200Z Packages: read
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5794430Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5795160Z Secret source: Actions
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5795680Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTP requests.
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5796160Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTPS requests.
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.5796540Z Prepare workflow directory
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.7351770Z Prepare all required actions
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:30.7374050Z Getting action download info
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:33.4437280Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:36.4411040Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:40.5057350Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:43.9793510Z Complete job name: Quick Checks (unit-test)
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0071990Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0075960Z ##[group]Run actions/checkout@v4
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0076160Z with:
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0076270Z   repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0077490Z   token: ***
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0077580Z   ssh-strict: true
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0077670Z   ssh-user: git
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0077780Z   persist-credentials: true
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0077890Z   clean: true
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078000Z   sparse-checkout-cone-mode: true
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078120Z   fetch-depth: 1
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078220Z   fetch-tags: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078310Z   show-progress: true
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078410Z   lfs: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078520Z   submodules: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078620Z   set-safe-directory: true
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078740Z   allow-unsafe-pr-checkout: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0078920Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0717610Z Syncing repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0718390Z ##[group]Getting Git version info
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0718680Z Working directory is '/Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0719120Z [command]/opt/homebrew/bin/git version
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0759240Z git version 2.54.0
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0766560Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0770720Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/d86c48ca-5b42-4b75-a8c8-889d1a6352dd/.gitconfig'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0774480Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/d86c48ca-5b42-4b75-a8c8-889d1a6352dd' before making global git config changes
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0775040Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0776680Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0853340Z [command]/opt/homebrew/bin/git config --local --get remote.origin.url
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0919590Z https://github.com/crystepj-max/STS2-AUTOTEST
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0926900Z ##[group]Removing previously created refs, to avoid conflicts
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.0928700Z [command]/opt/homebrew/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.1002100Z refs/heads/main
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.1007740Z [command]/opt/homebrew/bin/git checkout --detach
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.1091790Z HEAD 目前位于 9197e45 Merge pull request #10 from crystepj-max/ci/no-new-quality-debt
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.1174570Z [command]/opt/homebrew/bin/git branch --delete --force main
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.1245640Z 已删除分支 main（原为 9197e45）。
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.1321280Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.1322260Z [command]/opt/homebrew/bin/git submodule status
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2031410Z ##[group]Cleaning the repository
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2032460Z [command]/opt/homebrew/bin/git clean -ffdx
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2108610Z [command]/opt/homebrew/bin/git reset --hard HEAD
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2191590Z HEAD 现在位于 9197e45 Merge pull request #10 from crystepj-max/ci/no-new-quality-debt
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2196410Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2197710Z ##[group]Disabling automatic garbage collection
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2199540Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2262960Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2263230Z ##[group]Setting up auth
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2265820Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.2332790Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.3042320Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.3104550Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.3800570Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.3864380Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.4540970Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.4610440Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.4610780Z ##[group]Fetching the repository
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:44.4613600Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9197e454285b677c4bd2ae8f4c5d7141a5e44606:refs/remotes/origin/main
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.1854540Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.1854990Z ##[group]Determining the checkout info
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.1855820Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.1860020Z [command]/opt/homebrew/bin/git sparse-checkout disable
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.1966510Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2032680Z ##[group]Checking out the ref
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2034310Z [command]/opt/homebrew/bin/git checkout --progress --force -B main refs/remotes/origin/main
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2123800Z 切换到一个新分支 'main'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2126260Z 分支 'main' 设置为跟踪 'origin/main'。
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2131510Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2210040Z [command]/opt/homebrew/bin/git log -1 --format=%H
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2275780Z 9197e454285b677c4bd2ae8f4c5d7141a5e44606
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2400740Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2401460Z ##[group]Run actions/setup-python@v5
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2401610Z with:
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2401700Z   python-version: 3.11
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2401820Z   check-latest: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2402940Z   token: ***
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2403050Z   update-environment: true
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2403180Z   allow-prereleases: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2403300Z   freethreaded: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.2403560Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.3130850Z ##[group]Installed versions
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.3134460Z Version 3.11 was not found in the local cache
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.3164190Z (node:17252) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:48.3164640Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:52.5699680Z Version 3.11 is available for downloading
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:52.5700800Z Download from "https://github.com/actions/python-versions/releases/download/3.11.9-9947079978/python-3.11.9-darwin-arm64.tar.gz"
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.5668510Z Extract downloaded archive
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.5867050Z [command]/usr/bin/tar xz -C /Users/chris/actions-runner/_work/_temp/bdee2803-f5a2-49c5-8299-b438cd50e56d -f /Users/chris/actions-runner/_work/_temp/0796d3a8-280a-41e5-afa2-c437772caea8
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6550250Z Execute installation script
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6653170Z Check if Python hostedtoolcache folder exist...
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6653530Z Creating Python hostedtoolcache folder...
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6683260Z ##[error]mkdir: /Users/runner:
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6686710Z ##[error]Permission denied
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6687430Z ##[error]The process '/bin/bash' failed with exit code 1
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6788910Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6789540Z ##[group]Run actions/upload-artifact@v4
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6789670Z with:
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6789790Z   name: junit-unit-main
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6789910Z   path: junit-unit.xml
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6790060Z   if-no-files-found: warn
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6790200Z   compression-level: 6
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6790320Z   overwrite: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6790460Z   include-hidden-files: false
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.6790590Z ##[endgroup]
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.7749970Z (node:17328) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.7750520Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.7757500Z ##[warning]No files were found with the provided path: junit-unit.xml. No artifacts will be uploaded.
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.7868950Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.7869540Z Post job cleanup.
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8437190Z [command]/opt/homebrew/bin/git version
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8517660Z git version 2.54.0
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8530950Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/de5c787b-e414-4703-a1f6-8ee22e1ba446/.gitconfig'
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8534800Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/de5c787b-e414-4703-a1f6-8ee22e1ba446' before making global git config changes
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8535300Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8537010Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8597470Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.8659770Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.9308210Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.9358970Z http.https://github.com/.extraheader
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.9364580Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:58.9421330Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:59.0045730Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:59.0106450Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:59.0925750Z Cleaning up orphan processes
+Quick Checks (unit-test)	UNKNOWN STEP	2026-08-12T03:52:59.1820400Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint)	UNKNOWN STEP	﻿2026-08-12T03:53:19.4325760Z Current runner version: '2.336.0'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4328110Z Runner name: 'Chris-Mac-mini-STS2-AUTOTEST'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4328450Z Runner group name: 'Default'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4328860Z Machine name: 'ChrisdeMac-mini'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4329960Z ##[group]GITHUB_TOKEN Permissions
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4330650Z Contents: read
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4330880Z Metadata: read
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4331090Z Packages: read
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4331310Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4332040Z Secret source: Actions
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4332530Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTP requests.
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4333000Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTPS requests.
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.4333380Z Prepare workflow directory
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.5902920Z Prepare all required actions
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:19.5925120Z Getting action download info
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:21.0872800Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:23.4551280Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:26.7173610Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9151690Z Complete job name: Quick Checks (lint)
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9415970Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9419620Z ##[group]Run actions/checkout@v4
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9419790Z with:
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9419890Z   repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421210Z   token: ***
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421300Z   ssh-strict: true
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421410Z   ssh-user: git
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421520Z   persist-credentials: true
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421630Z   clean: true
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421740Z   sparse-checkout-cone-mode: true
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421860Z   fetch-depth: 1
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9421970Z   fetch-tags: false
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9422070Z   show-progress: true
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9422180Z   lfs: false
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9422300Z   submodules: false
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9422420Z   set-safe-directory: true
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9422540Z   allow-unsafe-pr-checkout: false
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:29.9422730Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0086140Z Syncing repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0086930Z ##[group]Getting Git version info
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0087210Z Working directory is '/Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0087640Z [command]/opt/homebrew/bin/git version
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0129840Z git version 2.54.0
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0136710Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0141100Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/55dbec49-3f6f-49dd-81a8-8261381511a6/.gitconfig'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0145470Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/55dbec49-3f6f-49dd-81a8-8261381511a6' before making global git config changes
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0146060Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0147890Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0228810Z [command]/opt/homebrew/bin/git config --local --get remote.origin.url
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0292370Z https://github.com/crystepj-max/STS2-AUTOTEST
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0300610Z ##[group]Removing previously created refs, to avoid conflicts
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0302360Z [command]/opt/homebrew/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0368790Z refs/heads/main
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0375760Z [command]/opt/homebrew/bin/git checkout --detach
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0466140Z HEAD 目前位于 9197e45 Merge pull request #10 from crystepj-max/ci/no-new-quality-debt
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0544780Z [command]/opt/homebrew/bin/git branch --delete --force main
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0615930Z 已删除分支 main（原为 9197e45）。
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0692750Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.0694640Z [command]/opt/homebrew/bin/git submodule status
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1408200Z ##[group]Cleaning the repository
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1409770Z [command]/opt/homebrew/bin/git clean -ffdx
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1488150Z [command]/opt/homebrew/bin/git reset --hard HEAD
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1611350Z HEAD 现在位于 9197e45 Merge pull request #10 from crystepj-max/ci/no-new-quality-debt
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1616010Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1617140Z ##[group]Disabling automatic garbage collection
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1619200Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1684970Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1685260Z ##[group]Setting up auth
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1688080Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.1753400Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.2456160Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.2521710Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.3180360Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.3242200Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.3922940Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.3997000Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.3997320Z ##[group]Fetching the repository
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:30.4000790Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9197e454285b677c4bd2ae8f4c5d7141a5e44606:refs/remotes/origin/main
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.5836430Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.5837000Z ##[group]Determining the checkout info
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.5837610Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.5841030Z [command]/opt/homebrew/bin/git sparse-checkout disable
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.5956480Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6030810Z ##[group]Checking out the ref
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6032750Z [command]/opt/homebrew/bin/git checkout --progress --force -B main refs/remotes/origin/main
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6125030Z 切换到一个新分支 'main'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6127890Z 分支 'main' 设置为跟踪 'origin/main'。
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6133370Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6212020Z [command]/opt/homebrew/bin/git log -1 --format=%H
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6286040Z 9197e454285b677c4bd2ae8f4c5d7141a5e44606
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6417470Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6418230Z ##[group]Run actions/setup-python@v5
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6418380Z with:
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6418480Z   python-version: 3.11
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6418590Z   check-latest: false
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6419850Z   token: ***
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6419950Z   update-environment: true
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6420070Z   allow-prereleases: false
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6420170Z   freethreaded: false
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.6420290Z ##[endgroup]
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.7238480Z ##[group]Installed versions
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.7241900Z Version 3.11 was not found in the local cache
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.7273170Z (node:18823) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:32.7273670Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:36.9738060Z Version 3.11 is available for downloading
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:36.9738930Z Download from "https://github.com/actions/python-versions/releases/download/3.11.9-9947079978/python-3.11.9-darwin-arm64.tar.gz"
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.3201580Z Extract downloaded archive
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.3395360Z [command]/usr/bin/tar xz -C /Users/chris/actions-runner/_work/_temp/010bb3d7-08c8-4538-97ab-938a9151612b -f /Users/chris/actions-runner/_work/_temp/5e1e5723-f9d4-4220-9b65-f91cf9c93250
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4023670Z Execute installation script
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4094160Z Check if Python hostedtoolcache folder exist...
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4094520Z Creating Python hostedtoolcache folder...
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4126990Z ##[error]mkdir: /Users/runner: Permission denied
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4130000Z ##[error]The process '/bin/bash' failed with exit code 1
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4232140Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4232730Z Post job cleanup.
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4888200Z [command]/opt/homebrew/bin/git version
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4972260Z git version 2.54.0
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4985240Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/1283c07d-b54b-4f8f-8903-342e4d1f5018/.gitconfig'
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4989640Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/1283c07d-b54b-4f8f-8903-342e4d1f5018' before making global git config changes
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4990250Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.4991770Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.5061290Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.5141030Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.5780160Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.5835490Z http.https://github.com/.extraheader
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.5841370Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.5896680Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.6506700Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.6561240Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.7230280Z Cleaning up orphan processes
+Quick Checks (lint)	UNKNOWN STEP	2026-08-12T03:53:42.8952350Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (mypy)	UNKNOWN STEP	﻿2026-08-12T03:51:36.5152940Z Current runner version: '2.336.0'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5155390Z Runner name: 'Chris-Mac-mini-STS2-AUTOTEST'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5155730Z Runner group name: 'Default'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5156130Z Machine name: 'ChrisdeMac-mini'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5157260Z ##[group]GITHUB_TOKEN Permissions
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5158000Z Contents: read
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5158220Z Metadata: read
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5158440Z Packages: read
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5158660Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5159430Z Secret source: Actions
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5159930Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTP requests.
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5160390Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTPS requests.
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.5160780Z Prepare workflow directory
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.6795860Z Prepare all required actions
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:36.6817410Z Getting action download info
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:39.6071040Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:42.7633090Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:46.7879720Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.3840320Z Complete job name: Quick Checks (mypy)
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4290200Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4297760Z ##[group]Run actions/checkout@v4
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4298000Z with:
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4298150Z   repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4299630Z   token: ***
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4299740Z   ssh-strict: true
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4299850Z   ssh-user: git
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4299990Z   persist-credentials: true
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300120Z   clean: true
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300240Z   sparse-checkout-cone-mode: true
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300380Z   fetch-depth: 1
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300490Z   fetch-tags: false
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300600Z   show-progress: true
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300720Z   lfs: false
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300860Z   submodules: false
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4300970Z   set-safe-directory: true
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4301110Z   allow-unsafe-pr-checkout: false
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.4301330Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7050580Z Syncing repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7051520Z ##[group]Getting Git version info
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7051810Z Working directory is '/Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7052230Z [command]/opt/homebrew/bin/git version
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7052400Z git version 2.54.0
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7052980Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7055120Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/0253fbd6-15f3-44f3-a676-7deb9da93ed2/.gitconfig'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7055730Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/0253fbd6-15f3-44f3-a676-7deb9da93ed2' before making global git config changes
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7056240Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7056680Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7057290Z [command]/opt/homebrew/bin/git config --local --get remote.origin.url
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7159090Z https://github.com/crystepj-max/STS2-AUTOTEST
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7410000Z ##[group]Removing previously created refs, to avoid conflicts
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7511570Z [command]/opt/homebrew/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7610220Z HEAD
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7614620Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.7614880Z [command]/opt/homebrew/bin/git submodule status
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:50.9930540Z ##[group]Cleaning the repository
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.0036610Z [command]/opt/homebrew/bin/git clean -ffdx
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7556970Z 正删除 .pytest_cache/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7566760Z 正删除 .venv-ci/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7567150Z 正删除 junit-integration.xml
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7567610Z 正删除 src/sts2_autotest/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7568040Z 正删除 src/sts2_autotest/adapters/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7568480Z 正删除 src/sts2_autotest/cli/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7568890Z 正删除 src/sts2_autotest/common/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7569340Z 正删除 src/sts2_autotest/core/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7569750Z 正删除 src/sts2_autotest/evidence/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7570240Z 正删除 src/sts2_autotest/pytest_plugin/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7571150Z 正删除 tests/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7571680Z 正删除 tests/integration/__pycache__/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7572090Z 正删除 tests/output/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7593220Z [command]/opt/homebrew/bin/git reset --hard HEAD
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7826400Z HEAD 现在位于 d604b70 Merge 82f589f4d55cf605600ddf31fedeaa7f1d7c4310 into 30f875ff552958823b3da3799efe3b89e416cd2b
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7833950Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7834600Z ##[group]Disabling automatic garbage collection
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7836510Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7965760Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7966260Z ##[group]Setting up auth
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.7969160Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.8127260Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.9853080Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:51.9985060Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:52.1376900Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:52.1479030Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:52.2697040Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:52.2888630Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:52.2890800Z ##[group]Fetching the repository
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:52.2898950Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9197e454285b677c4bd2ae8f4c5d7141a5e44606:refs/remotes/origin/main
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0331780Z 来自 https://github.com/crystepj-max/STS2-AUTOTEST
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0332810Z  + 30f875f...9197e45 9197e454285b677c4bd2ae8f4c5d7141a5e44606 -> origin/main  (强制更新)
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0466400Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0467010Z ##[group]Determining the checkout info
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0467450Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0471450Z [command]/opt/homebrew/bin/git sparse-checkout disable
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0594450Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0676650Z ##[group]Checking out the ref
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0678370Z [command]/opt/homebrew/bin/git checkout --progress --force -B main refs/remotes/origin/main
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0771780Z 之前的 HEAD 位置是 d604b70 Merge 82f589f4d55cf605600ddf31fedeaa7f1d7c4310 into 30f875ff552958823b3da3799efe3b89e416cd2b
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0783050Z 切换到一个新分支 'main'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0788070Z 分支 'main' 设置为跟踪 'origin/main'。
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0793790Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0877290Z [command]/opt/homebrew/bin/git log -1 --format=%H
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.0949930Z 9197e454285b677c4bd2ae8f4c5d7141a5e44606
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1117310Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1118040Z ##[group]Run actions/setup-python@v5
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1118210Z with:
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1118330Z   python-version: 3.11
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1118480Z   check-latest: false
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1119690Z   token: ***
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1119830Z   update-environment: true
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1119980Z   allow-prereleases: false
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1120140Z   freethreaded: false
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1120270Z ##[endgroup]
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1911590Z ##[group]Installed versions
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1917150Z Version 3.11 was not found in the local cache
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1948050Z (node:16410) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:51:55.1948530Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:00.1235610Z Version 3.11 is available for downloading
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:00.1236090Z Download from "https://github.com/actions/python-versions/releases/download/3.11.9-9947079978/python-3.11.9-darwin-arm64.tar.gz"
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.1676570Z Extract downloaded archive
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.1871710Z [command]/usr/bin/tar xz -C /Users/chris/actions-runner/_work/_temp/b9a43759-23b6-40c4-a437-60874b4ae644 -f /Users/chris/actions-runner/_work/_temp/817dd8c6-9105-44d4-a547-b4f8d56511d6
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.2433110Z Execute installation script
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.2521810Z Check if Python hostedtoolcache folder exist...
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.2522180Z Creating Python hostedtoolcache folder...
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.2553310Z ##[error]mkdir: /Users/runner: Permission denied
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.2556930Z ##[error]The process '/bin/bash' failed with exit code 1
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.2690900Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.2701660Z Post job cleanup.
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3376280Z [command]/opt/homebrew/bin/git version
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3470220Z git version 2.54.0
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3482830Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/edcebedf-b1f5-4021-a881-ea335c4c532b/.gitconfig'
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3487970Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/edcebedf-b1f5-4021-a881-ea335c4c532b' before making global git config changes
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3488500Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3490720Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3575920Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.3659700Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.4355250Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.4416320Z http.https://github.com/.extraheader
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.4422480Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.4484200Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.5152750Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.5220100Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.5906890Z Cleaning up orphan processes
+Quick Checks (mypy)	UNKNOWN STEP	2026-08-12T03:52:07.7238650Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint-imports)	UNKNOWN STEP	﻿2026-08-12T03:54:00.2723900Z Current runner version: '2.336.0'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2726580Z Runner name: 'Chris-Mac-mini-STS2-AUTOTEST'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2726940Z Runner group name: 'Default'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2727410Z Machine name: 'ChrisdeMac-mini'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2728510Z ##[group]GITHUB_TOKEN Permissions
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2729230Z Contents: read
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2729450Z Metadata: read
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2729660Z Packages: read
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2729880Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2730620Z Secret source: Actions
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2731100Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTP requests.
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2731570Z Runner is running behind proxy server 'http://127.0.0.1:7890' for all HTTPS requests.
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.2731950Z Prepare workflow directory
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.4298420Z Prepare all required actions
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:00.4320300Z Getting action download info
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:02.4808160Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:06.4428200Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:09.9327250Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6192610Z Complete job name: Quick Checks (lint-imports)
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6474250Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6478010Z ##[group]Run actions/checkout@v4
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6478190Z with:
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6478290Z   repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6479530Z   token: ***
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6479640Z   ssh-strict: true
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6479740Z   ssh-user: git
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6479860Z   persist-credentials: true
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6479970Z   clean: true
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480070Z   sparse-checkout-cone-mode: true
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480180Z   fetch-depth: 1
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480280Z   fetch-tags: false
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480370Z   show-progress: true
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480460Z   lfs: false
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480570Z   submodules: false
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480670Z   set-safe-directory: true
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480790Z   allow-unsafe-pr-checkout: false
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.6480970Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8252530Z Syncing repository: crystepj-max/STS2-AUTOTEST
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8253280Z ##[group]Getting Git version info
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8253580Z Working directory is '/Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8253980Z [command]/opt/homebrew/bin/git version
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8310380Z git version 2.54.0
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8318040Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8322000Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/97af3b6f-77ab-402c-84ef-5543ae146854/.gitconfig'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8325930Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/97af3b6f-77ab-402c-84ef-5543ae146854' before making global git config changes
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8326470Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8327570Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8397550Z [command]/opt/homebrew/bin/git config --local --get remote.origin.url
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8452850Z https://github.com/crystepj-max/STS2-AUTOTEST
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8459710Z ##[group]Removing previously created refs, to avoid conflicts
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8460860Z [command]/opt/homebrew/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8514960Z refs/heads/main
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8520210Z [command]/opt/homebrew/bin/git checkout --detach
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8616420Z HEAD 目前位于 9197e45 Merge pull request #10 from crystepj-max/ci/no-new-quality-debt
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8682960Z [command]/opt/homebrew/bin/git branch --delete --force main
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8749670Z 已删除分支 main（原为 9197e45）。
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8813460Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.8814610Z [command]/opt/homebrew/bin/git submodule status
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9448020Z ##[group]Cleaning the repository
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9448280Z [command]/opt/homebrew/bin/git clean -ffdx
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9514970Z [command]/opt/homebrew/bin/git reset --hard HEAD
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9611590Z HEAD 现在位于 9197e45 Merge pull request #10 from crystepj-max/ci/no-new-quality-debt
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9615550Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9616670Z ##[group]Disabling automatic garbage collection
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9622940Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9677330Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9677570Z ##[group]Setting up auth
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9679740Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:13.9735600Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.0349490Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.0404030Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.1064470Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.1129960Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.1799280Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.1874490Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.1874760Z ##[group]Fetching the repository
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:14.1877810Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +9197e454285b677c4bd2ae8f4c5d7141a5e44606:refs/remotes/origin/main
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9166430Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9166840Z ##[group]Determining the checkout info
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9167210Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9170150Z [command]/opt/homebrew/bin/git sparse-checkout disable
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9282830Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9353060Z ##[group]Checking out the ref
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9354740Z [command]/opt/homebrew/bin/git checkout --progress --force -B main refs/remotes/origin/main
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9442650Z 切换到一个新分支 'main'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9445470Z 分支 'main' 设置为跟踪 'origin/main'。
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9451920Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9530230Z [command]/opt/homebrew/bin/git log -1 --format=%H
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9595460Z 9197e454285b677c4bd2ae8f4c5d7141a5e44606
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9733590Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9734320Z ##[group]Run actions/setup-python@v5
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9734440Z with:
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9734530Z   python-version: 3.11
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9734630Z   check-latest: false
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9735820Z   token: ***
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9735920Z   update-environment: true
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9736050Z   allow-prereleases: false
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9736170Z   freethreaded: false
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:16.9736440Z ##[endgroup]
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:17.0470190Z ##[group]Installed versions
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:17.0475620Z Version 3.11 was not found in the local cache
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:17.0506460Z (node:20328) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:17.0506890Z (Use `node --trace-deprecation ...` to show where the warning was created)
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:21.7639360Z Version 3.11 is available for downloading
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:21.7640410Z Download from "https://github.com/actions/python-versions/releases/download/3.11.9-9947079978/python-3.11.9-darwin-arm64.tar.gz"
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.6775830Z Extract downloaded archive
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.6949380Z [command]/usr/bin/tar xz -C /Users/chris/actions-runner/_work/_temp/f83f4df6-e7f1-42f6-8f04-54816f0ffdf0 -f /Users/chris/actions-runner/_work/_temp/f1c5cf91-07c9-4fce-bc10-47238ce991b0
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.7552160Z Execute installation script
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.7628010Z Check if Python hostedtoolcache folder exist...
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.7628330Z Creating Python hostedtoolcache folder...
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.7660040Z ##[error]mkdir: /Users/runner: Permission denied
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.7663350Z ##[error]The process '/bin/bash' failed with exit code 1
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.7783910Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.7784490Z Post job cleanup.
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8391200Z [command]/opt/homebrew/bin/git version
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8466330Z git version 2.54.0
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8478260Z Copying '/Users/chris/.gitconfig' to '/Users/chris/actions-runner/_work/_temp/eef5d815-8653-4ec2-8ef2-83dd6b966b26/.gitconfig'
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8482710Z Temporarily overriding HOME='/Users/chris/actions-runner/_work/_temp/eef5d815-8653-4ec2-8ef2-83dd6b966b26' before making global git config changes
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8483260Z Adding repository directory to the temporary git global config as a safe directory
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8485000Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/chris/actions-runner/_work/STS2-AUTOTEST/STS2-AUTOTEST
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8553130Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.8619200Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.9279660Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.9329610Z http.https://github.com/.extraheader
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.9335840Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:47.9392640Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:48.0029380Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:48.0088900Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:48.0799990Z Cleaning up orphan processes
+Quick Checks (lint-imports)	UNKNOWN STEP	2026-08-12T03:54:48.2456360Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-python@v5. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+Push Summary	UNKNOWN STEP	﻿2026-08-12T03:54:58.7222617Z Current runner version: '2.336.0'
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7263731Z ##[group]Runner Image Provisioner
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7265071Z Hosted Compute Agent
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7266170Z Version: 20260707.563
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7267333Z Commit: 02667638d2b423fbc733a8e32a88b44996a3ba6e
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7268502Z Build Date: 2026-07-07T19:33:50Z
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7269638Z Worker ID: {126b8541-5f8d-4df5-b397-6d16ea789d9d}
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7270935Z Azure Region: eastus
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7271895Z ##[endgroup]
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7274160Z ##[group]Operating System
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7275262Z Ubuntu
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7276478Z 24.04.4
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7277392Z LTS
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7278207Z ##[endgroup]
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7279133Z ##[group]Runner Image
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7280249Z Image: ubuntu-24.04
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7281173Z Version: 20260720.247.2
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7283379Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260720.247/images/ubuntu/Ubuntu2404-Readme.md
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7286261Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260720.247
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7287968Z ##[endgroup]
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7289872Z ##[group]GITHUB_TOKEN Permissions
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7293762Z Contents: read
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7294771Z Metadata: read
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7295638Z Packages: read
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7297049Z ##[endgroup]
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7300187Z Secret source: Actions
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7302516Z Prepare workflow directory
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.7925239Z Prepare all required actions
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.8242339Z Complete job name: Push Summary
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9522837Z ##[group]Run echo "## B11 CI — Push Main Results" >> $GITHUB_STEP_SUMMARY
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9524619Z ^[[36;1mecho "## B11 CI — Push Main Results" >> $GITHUB_STEP_SUMMARY^[[0m
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9526284Z ^[[36;1mecho "" >> $GITHUB_STEP_SUMMARY^[[0m
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9527503Z ^[[36;1mecho "| Job | Result |" >> $GITHUB_STEP_SUMMARY^[[0m
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9528981Z ^[[36;1mecho "|-----|--------|" >> $GITHUB_STEP_SUMMARY^[[0m
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9530518Z ^[[36;1mecho "| quick-checks | failure |" >> $GITHUB_STEP_SUMMARY^[[0m
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9532089Z ^[[36;1mecho "| cli-integration | skipped |" >> $GITHUB_STEP_SUMMARY^[[0m
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:58.9533692Z ^[[36;1mecho "| deploy-gawain | skipped |" >> $GITHUB_STEP_SUMMARY^[[0m
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:59.0446510Z shell: /usr/bin/bash -e {0}
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:59.0447975Z ##[endgroup]
+Push Summary	UNKNOWN STEP	2026-08-12T03:54:59.1007577Z Cleaning up orphan processes

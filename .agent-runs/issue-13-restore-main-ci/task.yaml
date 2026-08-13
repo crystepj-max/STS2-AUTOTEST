@@ -1,0 +1,110 @@
+task_id: issue-13-restore-main-ci
+title: 恢复主分支自动验收与后续部署链路（自托管 runner 环境修复）
+repo: STS2-AUTOTEST
+base_branch: main
+working_branch: fix/issue-13-restore-main-ci
+source_issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/13
+type: bug
+priority: P0
+size: M
+
+# 分诊结论（2026-08-13，需求阶段取证）
+# 两次失败运行（31672864997 / 31561378957）均未执行到代码验证：
+# 1. setup-python 创建 hostedtoolcache 时 `mkdir: /Users/runner: Permission denied`
+#    （RUNNER_TOOL_CACHE 沿用 GitHub 托管机约定路径，本机 /Users/runner 不存在）——持久性失败，两天均现。
+# 2. codeload.github.com / github.com TLS 断连（ClashX 代理干扰）——间歇性失败。
+# 结论：非代码回归，属自托管 runner 基础设施故障；CI Integration / Deploy 被跳过属连锁结果。
+
+triage:
+  labels: [bug, sized-m]
+  first_real_failure: runner-infra
+  independent_failures:
+    - id: F1
+      symptom: "mkdir: /Users/runner: Permission denied（setup-python hostedtoolcache）"
+      nature: persistent
+      evidence_runs: [31672864997, 31561378957]
+    - id: F2
+      symptom: "Client network socket disconnected before secure TLS connection was established（codeload.github.com / github.com）"
+      nature: intermittent
+      evidence_runs: [31672864997]
+  cascade:
+    - "CLI Integration Tests / Deploy Gawain Mod skipped（Quick Checks 失败连锁）"
+
+decisions:
+  fix_path: 修本机自托管 runner 环境（不迁移 workflow、不改 GitHub 托管）
+  local_write_authorization: 未明确确认；实施阶段改动工作目录外文件前须再次确认，所有改动先备份
+  size_confirmed: M（维持 Issue 推荐值）
+
+roles:
+  developer:
+    tool: codex
+    required_protocols:
+      - ../sts2-dev-infra/agent-protocol/AGENT_CONTRACT.md
+      - ../sts2-dev-infra/agent-protocol/ROLE_DEVELOPER.md
+  reviewer:
+    tool: claude-code
+    required_protocols:
+      - ../sts2-dev-infra/agent-protocol/AGENT_CONTRACT.md
+      - ../sts2-dev-infra/agent-protocol/ROLE_REVIEWER.md
+  tester:
+    tool: local-test-runner
+    required_protocols:
+      - ../sts2-dev-infra/agent-protocol/ROLE_TESTER.md
+      - ../sts2-dev-infra/agent-protocol/QUALITY_GATES.md
+
+scope:
+  include:
+    - .github/workflows/
+    - scripts/setup-mac-runner.sh
+    - /Users/chris/actions-runner/（runner 侧配置，需二次确认授权）
+    - ~/Library/LaunchAgents/actions.runner.*.plist（需二次确认授权）
+    - .agent-runs/issue-13-restore-main-ci/
+  exclude:
+    - ../_upstream/
+    - src/sts2_autotest/（无代码缺陷证据，禁止顺手改动）
+    - 历史质量债务清理（Issue 明确不做）
+
+tickets:
+  - id: T1
+    title: 归档两次失败运行完整日志与失败签名
+    depends_on: []
+    slice: 取证
+  - id: T2
+    title: 修复 runner tool cache 路径（RUNNER_TOOL_CACHE 指向可写目录）并重启 runner 服务
+    depends_on: [T1]
+    slice: runner 修复
+  - id: T3
+    title: 修复 runner 出网代理（GitHub 域名 TLS 断连），runner 级环境变量或 ClashX 规则
+    depends_on: [T1]
+    slice: 网络修复（可与 T2 并行）
+  - id: T4
+    title: 触发主分支重跑，四项快速验收全部通过
+    depends_on: [T2, T3]
+    slice: 验证
+  - id: T5
+    title: CLI Integration Tests 实际执行并通过
+    depends_on: [T4]
+    slice: 验证
+  - id: T6
+    title: Deploy Gawain Mod 实际执行，给出成功或有证据的独立失败
+    depends_on: [T5]
+    slice: 验证
+  - id: T7
+    title: 归档最终运行链接与根因说明，回填 Issue 完成标准
+    depends_on: [T6]
+    slice: 收口
+
+quality_gates:
+  - knowledge_gate
+  - fix_evidence_retained        # 修复前后运行记录均落盘
+  - quick_checks_all_green       # unit-test / lint / lint-imports / mypy
+  - cli_integration_executed     # 实际执行而非跳过
+  - gawain_deploy_executed       # 实际执行；独立失败须附证据
+  - same_commit_conclusion       # 最终结论针对同一主分支提交
+  - reviewer_approved
+
+artifacts:
+  developer_handoff: .agent-runs/issue-13-restore-main-ci/developer-handoff.md
+  review_report: .agent-runs/issue-13-restore-main-ci/review-report.md
+  test_report: .agent-runs/issue-13-restore-main-ci/test-report.md
+  evidence_dir: .agent-runs/issue-13-restore-main-ci/evidence/

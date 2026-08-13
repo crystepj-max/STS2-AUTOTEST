@@ -58,14 +58,22 @@ echo "Got registration token"
     --replace
 
 # --- Step 4: 写入环境变量 ---
+# 注意（issue-13 修复，2026-08-13）：
+# 1) .env 仅供交互模式（run.sh）参考；服务模式（svc.sh/runsvc.sh）不加载 .env，
+#    RUNNER_TOOL_CACHE 必须在 launchd plist 的 EnvironmentVariables 注入（见 Step 5），
+#    否则 setup-python 解析为 /Users/runner（GitHub 托管机约定）导致 mkdir 无权限。
+# 2) 勿给 GitHub 域名加 NO_PROXY 直连：本机直连 GitHub 会超时（实测 2026-08-13），
+#    必须走 ClashX 代理；代理偶发 TLS 断连为间歇性抖动，GitHub Actions 重试可自愈。
 cat > "$RUNNER_DIR/.env" << EOF
 STS2_WORKSPACE=$HOME/STS2-WORKSPACE
 STS2_GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2"
 STS2_MODS_DIR="\$STS2_GAME_DIR/Mods"
 GODOT_PATH=/Applications/Godot.app
+RUNNER_TOOL_CACHE="$RUNNER_DIR/_work/_tool"
 EOF
 
 # --- Step 5: 安装 launchd 服务 ---
+# RUNNER_TOOL_CACHE 必须与 .env 中一致（服务模式读取 plist，不读 .env）
 PLIST="$HOME/Library/LaunchAgents/com.sts2.autotest-runner.plist"
 cat > "$PLIST" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -91,6 +99,8 @@ cat > "$PLIST" << EOF
         <string>$HOME/STS2-WORKSPACE</string>
         <key>STS2_MODS_DIR</key>
         <string>$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2/Mods</string>
+        <key>RUNNER_TOOL_CACHE</key>
+        <string>$RUNNER_DIR/_work/_tool</string>
     </dict>
     <key>StandardOutPath</key>
     <string>$RUNNER_DIR/runner-stdout.log</string>

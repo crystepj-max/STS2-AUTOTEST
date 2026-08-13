@@ -1,6 +1,5 @@
 import json
-
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
 from sts2_autotest.dsl.assertions import (
     choose_map_node,
     combat_basic_policy,
@@ -9,8 +8,7 @@ from sts2_autotest.dsl.assertions import (
     no_crash_detected,
     skip_card_reward,
 )
-from sts2_autotest.dsl.fluent import define
-
+from sts2_autotest.common.state import GameScreen
 
 # Given: 已安装并可连接 STS2-Cli-Mod
 # Given: 首次战斗节点可被选择

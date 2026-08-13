@@ -6,6 +6,10 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+  # issue-13 修复（2026-08-13）：允许针对同一主分支提交手动重跑，
+  # 支撑「同提交结论」验收（T4 触发主分支重跑）；dispatch 时
+  # github.event.before 为空，基线回退为当前提交（见 quick-checks）。
+  workflow_dispatch:
 
 jobs:
   # ── 代码质量 + 单元测试（Mac + GitHub fallback）──
@@ -20,16 +24,25 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # issue-13 修复（2026-08-13）：main push 检查此前全量直跑 ruff/mypy，
+      # ruff 0.16 默认规则扩增后存量 363 项历史债必然失败；
+      # 对齐 ci-pr.yml 的 baseline 机制（PR #10「新代码不增债」设计），
+      # 以 push 前一个提交为基线，只拦截新增债务。
+      - name: Checkout historical baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.before || github.sha }}
+          path: .ci-baseline
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install project
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev,visual]"
       - name: Run ${{ matrix.check }}
         run: |
           case "${{ matrix.check }}" in
-            lint) ruff check src/ tests/ ;;
-            mypy) mypy src/sts2_autotest --strict ;;
+            lint) python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir . ;;
+            mypy) python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir . ;;
             lint-imports) lint-imports ;;
             unit-test) python -m pytest tests/unit/ -v --junitxml=junit-unit.xml ;;
           esac

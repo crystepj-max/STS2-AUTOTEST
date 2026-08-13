@@ -994,6 +994,10 @@ class TestJourneyPrecheckGate:
         monkeypatch.setenv("STS2_AUTOTEST_EVIDENCE", "none")
         monkeypatch.setenv("STS2_AUTOTEST_EVIDENCE_DIR", str(tmp_path / "evidence"))
         monkeypatch.setattr(
+            "sts2_autotest.core.runtime_factory.build_lifecycle_manager",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
             cli_main, "_run_environment_precheck", lambda _adapter: "GAME_CONTROL_UNAVAILABLE"
         )
 
