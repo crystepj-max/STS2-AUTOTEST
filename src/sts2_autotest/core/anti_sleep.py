@@ -117,7 +117,7 @@ class AntiSleepGuard:
             pass
 
     # ── context manager ─────────────────────────────────────
-    def __enter__(self) -> "AntiSleepGuard":
+    def __enter__(self) -> AntiSleepGuard:
         self.start()
         return self
 

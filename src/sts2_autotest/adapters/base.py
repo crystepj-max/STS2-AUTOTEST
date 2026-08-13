@@ -70,7 +70,7 @@ class GameAdapterProtocol(Protocol):
         """Check adapter and game connectivity."""
         ...
 
-    async def get_state(self) -> "GameState":
+    async def get_state(self) -> GameState:
         """Return current game state as a frozen GameState snapshot."""
         ...
 
@@ -99,7 +99,7 @@ class GameAdapterProtocol(Protocol):
         """
         ...
 
-    async def verify_debug_actions(self) -> "DebugVerification":
+    async def verify_debug_actions(self) -> DebugVerification:
         """非破坏性地验证调试能力是否真实可用。
 
         实现必须只用无副作用的探测（如调试控制台 help），严禁执行任何会改变

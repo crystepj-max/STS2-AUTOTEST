@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from typing import TYPE_CHECKING
 
 from sts2_autotest.common.errors import ErrorCategory, FailureClassification
@@ -292,7 +292,7 @@ class RepairAdvisor:
         return RepairReport(
             crash_signature=signature,
             suggestions=suggestions,
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            generated_at=datetime.now(UTC).isoformat(),
             source=source,
             analysis_duration_ms=round(duration_ms, 2),
         )
@@ -354,7 +354,7 @@ class RepairAdvisor:
         return RepairReport(
             crash_signature=f"{error_type}:{code}",
             suggestions=suggestions,
-            generated_at=datetime.now(timezone.utc).isoformat(),
+            generated_at=datetime.now(UTC).isoformat(),
             source=source,
             analysis_duration_ms=round(duration_ms, 2),
         )

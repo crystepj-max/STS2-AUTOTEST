@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from enum import StrEnum
 from heapq import heappop, heappush
 from typing import Any
@@ -92,7 +92,7 @@ class SessionQueue:
             return False
 
         if not request.created_at:
-            request.created_at = datetime.now(timezone.utc).isoformat()
+            request.created_at = datetime.now(UTC).isoformat()
 
         prio = _PRIORITY_ORDER.get(request.priority, 1)
         entry = _QueueEntry(

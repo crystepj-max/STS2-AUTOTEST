@@ -9,7 +9,8 @@ import asyncio
 import os
 import platform
 from pathlib import Path
-from typing import Any, Callable, Generator
+from typing import Any
+from collections.abc import Callable, Generator
 
 import pytest
 

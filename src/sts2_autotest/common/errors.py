@@ -1,6 +1,6 @@
 """Unified error classification for STS2-AUTOTEST (PRD FR5)."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from enum import StrEnum
 from typing import Any
 
@@ -102,7 +102,7 @@ class STS2Error(Exception):
         self.category = category
         self.message = message
         self.detail = detail if detail is not None else {}
-        self.timestamp = timestamp or datetime.now(timezone.utc)
+        self.timestamp = timestamp or datetime.now(UTC)
         super().__init__(message)
 
     def to_dict(self) -> dict[str, Any]:

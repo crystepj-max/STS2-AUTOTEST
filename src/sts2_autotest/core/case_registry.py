@@ -12,7 +12,7 @@ Framework manages orchestration; cases manage their own logic.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.orchestrator import TestOrchestrator

@@ -15,7 +15,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
@@ -95,7 +95,7 @@ def handle_health_check(args: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "ok",
         "service": "sts2-autotest-mcp",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 
@@ -133,7 +133,7 @@ def _probe_runtime_capabilities() -> dict[str, Any]:
         "debug_actions_configured": configured,
         "debug_actions_verified": False,
         "debug_actions_reason": "GAME_CONTROL_UNAVAILABLE",
-        "runtime_capabilities_checked_at": datetime.now(timezone.utc).isoformat(),
+        "runtime_capabilities_checked_at": datetime.now(UTC).isoformat(),
     }
 
     def _worker() -> None:
@@ -327,7 +327,7 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
             record.run_id,
             status="FAILED_PLATFORM",
             phase="COMPLETED",
-            finished_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=datetime.now(UTC).isoformat(),
             message=f"Cannot start worker: {exc}",
         )
     return serialize_record(store.load(record.run_id))
@@ -501,7 +501,7 @@ def run_tests_in_dir(
     if targets is not None:
         targets = [Path(target) for target in targets]
     run_id = run_id or (
-        f"mcp-run-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        f"mcp-run-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
         f"-{uuid.uuid4().hex[:6]}"
     )
     resolved_output = output_dir or (Path("tests/output") / run_id)

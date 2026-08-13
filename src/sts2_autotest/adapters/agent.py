@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from typing import Any, Literal, Protocol
 
 import httpx
@@ -976,7 +976,7 @@ class AgentAdapter:
         探测顺序：健康检查（控制入口就绪）→ 调试控制台 help（无副作用命令）。
         绝不执行结束战斗等破坏性命令。
         """
-        checked_at = datetime.now(timezone.utc).isoformat()
+        checked_at = datetime.now(UTC).isoformat()
         if not self.debug_actions:
             return DebugVerification(
                 configured=False,
@@ -1085,7 +1085,7 @@ class AgentAdapter:
         return {
             "game_state": state,
             "available_actions": actions,
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": datetime.now(UTC),
         }
 
     async def cleanup(self) -> None:

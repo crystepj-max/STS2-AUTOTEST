@@ -5,7 +5,8 @@ dispatches to the adapter. Assertion functions return callables
 that validate GameState snapshots.
 """
 
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import ActionDescriptor

@@ -6,7 +6,7 @@ import json
 import os
 import zlib
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 
 from sts2_autotest.common.logging import get_logger
@@ -76,8 +76,8 @@ def compute_checksum(data: bytes) -> int:
 
 
 def _now_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + \
-        f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.") + \
+        f"{datetime.now(UTC).microsecond // 1000:03d}Z"
 
 
 def save_progress(record: ProgressRecord, path: Path) -> bool:

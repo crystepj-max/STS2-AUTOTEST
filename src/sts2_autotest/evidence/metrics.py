@@ -7,7 +7,7 @@ __test__ = False
 import json
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 
 from sts2_autotest.common.logging import get_logger
@@ -284,7 +284,7 @@ class MetricsCollector:
 
     def _record(self, event_type: str, data: dict[str, object]) -> None:
         """Create and buffer a metric event, updating running counters."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         timestamp = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
         event = MetricEvent(timestamp=timestamp, event_type=event_type, data=data)
         self._buffer.append(event)

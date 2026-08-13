@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
 
 import pytest
@@ -281,7 +281,7 @@ def test_idempotency_key_does_not_create_duplicate_run(tmp_path):
 def test_stale_queued_worker_does_not_block_following_run(tmp_path):
     store = RunStore(tmp_path / "runs", stale_queue_seconds=1)
     first = store.create(RunRequest(), run_id="run-stale")
-    first.created_at = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+    first.created_at = (datetime.now(UTC) - timedelta(seconds=10)).isoformat()
     store.save(first)
     second = store.create(RunRequest(), run_id="run-next")
 
