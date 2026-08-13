@@ -81,12 +81,23 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0'
+      # issue-13 修复（2026-08-14 attempt-004）：STS2-GAWAIN 为私有仓库，
+      # 默认 GITHUB_TOKEN 不可跨仓库访问（实测错误：Repository not found）。
+      # 需用户在 STS2-AUTOTEST 仓库配置 GH_PAT（对 crystepj-max/STS2-GAWAIN
+      # 有 contents:read 的 PAT）；未配置时快速失败并给出诊断，而非模糊报错。
+      - name: Check cross-repo token (GH_PAT)
+        run: |
+          if [ -z "${{ secrets.GH_PAT }}" ]; then
+            echo "::error::GH_PAT secret is not set. Create a PAT with read access (contents:read) to crystepj-max/STS2-GAWAIN and add it to STS2-AUTOTEST repository secrets as GH_PAT."
+            exit 1
+          fi
       - name: Checkout Gawain
         uses: actions/checkout@v4
         with:
           repository: crystepj-max/STS2-GAWAIN
           path: gawain-src
           ref: main
+          token: ${{ secrets.GH_PAT }}
       - name: Build Gawain
         run: |
           cd gawain-src
