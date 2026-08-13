@@ -20,7 +20,7 @@ import json
 import re
 import subprocess
 import time
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthStatus

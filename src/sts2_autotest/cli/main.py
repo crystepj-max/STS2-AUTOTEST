@@ -16,10 +16,10 @@ import subprocess
 import sys
 import time
 import zipfile
-from datetime import datetime, timezone, UTC
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
-from collections.abc import Callable, Sequence
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
 from sts2_autotest.cli import mcp_server
@@ -1591,7 +1591,7 @@ def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> i
 
 
 def datetime_now_iso() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     return datetime.now(UTC).isoformat()
 

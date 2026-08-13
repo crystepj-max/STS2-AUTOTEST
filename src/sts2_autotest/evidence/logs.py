@@ -10,7 +10,7 @@ import re
 import shutil
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sts2_autotest.common.logging import get_logger

@@ -15,11 +15,11 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable
 
 from sts2_autotest.common.errors import CancelFailureReason
 from sts2_autotest.common.logging import get_logger

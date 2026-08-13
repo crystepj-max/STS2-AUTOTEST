@@ -14,10 +14,10 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from sts2_autotest.adapters.base import ActionResult
 from sts2_autotest.common.state import GameScreen, GameState

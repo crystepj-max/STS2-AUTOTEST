@@ -10,7 +10,7 @@ import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import GameAdapterProtocol

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest

@@ -1,6 +1,6 @@
 """Tests for common/errors.py — ErrorCategory, ErrorSubType, STS2Error."""
 
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 
 import pytest
 

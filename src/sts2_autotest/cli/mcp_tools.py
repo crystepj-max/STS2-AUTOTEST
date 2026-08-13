@@ -15,7 +15,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 

@@ -9,11 +9,11 @@ from __future__ import annotations
 import ctypes
 import shutil
 import socket
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from collections.abc import Callable, Iterator
 
 import psutil
 

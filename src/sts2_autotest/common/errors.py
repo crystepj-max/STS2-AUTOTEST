@@ -1,6 +1,6 @@
 """Unified error classification for STS2-AUTOTEST (PRD FR5)."""
 
-from datetime import datetime, timezone, UTC
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
