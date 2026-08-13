@@ -93,7 +93,9 @@ jobs:
           dotnet publish Gawain.csproj -c Release
       - name: Deploy to mods directory
         run: |
-          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2}"
+          # issue-13 修复（2026-08-13）：游戏目录实际名称为 "Slay the Spire 2"（带空格）。
+          # 旧回退路径 SlayTheSpire2 不存在，mkdir -p 会静默创建幻影目录并部署到错误位置。
+          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2}"
           MODS_DIR="$GAME_DIR/SlayTheSpire2.app/Contents/MacOS/mods"
           mkdir -p "$MODS_DIR/Gawain"
           # Find the actual publish output (respects csproj output settings)
@@ -111,7 +113,10 @@ jobs:
     name: Push Summary
     needs: [quick-checks, cli-integration, deploy-gawain]
     if: always()
-    runs-on: ubuntu-latest
+    # issue-13 修复（2026-08-13 attempt-003）：summary 为信息性 job（仅写 step summary），
+    # 移至自托管 runner——2026-08-13 起仓库级托管 runner 因账户计费故障无法分配，
+    # 保留 ubuntu-latest 会让主分支验收在自托管验收链全绿时仍整体标红。
+    runs-on: ["self-hosted", "macos", "autotest"]
     timeout-minutes: 5
     steps:
       - name: Generate summary

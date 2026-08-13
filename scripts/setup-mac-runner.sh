@@ -66,10 +66,18 @@ echo "Got registration token"
 #    必须走 ClashX 代理；代理偶发 TLS 断连为间歇性抖动，GitHub Actions 重试可自愈。
 cat > "$RUNNER_DIR/.env" << EOF
 STS2_WORKSPACE=$HOME/STS2-WORKSPACE
-STS2_GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2"
+# 注意：游戏目录名带空格（"Slay the Spire 2"），无空格变体不存在
+STS2_GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2"
 STS2_MODS_DIR="\$STS2_GAME_DIR/Mods"
 GODOT_PATH=/Applications/Godot.app
 RUNNER_TOOL_CACHE="$RUNNER_DIR/_work/_tool"
+# 代理（issue-13）：本机直连 github.com 超时，必须走 ClashX；服务模式需同步注入 plist（见 Step 5）
+HTTP_PROXY=http://127.0.0.1:7890
+HTTPS_PROXY=http://127.0.0.1:7890
+http_proxy=http://127.0.0.1:7890
+https_proxy=http://127.0.0.1:7890
+NO_PROXY=127.0.0.1,localhost
+no_proxy=127.0.0.1,localhost
 EOF
 
 # --- Step 5: 安装 launchd 服务 ---
@@ -98,9 +106,21 @@ cat > "$PLIST" << EOF
         <key>STS2_WORKSPACE</key>
         <string>$HOME/STS2-WORKSPACE</string>
         <key>STS2_MODS_DIR</key>
-        <string>$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2/Mods</string>
+        <string>$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2/Mods</string>
         <key>RUNNER_TOOL_CACHE</key>
         <string>$RUNNER_DIR/_work/_tool</string>
+        <key>HTTP_PROXY</key>
+        <string>http://127.0.0.1:7890</string>
+        <key>HTTPS_PROXY</key>
+        <string>http://127.0.0.1:7890</string>
+        <key>http_proxy</key>
+        <string>http://127.0.0.1:7890</string>
+        <key>https_proxy</key>
+        <string>http://127.0.0.1:7890</string>
+        <key>NO_PROXY</key>
+        <string>127.0.0.1,localhost</string>
+        <key>no_proxy</key>
+        <string>127.0.0.1,localhost</string>
     </dict>
     <key>StandardOutPath</key>
     <string>$RUNNER_DIR/runner-stdout.log</string>
