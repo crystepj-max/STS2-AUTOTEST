@@ -235,6 +235,7 @@ class TestPerTaskProjectResolution:
     def test_compile_cmd_passes_project_aliases(self, tmp_path, monkeypatch) -> None:
         """从公共服务目录编译项目规格时，角色别名随 project 生效。"""
         from argparse import Namespace
+
         from sts2_autotest.cli import main as cli_main
 
         mod_dir = self._make_mod_project(tmp_path / "my-mod")
@@ -278,6 +279,7 @@ class TestPerTaskProjectResolution:
     def test_project_directory_determines_spec_and_output_dirs(self, tmp_path, monkeypatch) -> None:
         """目录型项目同时决定规格来源与默认输出，不回退平台默认目录。"""
         from argparse import Namespace
+
         from sts2_autotest.cli.main import _resolve_output_dir, _resolve_spec_dir
 
         monkeypatch.chdir(tmp_path)  # 公共服务目录：无 docs/process/specs
@@ -307,8 +309,10 @@ class TestPerTaskProjectResolution:
 
     def test_explicit_project_without_declarations_fails_structurally(self, tmp_path, monkeypatch) -> None:
         """显式项目缺少规格/输出声明时结构化失败，绝不回退平台目录。"""
-        import pytest
         from argparse import Namespace
+
+        import pytest
+
         from sts2_autotest.cli.main import (
             ProjectConfigError,
             _resolve_output_dir,
@@ -332,8 +336,10 @@ class TestPerTaskProjectResolution:
 
     def test_explicit_project_with_nonexistent_spec_dir_fails(self, tmp_path, monkeypatch) -> None:
         """项目声明的规格目录不存在时结构化失败（无效目录检查）。"""
-        import pytest
         from argparse import Namespace
+
+        import pytest
+
         from sts2_autotest.cli.main import ProjectConfigError, _resolve_spec_dir
 
         monkeypatch.chdir(tmp_path)

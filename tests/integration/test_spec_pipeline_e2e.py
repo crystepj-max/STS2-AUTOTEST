@@ -10,10 +10,9 @@ from pathlib import Path
 
 import pytest
 
+from sts2_autotest.core.code_generator import CodeGenerator
 from sts2_autotest.core.markdown_parser import MarkdownParser
 from sts2_autotest.core.spec_reviewer import SpecReviewer
-from sts2_autotest.core.code_generator import CodeGenerator
-
 
 SAMPLE_CASE = """\
 # TC-PREPARE-NEW-RUN 进入新局地图

@@ -11,13 +11,13 @@ from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
+from sts2_autotest.common.types import SessionStatus
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.data_validator import validate_game_state
+from sts2_autotest.core.evidence_hooks import EvidenceHooks, StubEvidenceHooks
 from sts2_autotest.core.lock_manager import LockManager
 from sts2_autotest.core.navigation import NavigationBlocked, progress_until
 from sts2_autotest.core.progress import ProgressRecord, clear_progress, save_progress
-from sts2_autotest.core.evidence_hooks import EvidenceHooks, StubEvidenceHooks
-from sts2_autotest.common.types import SessionStatus
 from sts2_autotest.core.recovery import (
     DefaultRecoveryStrategy,
     FailureRecord,
@@ -26,8 +26,8 @@ from sts2_autotest.core.recovery import (
     crash_signature,
     is_p0_exception,
 )
-from sts2_autotest.core.steam import SteamController
 from sts2_autotest.core.state_engine import StateEngine, StateTransitionError
+from sts2_autotest.core.steam import SteamController
 from sts2_autotest.core.watchdog import Watchdog
 
 logger = get_logger("core.orchestrator")

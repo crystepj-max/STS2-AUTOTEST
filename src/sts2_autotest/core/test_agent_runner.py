@@ -11,6 +11,10 @@ Exit codes (matching ROLE_TESTER convention):
 
 from __future__ import annotations
 
+import asyncio
+import importlib
+import inspect
+import json
 import os
 import platform
 import re
@@ -18,13 +22,10 @@ import shutil
 import subprocess
 import sys
 import time
-import asyncio
-import inspect
-import importlib
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
 from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.common.visual_qa import ScreenshotOcrAnalysis
 from sts2_autotest.core.steam import SteamController
@@ -220,7 +221,10 @@ def _capture_macos_window_png(path: Path, window_title: str) -> bool:
     """Capture a specific macOS window directly into a PNG file."""
     try:
         import Quartz
-        from AppKit import NSBitmapImageRep, NSPNGFileType  # type: ignore[import-not-found]
+        from AppKit import (  # type: ignore[import-not-found]
+            NSBitmapImageRep,
+            NSPNGFileType,
+        )
     except Exception:
         selector_source = inspect.getsource(_normalize_window_token) + "\n\n" + inspect.getsource(_select_macos_window)
         script = f"""

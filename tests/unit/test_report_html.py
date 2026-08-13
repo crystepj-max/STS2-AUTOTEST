@@ -9,7 +9,6 @@ from pathlib import Path
 
 from sts2_autotest.report_html import _b64img, build_report_html, write_html_report
 
-
 _PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlH0wAAAABJRU5ErkJggg=="
 )

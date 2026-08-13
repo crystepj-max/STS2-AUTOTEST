@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.dsl.assertions import (
-    no_crash_detected, has_travelable_node,
+    has_travelable_node,
+    no_crash_detected,
     player_block_increased_by,
 )
 

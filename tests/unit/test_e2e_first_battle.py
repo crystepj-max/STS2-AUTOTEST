@@ -9,17 +9,17 @@ from __future__ import annotations
 from sts2_autotest.common.spec_models import TestSpec
 from sts2_autotest.core.code_generator import CodeGenerator
 from tests.e2e_first_battle import (
-    _choose_map_coord,
-    _choose_play_card_args,
-    _is_early_first_battle_state,
-    _is_bootstrap_complete_screen,
     _choose_bootstrap_action,
     _choose_event_progress_action,
+    _choose_grid_card_action,
+    _choose_map_coord,
+    _choose_play_card_args,
     _choose_post_embark_progress_action,
+    _choose_reward_action,
     _choose_tri_card_action,
     _choose_unknown_progress_action,
-    _choose_grid_card_action,
-    _choose_reward_action,
+    _is_bootstrap_complete_screen,
+    _is_early_first_battle_state,
     _is_post_embark_screen,
     _is_recoverable_bootstrap_screen,
 )

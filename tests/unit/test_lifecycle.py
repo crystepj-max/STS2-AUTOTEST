@@ -436,6 +436,7 @@ class TestEnsureEnvironmentReady:
 def test_game_exe_not_hardcoded_to_user_path():
     """The resolved exe must derive from the provided game_dir, not a literal home path."""
     import inspect
+
     import sts2_autotest.core.lifecycle as lc
     src = inspect.getsource(lc)
     assert "/Users/chris" not in src

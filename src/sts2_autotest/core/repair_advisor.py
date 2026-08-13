@@ -13,14 +13,13 @@ import traceback
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from sts2_autotest.common.errors import ErrorCategory
+from sts2_autotest.common.errors import ErrorCategory, FailureClassification
 from sts2_autotest.common.evidence import (
     FailureInfo,
     RepairReport,
     RepairSuggestion,
     SummaryJson,
 )
-from sts2_autotest.common.errors import FailureClassification
 from sts2_autotest.common.logging import get_logger
 
 if TYPE_CHECKING:

@@ -12,8 +12,14 @@ from typing import Any, Literal, Protocol, cast
 
 from sts2_autotest.common.visual_qa import (
     DEFAULT_HIGH_BRIGHTNESS_THRESHOLD as _DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+)
+from sts2_autotest.common.visual_qa import (
     DEFAULT_LOW_BRIGHTNESS_THRESHOLD as _DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+)
+from sts2_autotest.common.visual_qa import (
     DEFAULT_LOW_VARIANCE_THRESHOLD as _DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
+from sts2_autotest.common.visual_qa import (
     OcrTextBlock,
     ScreenshotOcrAnalysis,
     VisualQaFinding,

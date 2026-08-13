@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import pytest
+
 from sts2_autotest.core.markdown_parser import (
-    MarkdownParser, ParsingError, detect_level,
+    MarkdownParser,
+    ParsingError,
+    detect_level,
 )
 
 SAMPLE_CASE_MD = """# TC-PREPARE-NEW-RUN 进入新局地图

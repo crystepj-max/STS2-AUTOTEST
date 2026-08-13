@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
 import os
 import subprocess
 import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -15,9 +15,9 @@ from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.test_agent_runner import (
     CheckResult,
     TestAgentRunner,
+    _capture_macos_window_png,
     _find_build_output,
     _find_godot_path,
-    _capture_macos_window_png,
     _launch_game_via_desktop_open,
     _start_steam_client_without_polling,
 )

@@ -3,7 +3,6 @@
 import os
 from unittest.mock import patch
 
-
 from sts2_autotest.adapters.discovery import discover_sts2_cli
 
 

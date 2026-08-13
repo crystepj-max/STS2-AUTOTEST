@@ -3,8 +3,8 @@
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sts2_autotest.common.errors import FailureClassification
 
+from sts2_autotest.common.errors import FailureClassification
 
 SCHEMA_VERSION = "1.0.0"
 

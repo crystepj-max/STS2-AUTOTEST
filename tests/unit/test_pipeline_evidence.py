@@ -13,7 +13,6 @@ from pathlib import Path
 
 import pytest
 
-
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts/pipeline_evidence.py"
 _SPEC = importlib.util.spec_from_file_location("pipeline_evidence_script", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None

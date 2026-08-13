@@ -1,5 +1,4 @@
-from sts2_autotest.core.navigation import choose_progress_action
-from sts2_autotest.core.navigation import progress_until
+from sts2_autotest.core.navigation import choose_progress_action, progress_until
 
 
 def test_choose_progress_action_discards_potion_on_post_combat_map() -> None:
@@ -109,8 +108,10 @@ def test_progress_until_falls_back_to_grid_select_card_when_skip_rejected() -> N
 def test_progress_until_raises_when_skip_rejected_and_no_card_selectable() -> None:
     """跳过被拒且无可选卡牌时，仍应如实 ACTION_FAILED（不允许静默假通过）。"""
     import asyncio
-    import pytest
     from types import SimpleNamespace
+
+    import pytest
+
     from sts2_autotest.core.navigation import NavigationBlocked
 
     event_state = {

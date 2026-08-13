@@ -189,6 +189,7 @@ def load_config(
         return STS2Config(**merged)
     except Exception as exc:
         from pydantic import ValidationError as PydanticVE
+
         from sts2_autotest.config.errors import ConfigValidationError
 
         if isinstance(exc, PydanticVE):

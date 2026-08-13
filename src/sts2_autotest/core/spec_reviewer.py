@@ -8,10 +8,13 @@ from __future__ import annotations
 import re
 
 from sts2_autotest.common.spec_models import (
-    TestSpec, SuiteSpec, ReviewReport, RevisedDraft,
-    ReviewIssue, IssueCategory,
+    IssueCategory,
+    ReviewIssue,
+    ReviewReport,
+    RevisedDraft,
+    SuiteSpec,
+    TestSpec,
 )
-
 
 # Ambiguous Chinese phrases that signal unclear test steps
 _AMBIGUITY_PATTERNS: list[tuple[str, str]] = [
@@ -219,7 +222,7 @@ class SpecReviewer:
         lines = [f"# {spec.id} {spec.title}", ""]
         lines.append("## Metadata")
         lines.append(f"- id: {spec.id}")
-        lines.append(f"- level: case")
+        lines.append("- level: case")
         if spec.tags:
             lines.append(f"- tags: {', '.join(spec.tags)}")
         lines.append(f"- priority: {spec.priority}")

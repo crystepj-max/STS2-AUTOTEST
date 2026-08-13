@@ -15,19 +15,19 @@ from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.orchestrator import TestOrchestrator
 from sts2_autotest.dsl import define
 from sts2_autotest.dsl.assertions import (
+    choose_event,
     end_turn,
     enemy_hp_decreased_by,
     enemy_took_exact_hits,
     enter_combat,
-    choose_event,
     game_reached_state,
     give_card,
     hand_size_changed_by,
+    minion_queue_ids_are,
     play_card,
     player_block_increased_by,
     player_energy_decreased_by,
     player_hp_changed_by,
-    minion_queue_ids_are,
     set_hp,
     set_seed,
     start_game,

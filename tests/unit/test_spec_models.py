@@ -2,7 +2,13 @@
 from __future__ import annotations
 
 from sts2_autotest.common.spec_models import (
-    TestSpec, SuiteSpec, ReviewReport, ReviewIssue, IssueCategory, ProjectConfig, WorkspaceConfig,
+    IssueCategory,
+    ProjectConfig,
+    ReviewIssue,
+    ReviewReport,
+    SuiteSpec,
+    TestSpec,
+    WorkspaceConfig,
 )
 
 

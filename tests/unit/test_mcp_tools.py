@@ -1,21 +1,21 @@
 """Unit tests for MCP tool implementations."""
 
 import sys
-from unittest.mock import MagicMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from sts2_autotest.cli.mcp_protocol import McpError
 from sts2_autotest.cli.mcp_tools import (
     ToolRegistry,
-    handle_health_check,
-    handle_review_spec,
     handle_compile_spec,
-    handle_run_test,
     handle_get_report,
+    handle_health_check,
     handle_list_specs,
+    handle_review_spec,
     handle_run_pipeline,
+    handle_run_test,
     run_tests_in_dir,
 )
 
@@ -535,7 +535,11 @@ class TestReviewSpec:
     @patch("sts2_autotest.cli.mcp_tools._validate_path")
     @patch("sts2_autotest.cli.mcp_tools.review_spec_file")
     def test_review_spec_calls_reviewer(self, mock_review, mock_validate, tmp_path):
-        from sts2_autotest.common.spec_models import ReviewReport, ReviewIssue, IssueCategory
+        from sts2_autotest.common.spec_models import (
+            IssueCategory,
+            ReviewIssue,
+            ReviewReport,
+        )
         spec_file = tmp_path / "TC-TEST.md"
         spec_file.write_text("# Test")
         mock_validate.return_value = spec_file

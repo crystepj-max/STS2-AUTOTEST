@@ -1,14 +1,16 @@
 """Tests for CLI spec pipeline commands (review, compile, run --all)."""
 from __future__ import annotations
 
-import pytest
-from pathlib import Path
 from argparse import Namespace
+from pathlib import Path
+
+import pytest
+
 from sts2_autotest.cli.main import (
-    review_cmd,
-    compile_cmd,
     _create_parser,
     _ensure_output_dir_writable,
+    compile_cmd,
+    review_cmd,
 )
 
 

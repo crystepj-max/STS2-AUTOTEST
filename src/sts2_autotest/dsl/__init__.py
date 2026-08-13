@@ -1,5 +1,4 @@
 """DSL package — fluent API for authoring test cases."""
-from sts2_autotest.dsl.fluent import FluentBuilder, HandlerFn, define
 from sts2_autotest.dsl.assertions import (
     advance_dialogue,
     choose_event,
@@ -30,11 +29,12 @@ from sts2_autotest.dsl.assertions import (
     start_new_run,
 )
 from sts2_autotest.dsl.fixtures import FixtureLoader
+from sts2_autotest.dsl.fluent import FluentBuilder, HandlerFn, define
 from sts2_autotest.dsl.handlers import capture_screenshot, log_state
 
 __all__ = [
-    "FluentBuilder",
     "FixtureLoader",
+    "FluentBuilder",
     "HandlerFn",
     "advance_dialogue",
     "capture_screenshot",
@@ -52,8 +52,8 @@ __all__ = [
     "give_card",
     "hand_size_changed_by",
     "has_travelable_node",
-    "minion_queue_ids_are",
     "log_state",
+    "minion_queue_ids_are",
     "no_crash_detected",
     "play_card",
     "player_block_increased_by",

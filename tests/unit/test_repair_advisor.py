@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-
 from sts2_autotest.common.evidence import (
+    EnvironmentInfo,
     FailureInfo,
     RepairSuggestion,
-    SummaryJson,
     RunInfo,
-    EnvironmentInfo,
+    SummaryJson,
 )
 from sts2_autotest.core.repair_advisor import (
     RepairAdvisor,
+    _enrich_with_stack_locations,
     _match_rules,
     _parse_stack_trace,
-    _enrich_with_stack_locations,
 )
-
 
 # ── L1 Rule Engine ────────────────────────────────────────────
 

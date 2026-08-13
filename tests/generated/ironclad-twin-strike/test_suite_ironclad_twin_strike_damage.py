@@ -1,8 +1,7 @@
 import json
 from pathlib import Path
 
-
-from sts2_autotest.dsl.fluent import define
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.dsl.assertions import (
     choose_event,
     choose_map_node,
@@ -17,7 +16,8 @@ from sts2_autotest.dsl.assertions import (
     select_character,
     start_new_run,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
+
 
 def test_suite_ironclad_twin_strike_damage(autotest, _session_loop):
     """战士双重打击真实流程验证"""

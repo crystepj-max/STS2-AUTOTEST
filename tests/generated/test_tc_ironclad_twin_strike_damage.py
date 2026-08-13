@@ -1,5 +1,6 @@
 import json
-from sts2_autotest.dsl.fluent import define
+
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.dsl.assertions import (
     choose_event,
     choose_map_node,
@@ -14,7 +15,8 @@ from sts2_autotest.dsl.assertions import (
     select_character,
     start_new_run,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
+
 
 # Given: 已安装并可连接 STS2-Cli-Mod
 # Given: 游戏可被启动并加载到主菜单

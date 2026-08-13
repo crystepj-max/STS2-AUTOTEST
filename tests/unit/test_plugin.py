@@ -1,10 +1,9 @@
 """Tests for pytest_plugin/plugin.py — hook integration and notification callback."""
 
-import os
 import json
+import os
 from pathlib import Path
 from unittest import mock
-
 
 
 class TestPytestSessionfinish:

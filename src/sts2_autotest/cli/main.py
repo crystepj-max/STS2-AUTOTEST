@@ -12,9 +12,9 @@ import json
 import os
 import platform
 import shutil
-import time
 import subprocess
 import sys
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +22,11 @@ from typing import Any, Callable, Literal, Sequence, cast
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
 from sts2_autotest.cli import mcp_server
+from sts2_autotest.common.visual_qa import (
+    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
+    DEFAULT_LOW_VARIANCE_THRESHOLD,
+)
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
     OcrProvider,
@@ -30,13 +35,7 @@ from sts2_autotest.core.visual_qa import (
     VisualQaEngine,
     build_visual_qa_payload,
 )
-from sts2_autotest.common.visual_qa import (
-    DEFAULT_HIGH_BRIGHTNESS_THRESHOLD,
-    DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
-    DEFAULT_LOW_VARIANCE_THRESHOLD,
-)
 from sts2_autotest.report_html import write_html_report
-
 
 DEFAULT_EVIDENCE_DIR = "tests/output"
 
@@ -968,11 +967,11 @@ def _run_orchestrator_with_adapter(
 
     Lifecycle is owned by run_all() (start_session + stop_session inside).
     """
+    from sts2_autotest.core.evidence_hooks import build_evidence_hooks
     from sts2_autotest.core.orchestrator import TestOrchestrator
     from sts2_autotest.core.recovery import DefaultRecoveryStrategy
-    from sts2_autotest.core.steam import SteamController
     from sts2_autotest.core.runtime_factory import build_lifecycle_manager
-    from sts2_autotest.core.evidence_hooks import build_evidence_hooks
+    from sts2_autotest.core.steam import SteamController
 
     steam = SteamController(startup_timeout=60.0)
     recreate_factory = adapter_factory or (lambda: _create_adapter("cli"))
@@ -1320,8 +1319,8 @@ def review_cmd(args: Any) -> int:
 
 def compile_cmd(args: Any) -> int:
     """Compile specs to pytest test files."""
-    from sts2_autotest.core.markdown_parser import MarkdownParser
     from sts2_autotest.core.code_generator import CodeGenerator
+    from sts2_autotest.core.markdown_parser import MarkdownParser
 
     try:
         spec_dir = _resolve_spec_dir(args)
@@ -1684,7 +1683,11 @@ def run_cmd(args: Any) -> int:
     if not internal_run_id:
         return _run_cmd_foreground(args)
 
-    from sts2_autotest.core.run_service import RunCancelled, complete_record, wait_for_turn
+    from sts2_autotest.core.run_service import (
+        RunCancelled,
+        complete_record,
+        wait_for_turn,
+    )
 
     store = _run_store()
     try:
@@ -2158,14 +2161,14 @@ def _run_journey_foreground(
     仅设置了 STS2_GAME_DIR（无实际游戏进程）的环境里被预检误拦。
     """
     from sts2_autotest.common.errors import STS2Error
+    from sts2_autotest.core.action_model import TestResult
+    from sts2_autotest.core.evidence_hooks import build_evidence_hooks
     from sts2_autotest.core.journeys import (
         GenericJourneys,
         JourneyCancelled,
         JourneyFailure,
         _extract_chapter,
     )
-    from sts2_autotest.core.evidence_hooks import build_evidence_hooks
-    from sts2_autotest.core.action_model import TestResult
 
     case_id = f"journey:{journey}"
     evidence_root = Path(
@@ -2177,8 +2180,8 @@ def _run_journey_foreground(
     # 取消收尾（审查结论 #5）在局内取消且 reset 失败时需要 lifecycle 的受控
     # 重启能力回到主菜单。此处构建管理器（仅封装，不启进程）；若环境无法定位
     # 游戏目录则置 None，取消收尾会据此跳过受控重启并归类为清理失败。
-    from sts2_autotest.core.steam import SteamController
     from sts2_autotest.core.runtime_factory import build_lifecycle_manager
+    from sts2_autotest.core.steam import SteamController
 
     lifecycle: Any = None
     steam = SteamController(startup_timeout=60.0)

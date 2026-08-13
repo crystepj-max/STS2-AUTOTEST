@@ -1,7 +1,7 @@
 """Tests for cli/main.py — CLI entry points."""
 
-import os
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path

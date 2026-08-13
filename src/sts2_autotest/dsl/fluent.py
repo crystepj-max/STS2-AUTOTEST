@@ -9,13 +9,13 @@ from __future__ import annotations
 __test__ = False
 
 import asyncio
-from dataclasses import dataclass
 import inspect
 import json
 import os
-from pathlib import Path
 import re
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from sts2_autotest.adapters.base import ActionResult

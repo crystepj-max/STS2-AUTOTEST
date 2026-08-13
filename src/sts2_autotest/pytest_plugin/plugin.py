@@ -275,8 +275,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
 
 __all__ = [
+    "_orchestrator",
+    "_session_loop",
     "autotest",
     "game_state",
-    "_session_loop",
-    "_orchestrator",
 ]

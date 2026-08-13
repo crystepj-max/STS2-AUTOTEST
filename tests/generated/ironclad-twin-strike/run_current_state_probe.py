@@ -9,7 +9,6 @@ from typing import Any
 
 from sts2_autotest.adapters.cli_mod import CliModAdapter
 
-
 OUTPUT = Path("tests/output/ironclad-twin-strike/current-state-probe.json")
 
 

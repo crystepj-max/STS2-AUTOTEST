@@ -11,9 +11,8 @@ from unittest.mock import patch
 import pytest
 
 from sts2_autotest import __version__
-from sts2_autotest.common.evidence import FailureInfo, SCHEMA_VERSION
+from sts2_autotest.common.evidence import SCHEMA_VERSION, FailureInfo
 from sts2_autotest.evidence.packager import EvidencePackager
-
 
 # ── create_pack ─────────────────────────────────────────────
 

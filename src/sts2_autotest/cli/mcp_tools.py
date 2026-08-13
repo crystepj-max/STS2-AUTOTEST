@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import threading
 import time
-import xml.etree.ElementTree as ET
 import uuid
+import xml.etree.ElementTree as ET
 import zipfile
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -909,11 +909,11 @@ def _resolve_and_validate_project(args: dict[str, Any]) -> Path | None:
     project = args.get("project")
     if not isinstance(project, str) or not project:
         return None
-    from sts2_autotest.cli.main import _resolve_project_base_dir
     from sts2_autotest.adapters.project_extension import (
         find_project_config_file,
         load_project_spec_output,
     )
+    from sts2_autotest.cli.main import _resolve_project_base_dir
 
     base_dir = _resolve_project_base_dir(project)
     if base_dir is None:

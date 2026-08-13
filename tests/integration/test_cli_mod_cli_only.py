@@ -16,7 +16,6 @@ from sts2_autotest.common.errors import ErrorCategory, STS2Error
 
 from .conftest import _run
 
-
 pytestmark = pytest.mark.integration
 
 

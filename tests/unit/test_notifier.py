@@ -2,7 +2,6 @@
 
 from unittest import mock
 
-
 from sts2_autotest.common.types import DesktopNotifier
 
 
@@ -117,6 +116,7 @@ class TestMacOSNotifier:
     def test_notify_handles_timeout(self) -> None:
         """notify should handle subprocess timeout gracefully."""
         import subprocess as sp
+
         from sts2_autotest.core.notifier import MacOSNotifier
 
         notifier = MacOSNotifier()
