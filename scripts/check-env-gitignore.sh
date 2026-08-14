@@ -39,9 +39,9 @@ fi
 TRACKED_ENV_FILES="$(git ls-files | grep -E '(^|/)\.env($|\.)|^\.env' || true)"
 for f in $TRACKED_ENV_FILES; do
     if [[ "$f" == ".env.example" ]]; then
-        echo "PASS: 跟踪文件 $f（允许的模板）"
+        echo "PASS: 跟踪文件 ${f}（允许的模板）"
     else
-        echo "FAIL: 意外跟踪的环境文件 $f（只允许 .env.example）"
+        echo "FAIL: 意外跟踪的环境文件 ${f}（只允许 .env.example）"
         FAILED=1
     fi
 done
