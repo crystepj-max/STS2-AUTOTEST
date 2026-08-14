@@ -4,7 +4,8 @@
   macOS 兼容性补充修复轮：开发节点 attempt-003，PR #33）
 - 来源 Issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/23
 - 状态：S4 复审 REQUEST_CHANGES 的四项阻塞问题已全部修复（T6–T8 + .env 门禁），
-  复审修复 PR #32 已合并入 main（`7d36d25`）；macOS 兼容性补充修复 PR #33（Draft）待复审
+  复审修复 PR #32 已合并入 main（`7d36d25`）；macOS 兼容性补充修复 PR #33 已就绪
+  （PR Check Summary success，run 31788773304）待复审
 
 ## 实现摘要
 
