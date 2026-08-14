@@ -60,7 +60,14 @@ if os.name == "nt":
     def _kill_group(pgid, sig):  # type: ignore[no-redef]
         if sig == "TASKKILL":
             # 强制终止整棵进程树（Windows 内置 taskkill /F /T，无需 pywin32 Job Object）
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pgid)], capture_output=True)
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pgid)],
+                    capture_output=True,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                pass  # taskkill 卡住不阻塞清理，继续兜底
         else:
             os.kill(pgid, signal.CTRL_BREAK_EVENT)
 

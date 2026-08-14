@@ -72,7 +72,14 @@ if os.name == "nt":
     def _kill_group(pgid, sig):  # type: ignore[no-redef]
         if sig == "TASKKILL":
             # 强制终止整棵进程树（Windows 内置 taskkill /F /T，无需 pywin32 Job Object）
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pgid)], capture_output=True)
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pgid)],
+                    capture_output=True,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                pass  # taskkill 卡住不阻塞清理，继续兜底
         else:
             os.kill(pgid, signal.CTRL_BREAK_EVENT)
 
@@ -188,13 +195,20 @@ else
     if [[ "$expected" != "$actual" ]]; then
         fail ".gitignore 与证据 JSON 不一致：JSON=[$(echo "$expected" | tr '\n' ' ')] 实际=[$(echo "$actual" | tr '\n' ' ')]"
     else
-        # 语义验证：.env 必须实际被忽略（两侧协同追加 !.env 等声明比较发现不了）
-        run_timeout git check-ignore -q .env
-        rc=$?
-        if [[ $rc -eq 0 ]]; then
-            pass ".gitignore env 条目与证据 JSON 一致且 .env 实际被忽略：$(echo "$expected" | tr '\n' ' ')"
+        # 语义验证 ①：禁止放行 .env 的否定规则（嵌套路径如 !secrets/.env 会重新
+        # 暴露本地凭据；唯一允许的否定规则是 !.env.example）
+        neg_rules="$(grep -E '^!' "$REPO_ROOT/.gitignore" | grep -v '^!\.env\.example$' || true)"
+        if [[ -n "$neg_rules" ]]; then
+            fail "存在放行 .env 的否定规则（只允许 !.env.example）：$(echo "$neg_rules" | tr '\n' ' ')"
         else
-            fail ".env 未被实际忽略（git check-ignore 退出码 ${rc}）"
+            # 语义验证 ②：.env 必须实际被忽略（两侧协同追加 !.env 等声明比较发现不了）
+            run_timeout git check-ignore -q .env
+            rc=$?
+            if [[ $rc -eq 0 ]]; then
+                pass ".gitignore env 条目与证据 JSON 一致且 .env 实际被忽略：$(echo "$expected" | tr '\n' ' ')"
+            else
+                fail ".env 未被实际忽略（git check-ignore 退出码 ${rc}）"
+            fi
         fi
     fi
 fi
@@ -468,9 +482,14 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
             try:
                 if os.name == "nt":
                     if sig == "TASKKILL":
-                        subprocess.run(
-                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True
-                        )
+                        try:
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                                capture_output=True,
+                                timeout=5,
+                            )
+                        except subprocess.TimeoutExpired:
+                            pass  # taskkill 卡住不阻塞清理，继续兜底
                     else:
                         os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
                 else:
