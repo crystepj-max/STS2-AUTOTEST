@@ -20,6 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Runner health precheck (issue-24 T4)
+        # 业务验收开始前判定 runner 是否可用（服务状态 + GitHub 网络链路），
+        # 不可用则快速失败，避免排队/执行后才发现环境故障
+        run: |
+          bash scripts/check-runner-health.sh --json
+          echo "## Runner Health Precheck" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/check-runner-health.sh --json >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout historical baseline
         uses: actions/checkout@v4
         with:

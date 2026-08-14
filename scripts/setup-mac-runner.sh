@@ -1,105 +1,92 @@
 #!/usr/bin/env bash
-# setup-mac-runner.sh — 配置 macOS 自托管 GitHub Actions Runner
+# setup-mac-runner.sh — 配置 / 修复 macOS 自托管 GitHub Actions Runner（issue-24 T2）
 #
-# 用法：./scripts/setup-mac-runner.sh
-# 前提：已安装 gh CLI 并登录 (gh auth login)
+# 以真实安装为准（修复 F1 漂移，见 .agent-runs/issue-24-mac-runner-maintainability/evidence/）：
+#   - 安装目录默认 ~/actions-runner（RUNNER_DIR 可覆盖）
+#   - 服务形态为 svc.sh 管理的 launchd 服务（label: actions.runner.<owner>-<repo>.<name>）
+# 幂等：已配置的安装跳过下载与注册，只确保服务状态正确。
 #
-# 做什么：
-# 1. 下载并配置 GitHub Actions runner（标签：self-hosted,macos,autotest）
-# 2. 写入 STS2-WORKSPACE 环境变量到 runner 的 .env
-# 3. 安装 launchd plist 实现开机自启
+# 用法：
+#   ./scripts/setup-mac-runner.sh
+#   RUNNER_DIR=/custom/path ./scripts/setup-mac-runner.sh   # 自定义安装目录
+# 前提：仅新安装需要 gh CLI 已登录（gh auth login）
+#
+# 环境变量：RUNNER_DIR（默认 $HOME/actions-runner）、RUNNER_VERSION（默认 2.336.0）
 
 set -euo pipefail
 
 REPO="crystepj-max/STS2-AUTOTEST"
-RUNNER_DIR="$HOME/actions-runner-autotest"
-WORKSPACE_ROOT="$HOME/STS2-WORKSPACE"
+RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner}"
+RUNNER_VERSION="${RUNNER_VERSION:-2.336.0}"
 
-echo "=== STS2-AUTOTEST Mac Runner Setup ==="
+# 架构 → runner 包名
+case "$(uname -m)" in
+    arm64) RUNNER_ARCH="osx-arm64" ;;
+    x86_64) RUNNER_ARCH="osx-x64" ;;
+    *) echo "ERROR: 不支持的架构 $(uname -m)" >&2; exit 1 ;;
+esac
 
-# --- Step 1: 检查 GitHub CLI ---
+SVC_SCRIPT="$RUNNER_DIR/svc.sh"
+RUNNER_NAME_FILE="$RUNNER_DIR/.runner"
+
+echo "=== STS2-AUTOTEST Mac Runner Setup（真实安装为准）==="
+echo "安装目录: $RUNNER_DIR（架构 $RUNNER_ARCH）"
+
+# 已配置安装（svc.sh 存在）→ 跳过下载/注册，幂等（不需要 gh）
+if [[ -f "$SVC_SCRIPT" ]]; then
+    echo "检测到已配置安装（$SVC_SCRIPT），跳过下载与注册。"
+    RUNNER_NAME=""
+    if [[ -f "$RUNNER_NAME_FILE" ]]; then
+        RUNNER_NAME="$(grep -o '"agentName": *"[^"]*"' "$RUNNER_NAME_FILE" | sed 's/.*: *"//;s/"//')"
+    fi
+    echo "Runner 名称: ${RUNNER_NAME:-（未知）}"
+    echo "=== 已配置安装，跳过注册 ==="
+    echo "状态/停止/启动请使用: scripts/runner-ctl.sh {status|stop|start}"
+    exit 0
+fi
+
+# 检查 GitHub CLI（仅新安装需要）
 if ! command -v gh &>/dev/null; then
-    echo "ERROR: GitHub CLI (gh) is required. Install: brew install gh"
+    echo "ERROR: GitHub CLI (gh) is required. Install: brew install gh" >&2
     exit 1
 fi
-
 if ! gh auth status &>/dev/null; then
-    echo "ERROR: gh not authenticated. Run: gh auth login"
+    echo "ERROR: gh not authenticated. Run: gh auth login" >&2
     exit 1
 fi
 
-# --- Step 2: 下载 runner ---
-if [[ ! -d "$RUNNER_DIR" ]]; then
-    mkdir -p "$RUNNER_DIR"
-    cd "$RUNNER_DIR"
-    echo "Downloading actions runner..."
-    curl -o actions-runner-osx-arm64-2.322.0.tar.gz \
-        -L https://github.com/actions/runner/releases/download/v2.322.0/actions-runner-osx-arm64-2.322.0.tar.gz
-    tar xzf actions-runner-osx-arm64-2.322.0.tar.gz
-    rm actions-runner-osx-arm64-2.322.0.tar.gz
-fi
+# --- 新安装：下载 + 注册 + 安装服务 ---
+echo "未检测到已配置安装（$RUNNER_DIR/svc.sh 不存在），开始新安装…"
 
-# --- Step 3: 配置 runner ---
+mkdir -p "$RUNNER_DIR"
 cd "$RUNNER_DIR"
 
-# 获取注册 token
-RUNNER_TOKEN=$(gh api "repos/$REPO/actions/runners/registration-token" \
-    --method POST --jq '.token')
-echo "Got registration token"
+TARBALL="actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+if [[ ! -f "$TARBALL" ]]; then
+    echo "下载 runner $RUNNER_VERSION（$RUNNER_ARCH）…"
+    curl -o "$TARBALL" -L \
+        "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+    tar xzf "$TARBALL"
+    rm "$TARBALL"
+fi
 
-# 配置 (非交互模式)
+# 获取注册 token（仅新安装）
+echo "获取注册 token…"
+RUNNER_TOKEN="$(gh api "repos/$REPO/actions/runners/registration-token" \
+    --method POST --jq '.token')"
+
+# 配置（非交互，replace 保证幂等）
 ./config.sh \
     --url "https://github.com/$REPO" \
     --token "$RUNNER_TOKEN" \
-    --name "mac-autotest-$(hostname -s)" \
+    --name "Chris-Mac-mini-STS2-AUTOTEST" \
     --labels "self-hosted,macos,autotest" \
     --work "_work" \
     --unattended \
     --replace
 
-# --- Step 4: 写入环境变量 ---
-cat > "$RUNNER_DIR/.env" << EOF
-STS2_WORKSPACE=$HOME/STS2-WORKSPACE
-STS2_GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2"
-STS2_MODS_DIR="\$STS2_GAME_DIR/Mods"
-GODOT_PATH=/Applications/Godot.app
-EOF
+# 安装 launchd 服务（svc.sh 形态，非自定义 plist）
+./svc.sh install
 
-# --- Step 5: 安装 launchd 服务 ---
-PLIST="$HOME/Library/LaunchAgents/com.sts2.autotest-runner.plist"
-cat > "$PLIST" << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.sts2.autotest-runner</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$RUNNER_DIR/run.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>WorkingDirectory</key>
-    <string>$RUNNER_DIR</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>STS2_WORKSPACE</key>
-        <string>$HOME/STS2-WORKSPACE</string>
-        <key>STS2_MODS_DIR</key>
-        <string>$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2/Mods</string>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>$RUNNER_DIR/runner-stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>$RUNNER_DIR/runner-stderr.log</string>
-</dict>
-</plist>
-EOF
-
-launchctl load -w "$PLIST" 2>/dev/null || true
-
-echo "=== Done! Runner should appear in: https://github.com/$REPO/settings/actions/runners ==="
+echo "=== 安装完成。Runner 将出现在: https://github.com/$REPO/settings/actions/runners ==="
+echo "后续状态/停止/启动请使用: scripts/runner-ctl.sh {status|stop|start}"
