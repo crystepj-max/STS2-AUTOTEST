@@ -70,8 +70,15 @@ bash scripts/tests/run-all.sh
 ## 自测结果
 
 - shell 脚本测试：**PASSED**（4 套：runner-ctl 9 用例 / setup 6 用例 / probe 5 用例 / health 5 用例；突变验证确认测试能捕获缺陷）
-- 单元测试 `tests/unit/`：**见 verify.sh 输出**
+- 单元测试 `tests/unit/`：**PASSED**（1757 passed，499.88s）
 - lint-imports：**PASSED**（Contracts: 1 kept, 0 broken）
+- ruff / mypy 增量（基线 origin/main）：**PASSED**（New: 0 / New: 0）
+- verify.sh 整体：**全部通过**（BASELINE_DIR=/tmp/ci-baseline-origin）
+- **真实 CI（PR #30 run 31772830402）：success，19/19 step 全绿**
+  （含 Runner health precheck 前置 step 首次实际执行、unit/integration、ruff/mypy 增量）
+- 真实环境只读实证：runner-ctl status 与 launchctl/进程/GitHub 侧一致；
+  探针首条真实采集落盘；健康检查真实输出 HEALTHY
+  （详见 evidence/verification-20260814.md）
 - Build / Smoke：NOT_RUN（无构建步骤；运行保障任务不涉及游戏内行为，无烟测项）
 
 ## 未完成项（需授权 / 需时间）

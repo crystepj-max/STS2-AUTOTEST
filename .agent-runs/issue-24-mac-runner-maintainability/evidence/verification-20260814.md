@@ -61,8 +61,26 @@ $ echo $?
 ```
 
 ✅ 不依赖游戏环境，业务验收前可用/不可用判定可用（Issue 完成标准 5 脚本部分）。
-workflow 前置 step 已在 ci-pr.yml 接入，随 PR #30 CI run 首次执行
-（本文件记录时 run 31772426892 排队中，runner busy 执行 main 分支 job）。
+workflow 前置 step 已在 ci-pr.yml 接入，**已在真实 CI 首次执行成功**：
+
+```
+run 31772830402（PR #30）：
+  step: Runner health precheck (issue-24 T4) | completed | success
+```
+
+（run 31772426892 被并发组 cancel——第二次 push 触发新 run，符合 cancel-in-progress
+设计，非故障。）
+
+## CI 最终结果（PR #30 run 31772830402）
+
+**conclusion: success**，19/19 step 全绿：
+
+- Runner health precheck (issue-24 T4)：success
+- Check no new Ruff debt / Check no new mypy debt：success（与本地 verify.sh 一致）
+- Check no new unit-test failures / CLI-only integration：success
+- Enforce validation result：success
+
+✅ T4 完成标准「健康检查在验收 workflow 前置实际执行」实证闭环。
 
 ## 现场观察：正常排队 vs 异常排队
 

@@ -30,11 +30,13 @@
 
 ## 自测状态（2026-08-14）
 
-- shell 测试 4 套：**全绿**（`bash scripts/tests/run-all.sh`）
-- lint-imports：**PASSED**（Contracts: 1 kept, 0 broken）
-- unit 测试：运行中（首次后台运行被本机真实 CI job 并发干扰中断，
-  待 CI job 结束后重跑，见 `scripts/verify.sh` 输出）
-- mypy/ruff：未全量跑（仓库存在既有债务，归属 Issue #25；CI 有增量基线门禁）
+- verify.sh **全部通过**（BASELINE_DIR=origin/main 增量基线）：
+  shell 测试 4 套全绿 / unit 1757 passed / lint-imports PASSED /
+  ruff 增量 New:0 / mypy 增量 New:0
+- **真实 CI（PR #30 run 31772830402）：success，19/19 step 全绿**
+  （T4 健康检查前置 step 首次实际执行成功）
+- 真实环境只读实证：runner-ctl status 一致、探针首条采集、
+  健康检查 HEALTHY（evidence/verification-20260814.md）
 
 ## 待办（开发阶段未完成，交接给后续）
 
