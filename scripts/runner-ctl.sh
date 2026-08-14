@@ -140,22 +140,25 @@ log_operation() {
             fi
         fi
         if [[ -n "$reclaim" ]]; then
-            # 原子认领 + 实例校验：mv 前重读锁目录 inode，确认仍是刚检查的同一实例
-            # （防止 A 检查后 B 已换新锁，A 误移 B 的新锁——TOCTOU 竞态）。
-            # inode 校验对「有/无 holder」两种场景都可靠（holder 内容可能为空）。
-            stale_dir="$lock.stale.$$"
-            orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
-            if [[ -n "$orig_inode" ]] && mv "$lock" "$stale_dir" 2>/dev/null; then
-                moved_inode="$(stat -f %i "$stale_dir" 2>/dev/null || echo '')"
-                if [[ "$moved_inode" == "$orig_inode" ]]; then
+            # 无破坏原子认领：在锁目录内创建唯一 claimant 文件（mkdir 原子）。
+            # 只有认领成功者有权回收；认领后校验锁 inode 未变（holder 校验对
+            # 无 holder 场景失效，inode 对两种场景都可靠）。
+            # 避免 mv 移走他人新锁的窗口（A 检查后 B 换锁 → A 认领失败放弃）。
+            claimant="$lock/.claim.$$"
+            if mkdir "$claimant" 2>/dev/null; then
+                orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
+                # 认领成功：重读 inode 确认锁仍是刚检查的实例（未变才回收）
+                curr_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
+                if [[ -n "$orig_inode" ]] && [[ "$orig_inode" == "$curr_inode" ]]; then
                     echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
-                    rm -rf "$stale_dir"
+                    rmdir "$claimant" 2>/dev/null || true
+                    rm -rf "$lock"
                     continue
                 fi
-                # mv 走的不是同一实例（极端竞态）→ 恢复原目录
-                mv "$stale_dir" "$lock" 2>/dev/null || true
+                # 锁已被他人替换 → 放弃认领，继续等待
+                rmdir "$claimant" 2>/dev/null || true
             fi
-            # 认领失败（锁已被他人替换）→ 放弃本次回收，继续等待
+            # 认领失败（他人已认领或锁被替换）→ 放弃本次回收，继续等待
         fi
         i=$((i + 1))
         if [[ "$i" -ge "$max_wait" ]]; then
