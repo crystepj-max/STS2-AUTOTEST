@@ -106,9 +106,9 @@ DEFAULT_BP_JSON = json.dumps(
 )
 # compare API：status=ahead 表示 base（被绕过 SHA）是 head（补验 run head）的祖先
 DEFAULT_COMPARE_JSON = json.dumps({"status": "ahead"})
-# 与待更新 Issue 正文保持一致的对账标记（含紧急绕过授权记录）
+# 与待更新 Issue 正文保持一致的对账标记（含本次绕过的授权记录：PR #31 / SHA 前缀）
 DEFAULT_ISSUE_BODY = (
-    "紧急绕过授权记录：S4 复审演练要求（T7）\n"
+    "紧急绕过授权记录：S4 复审演练要求（T7），合并被阻断的探针 PR #31（750ba976）\n"
     "缺失样例证据：T8（探针 PR #31）\n"
     "线程解决要求：required_review_thread_resolution=true"
 )
@@ -723,6 +723,39 @@ def test_gate_detects_authorization_after_operation(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "授权记录时间" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_authorization_not_bound_to_bypass(tmp_path: Path) -> None:
+    """授权记录泛泛提及紧急绕过但未绑定本次 PR/SHA 时对账门禁应失败。"""
+    env = _base_env(
+        _fake_gh(tmp_path),
+        tmp_path,
+        FAKE_ISSUE_BODY="紧急绕过授权记录：一般性条款，未提及具体 PR",
+    )
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "本次绕过的授权记录" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_force_tracked_env_file(tmp_path: Path) -> None:
+    """实际跟踪的环境文件与证据 JSON tracked_env_files 不一致（如 git add -f）时对账门禁应失败。"""
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    data["env_guard"]["tracked_env_files"] = [".env.example", ".env.local"]
+    broken_json = tmp_path / "t5-env-tracked-broken.json"
+    broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "跟踪的环境文件" in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(

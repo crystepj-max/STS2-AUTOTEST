@@ -158,6 +158,24 @@ else
     fi
 fi
 
+# --- 1b. 实际跟踪的环境文件 ↔ 证据 JSON tracked_env_files ---
+# （git add -f 强制跟踪的 .env 不会被 .gitignore 规则变化暴露，须直接对账跟踪列表）
+if [[ -f "$EVIDENCE_JSON" ]]; then
+    ls_output="$(run_timeout git ls-files)"
+    ls_rc=$?
+    if [[ $ls_rc -ne 0 ]]; then
+        fail "无法读取 git 跟踪文件列表（git 退出码 $ls_rc）"
+    else
+        actual_env="$(printf '%s\n' "$ls_output" | grep -E '(^|/)\.env($|\.)|^\.env' | sort)"
+        expected_env="$(json_field "$(cat "$EVIDENCE_JSON")" '"\\n".join(sorted(d["env_guard"]["tracked_env_files"]))' | sort)"
+        if [[ "$actual_env" == "$expected_env" ]]; then
+            pass "实际跟踪的环境文件与证据 JSON 一致：$(echo "$actual_env" | tr '\n' ' ')"
+        else
+            fail "实际跟踪的环境文件与证据 JSON 不一致：实际=[$(echo "$actual_env" | tr '\n' ' ')] 证据=[$(echo "$expected_env" | tr '\n' ' ')]"
+        fi
+    fi
+fi
+
 # --- 2. PR head ↔ 该 head 的 PR Check Summary ---
 if pr_json="$(run_timeout gh api "repos/$REPO/pulls/$PR_NUMBER")"; then
     head_sha="$(json_field "$pr_json" 'd["head"]["sha"]')"
@@ -425,11 +443,15 @@ for i, e in enumerate(ledger):
             check(False, f"{tag} 原因链接资源可回读（issues/{m.group(1)}）")
         else:
             issue_data = json.loads(r.stdout)
-            # 资源正文须含授权记录（紧急绕过条款），且记录时间早于操作——仅 HTTP 成功
-            # 会放过任意无关的既存 Issue
+            body = issue_data.get("body", "")
+            # 授权记录须绑定本次绕过：正文含紧急绕过条款 + 本条的 PR 号与被绕过 SHA
+            # 前缀（仅泛泛提及「紧急绕过」会放过无关既存 Issue/事后补写）；资源创建
+            # 时间须早于操作完成时间
             check(
-                "紧急绕过" in issue_data.get("body", ""),
-                f"{tag} 原因链接资源正文含授权记录（紧急绕过）",
+                "紧急绕过" in body
+                and f"PR #{e.get('bypassed_pr')}" in body
+                and e.get("bypassed_sha", "")[:7] in body,
+                f"{tag} 原因链接资源正文含本次绕过的授权记录（PR #{e.get('bypassed_pr')} / {e.get('bypassed_sha', '')[:7]}）",
             )
             check(
                 issue_data.get("created_at", "") <= e.get("completed_at", ""),
