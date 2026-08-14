@@ -145,24 +145,27 @@ log_operation() {
             # 无破坏原子认领：所有竞争者共享单一认领名 .claim（mkdir 原子互斥）。
             # 只有一个进程能成功创建 → 唯一回收者；认领后校验锁 inode 仍是绑定的实例。
             claimant="$lock/.claim"
-            # 清理残留认领（认领者在 rm -rf 前中断）：超龄 .claim 可回收
+            # 清理残留认领：仅当 claimant 持有进程已死（claimant 内 PID 校验）。
+            # 活进程的认领不按年龄回收（回收者可能因 I/O 卡顿/暂停超过年龄阈值，
+            # 按年龄删除会让另一进程误删其有效认领并并发替换日志）。
             if [[ -d "$claimant" ]]; then
-                claim_age="$(( now_ts - $(stat -f %m "$claimant" 2>/dev/null || echo "$now_ts") ))"
-                if [[ "$claim_age" -gt "$stale_after" ]]; then
-                    rmdir "$claimant" 2>/dev/null || true
+                claim_pid="$(cat "$claimant/pid" 2>/dev/null || echo '')"
+                if [[ -n "$claim_pid" ]] && ! kill -0 "$claim_pid" 2>/dev/null; then
+                    rm -rf "$claimant" 2>/dev/null || true
                 fi
             fi
             if mkdir "$claimant" 2>/dev/null; then
+                printf '%s\n' "$$" > "$claimant/pid"
                 # 认领成功：重读 inode 确认仍是绑定的陈旧实例（未变才回收）
                 curr_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
                 if [[ -n "$orig_inode" ]] && [[ "$orig_inode" == "$curr_inode" ]]; then
                     echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
-                    rmdir "$claimant" 2>/dev/null || true
+                    rm -rf "$claimant" 2>/dev/null || true
                     rm -rf "$lock"
                     continue
                 fi
                 # 锁已被他人替换 → 放弃认领，继续等待
-                rmdir "$claimant" 2>/dev/null || true
+                rm -rf "$claimant" 2>/dev/null || true
             fi
             # 认领失败（他人已认领或锁被替换）→ 放弃本次回收，继续等待
         fi
