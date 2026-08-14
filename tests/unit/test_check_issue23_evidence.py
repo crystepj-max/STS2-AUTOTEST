@@ -47,7 +47,16 @@ DEFAULT_RULESET_JSON = json.dumps(
             {
                 "type": "pull_request",
                 "parameters": {"required_review_thread_resolution": True},
-            }
+            },
+            {
+                "type": "required_status_checks",
+                "parameters": {
+                    "strict_required_status_checks_policy": True,
+                    "required_status_checks": [
+                        {"context": "PR Check Summary", "integration_id": 15368}
+                    ],
+                },
+            },
         ],
     }
 )
@@ -55,7 +64,10 @@ DEFAULT_RULESET_JSON = json.dumps(
 DEFAULT_BP_JSON = json.dumps(
     {
         "enforce_admins": {"enabled": True},
-        "required_status_checks": {"strict": True},
+        "required_status_checks": {
+            "strict": True,
+            "contexts": ["PR Check Summary"],
+        },
     }
 )
 # compare API：status=ahead 表示 base（被绕过 SHA）是 head（补验 run head）的祖先
@@ -250,3 +262,33 @@ def test_gate_detects_branch_protection_weakened(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "branch protection" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_missing_required_check(tmp_path: Path) -> None:
+    """ruleset 移除了必填 PR Check Summary 规则时对账门禁应失败（残留同名成功 check 不算数）。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["rules"] = [
+        r for r in ruleset_json["rules"] if r["type"] != "required_status_checks"
+    ]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RULESET_JSON=json.dumps(ruleset_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "required_check" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_bp_missing_required_check(tmp_path: Path) -> None:
+    """branch protection 移除了必填检查 context 时对账门禁应失败。"""
+    bp_json = json.loads(DEFAULT_BP_JSON)
+    bp_json["required_status_checks"]["contexts"] = []
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_BP_JSON=json.dumps(bp_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "required_check" in proc.stdout + proc.stderr

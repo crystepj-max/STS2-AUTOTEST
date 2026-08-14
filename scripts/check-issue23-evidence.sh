@@ -30,14 +30,28 @@ EVIDENCE_JSON="${CHECK_ISSUE23_EVIDENCE:-$REPO_ROOT/.agent-runs/issue-23-main-me
 EVIDENCE_DIR="$(dirname "$EVIDENCE_JSON")"
 GOV_DOC="$REPO_ROOT/docs/process/main-merge-protection.md"
 CMD_TIMEOUT="${CHECK_ISSUE23_CMD_TIMEOUT:-15}"
+# run_timeout 使用的 Python 解释器：优先项目 venv（psutil 依赖的安装位置），
+# 可用 CHECK_ISSUE23_PYTHON 显式指定；psutil 缺失时明确失败而非静默挂起。
+GATE_PYTHON="${CHECK_ISSUE23_PYTHON:-}"
+if [[ -z "$GATE_PYTHON" ]]; then
+    if [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
+        GATE_PYTHON="$REPO_ROOT/.venv/bin/python3"
+    else
+        GATE_PYTHON="python3"
+    fi
+fi
 FAILED=0
 
 # 外部命令限时：python3 + psutil 封装（项目依赖，macOS/Linux/Windows 一致）。
 # 超时 → 终止整棵进程树（AGENTS.md 防僵尸/防遗留）并返回 142（128+SIGTERM 惯例）；
 # 正常结束 → 返回命令退出码。
 run_timeout() {
-    python3 - "$CMD_TIMEOUT" "$@" <<'PY'
-import psutil, subprocess, sys
+    "$GATE_PYTHON" - "$CMD_TIMEOUT" "$@" <<'PY'
+try:
+    import psutil, subprocess, sys
+except ModuleNotFoundError:
+    print("run_timeout 需要 psutil（项目依赖）；请使用项目 venv（.venv/bin/python3）或设置 CHECK_ISSUE23_PYTHON", file=sys.stderr)
+    sys.exit(1)
 
 timeout = float(sys.argv[1])
 proc = psutil.Popen(sys.argv[2:])
@@ -138,23 +152,32 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
     enforcement="$(json_field "$ruleset_json" 'd.get("enforcement", "missing")')"
     thread="$(json_field "$ruleset_json" 'str([r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_review_thread_resolution")).lower()')"
     bypass_ok="$(json_field "$ruleset_json" 'str(d.get("bypass_actors", []) == [] and d.get("current_user_can_bypass") == "never").lower()')"
-    if [[ "$enforcement" == "active" && "$thread" == "true" && "$bypass_ok" == "true" ]]; then
-        pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、线程解决要求=${thread}、无绕过者"
+    # ruleset 的必填检查是独立 rule 类型 required_status_checks（strict 策略 + context 列表）
+    rsc_ok="$(json_field "$ruleset_json" 'str(any(
+        r.get("type") == "required_status_checks"
+        and r.get("parameters", {}).get("strict_required_status_checks_policy") is True
+        and "PR Check Summary" in [c.get("context") for c in r.get("parameters", {}).get("required_status_checks", [])]
+        for r in d.get("rules", [])
+    )).lower()')"
+    if [[ "$enforcement" == "active" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" ]]; then
+        pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、必填 PR Check Summary、线程=${thread}、无绕过者"
     else
-        fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、required_review_thread_resolution=${thread}、bypass_actors_ok=${bypass_ok}"
+        fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、required_check_ok=${rsc_ok}、thread=${thread}、bypass_actors_ok=${bypass_ok}"
     fi
 else
     fail "拉取 ruleset $RULESET_ID 失败"
 fi
 
-# branch protection 层回读（T7 演练曾临时解除 enforce_admins，只查 ruleset 会漏掉该层仍被削弱）
+# branch protection 层回读（T7 演练曾临时解除 enforce_admins，只查 ruleset 会漏掉该层仍被削弱；
+# 两层都必须实际要求 PR Check Summary——PR head 残留同名成功 check 不代表保护仍要求它）
 if bp_json="$(run_timeout gh api "repos/$REPO/branches/main/protection")"; then
     enforce_admins="$(json_field "$bp_json" 'str(d.get("enforce_admins", {}).get("enabled")).lower()')"
     strict="$(json_field "$bp_json" 'str(d.get("required_status_checks", {}).get("strict")).lower()')"
-    if [[ "$enforce_admins" == "true" && "$strict" == "true" ]]; then
-        pass "branch protection 实时回读：enforce_admins=${enforce_admins}、strict=${strict}"
+    rsc_ok="$(json_field "$bp_json" 'str("PR Check Summary" in d.get("required_status_checks", {}).get("contexts", [])).lower()')"
+    if [[ "$enforce_admins" == "true" && "$strict" == "true" && "$rsc_ok" == "true" ]]; then
+        pass "branch protection 实时回读：enforce_admins=${enforce_admins}、strict=${strict}、必填 PR Check Summary"
     else
-        fail "branch protection 实时回读异常：enforce_admins=${enforce_admins}、strict=${strict}"
+        fail "branch protection 实时回读异常：enforce_admins=${enforce_admins}、strict=${strict}、required_check_ok=${rsc_ok}"
     fi
 else
     fail "拉取 branch protection 失败"

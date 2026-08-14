@@ -26,9 +26,24 @@ FAILED=0
 # 只有命令明确返回预期的「未命中/未跟踪」状态码才算 PASS。
 GATE_CMD_TIMEOUT="${CHECK_ENV_GITIGNORE_CMD_TIMEOUT:-10}"
 
+# run_timeout 使用的 Python 解释器：优先项目 venv（psutil 依赖的安装位置），
+# 可用 CHECK_ENV_GITIGNORE_PYTHON 显式指定；psutil 缺失时明确失败而非静默挂起。
+GATE_PYTHON="${CHECK_ENV_GITIGNORE_PYTHON:-}"
+if [[ -z "$GATE_PYTHON" ]]; then
+    if [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
+        GATE_PYTHON="$REPO_ROOT/.venv/bin/python3"
+    else
+        GATE_PYTHON="python3"
+    fi
+fi
+
 run_timeout() {
-    python3 - "$GATE_CMD_TIMEOUT" "$@" <<'PY'
-import psutil, subprocess, sys
+    "$GATE_PYTHON" - "$GATE_CMD_TIMEOUT" "$@" <<'PY'
+try:
+    import psutil, subprocess, sys
+except ModuleNotFoundError:
+    print("run_timeout 需要 psutil（项目依赖）；请使用项目 venv（.venv/bin/python3）或设置 CHECK_ENV_GITIGNORE_PYTHON", file=sys.stderr)
+    sys.exit(1)
 
 timeout = float(sys.argv[1])
 proc = psutil.Popen(sys.argv[2:])
