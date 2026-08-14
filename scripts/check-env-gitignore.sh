@@ -55,15 +55,21 @@ timeout = float(sys.argv[1])
 # 退化为 psutil 进程树清理（超时路径），父进程先退出的后代持有管道场景不做强保证
 popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
 proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
+import time
+
 try:
     rc = proc.wait(timeout=timeout)
 except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
-    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 + 进程树终止防遗留
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (AttributeError, ProcessLookupError, OSError):
-        pass
+    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 TERM → 宽限 → KILL
+    # 升级（防忽略 TERM 的后代持有管道），进程树清理兜底
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (AttributeError, ProcessLookupError, OSError):
+            break  # 组已不存在
+        if sig == signal.SIGTERM:
+            time.sleep(0.5)
     try:
         for child in proc.children(recursive=True):
             try:
@@ -82,13 +88,22 @@ except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     print(f"TIMEOUT: 命令 {' '.join(sys.argv[2:])} 超过 {timeout:.0f}s 未完成，已终止整棵进程树", file=sys.stderr)
     sys.exit(142)
 # 父进程已退出但进程组仍有成员（后台子进程持有输出管道会阻塞外层命令替换）：
-# 回收整组，避免 $(...) 无限等待（POSIX；killpg 探测组是否仍存在）
-try:
-    os.killpg(proc.pid, 0)
-except (AttributeError, ProcessLookupError, OSError):
-    pass
-else:
-    os.killpg(proc.pid, signal.SIGTERM)
+# TERM → 宽限 → KILL 升级回收整组，避免 $(...) 无限等待（POSIX；killpg 探测组）
+def _kill_group() -> None:
+    try:
+        os.killpg(proc.pid, 0)
+    except (AttributeError, ProcessLookupError, OSError):
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (AttributeError, ProcessLookupError, OSError):
+            return  # 组已不存在
+        if sig == signal.SIGTERM:
+            time.sleep(0.5)
+
+
+_kill_group()
 sys.exit(rc)
 PY
 }

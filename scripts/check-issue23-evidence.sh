@@ -64,15 +64,21 @@ timeout = float(sys.argv[1])
 # 退化为 psutil 进程树清理（超时路径），父进程先退出的后代持有管道场景不做强保证
 popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
 proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
+import time
+
 try:
     rc = proc.wait(timeout=timeout)
 except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
-    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 + 进程树终止防遗留
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (AttributeError, ProcessLookupError, OSError):
-        pass
+    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 TERM → 宽限 → KILL
+    # 升级（防忽略 TERM 的后代持有管道），进程树清理兜底
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (AttributeError, ProcessLookupError, OSError):
+            break  # 组已不存在
+        if sig == signal.SIGTERM:
+            time.sleep(0.5)
     try:
         for child in proc.children(recursive=True):
             try:
@@ -91,13 +97,22 @@ except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     print(f"TIMEOUT: 命令 {' '.join(sys.argv[2:])} 超过 {timeout:.0f}s 未完成，已终止整棵进程树", file=sys.stderr)
     sys.exit(142)
 # 父进程已退出但进程组仍有成员（后台子进程持有输出管道会阻塞外层命令替换）：
-# 回收整组，避免 $(...) 无限等待（POSIX；killpg 探测组是否仍存在）
-try:
-    os.killpg(proc.pid, 0)
-except (AttributeError, ProcessLookupError, OSError):
-    pass
-else:
-    os.killpg(proc.pid, signal.SIGTERM)
+# TERM → 宽限 → KILL 升级回收整组，避免 $(...) 无限等待（POSIX；killpg 探测组）
+def _kill_group() -> None:
+    try:
+        os.killpg(proc.pid, 0)
+    except (AttributeError, ProcessLookupError, OSError):
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(proc.pid, sig)
+        except (AttributeError, ProcessLookupError, OSError):
+            return  # 组已不存在
+        if sig == signal.SIGTERM:
+            time.sleep(0.5)
+
+
+_kill_group()
 sys.exit(rc)
 PY
 }
@@ -144,7 +159,9 @@ fi
 if pr_json="$(run_timeout gh api "repos/$REPO/pulls/$PR_NUMBER")"; then
     head_sha="$(json_field "$pr_json" 'd["head"]["sha"]')"
     if checks_json="$(run_timeout gh api "repos/$REPO/commits/$head_sha/check-runs")"; then
-        summary="$(json_field "$checks_json" 'next((c["conclusion"] for c in d.get("check_runs", []) if c.get("name") == "PR Check Summary"), "missing")')"
+        # 检查结果须绑定 GitHub Actions App（app.id=15368）——其他 App 创建的同名
+        # 成功 check 不满足保护要求，也不得算作 PR 门禁结果
+        summary="$(json_field "$checks_json" 'next((c["conclusion"] for c in d.get("check_runs", []) if c.get("name") == "PR Check Summary" and c.get("app", {}).get("id") == 15368), "missing")')"
         if [[ "$summary" == "success" ]]; then
             pass "PR #$PR_NUMBER head $head_sha 的 PR Check Summary=success"
         else
@@ -183,15 +200,30 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
         for r in d.get("rules", [])
     )).lower()')"
     # ruleset 必须实际覆盖默认分支（target=branch 且 include 含 ~DEFAULT_BRANCH、
-    # exclude 不得排除默认分支），否则规则内容再对也只是覆盖了其他分支
-    target="$(json_field "$ruleset_json" 'd.get("target", "missing")')"
-    covers_default="$(json_field "$ruleset_json" 'str(
-        "~DEFAULT_BRANCH" in d.get("conditions", {}).get("ref_name", {}).get("include", [])
-        and not any(
-            pat in d.get("conditions", {}).get("ref_name", {}).get("exclude", [])
-            for pat in ("~DEFAULT_BRANCH", "refs/heads/main")
-        )
-    ).lower()')"
+    # exclude 不得匹配默认分支——含通配模式 refs/heads/* 等，按 ruleset ref pattern 语义匹配）
+    target="$(json_field "$ruleset_json" 'str(d.get("target") == "branch").lower()')"
+    covers_default="$("$GATE_PYTHON" -c "$(cat <<'PY'
+import json, re, sys
+
+d = json.loads(sys.argv[1])
+
+
+def pat_matches_main(pat):
+    if pat in ("~DEFAULT_BRANCH", "refs/heads/main", "main"):
+        return True
+    # ruleset ref pattern：* 通配任意字符
+    return re.fullmatch(pat.replace("*", ".*"), "refs/heads/main") is not None
+
+
+cond = d.get("conditions", {}).get("ref_name", {})
+print(
+    str(
+        "~DEFAULT_BRANCH" in cond.get("include", [])
+        and not any(pat_matches_main(p) for p in cond.get("exclude", []))
+    ).lower()
+)
+PY
+)" "$ruleset_json")"
     # 禁止删除分支 / 非快进推送（治理文档声明；与 branch protection 的 allow_* 配套核验）
     del_rule_ok="$(json_field "$ruleset_json" 'str(any(r.get("type") == "deletion" for r in d.get("rules", []))).lower()')"
     nff_rule_ok="$(json_field "$ruleset_json" 'str(any(r.get("type") == "non_fast_forward" for r in d.get("rules", []))).lower()')"
@@ -199,7 +231,7 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
     approvals_zero="$(json_field "$ruleset_json" 'str(
         [r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_approving_review_count") == 0
     ).lower()')"
-    if [[ "$enforcement" == "active" && "$target" == "branch" && "$covers_default" == "true" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" && "$del_rule_ok" == "true" && "$nff_rule_ok" == "true" && "$approvals_zero" == "true" ]]; then
+    if [[ "$enforcement" == "active" && "$target" == "true" && "$covers_default" == "true" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" && "$del_rule_ok" == "true" && "$nff_rule_ok" == "true" && "$approvals_zero" == "true" ]]; then
         pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、覆盖默认分支、必填 PR Check Summary、线程=${thread}、无绕过者、禁删除/禁非快进、审批 0"
     else
         fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、target=${target}、covers_default=${covers_default}、required_check_ok=${rsc_ok}、thread=${thread}、bypass_actors_ok=${bypass_ok}、deletion_rule=${del_rule_ok}、non_fast_forward_rule=${nff_rule_ok}、approvals_zero=${approvals_zero}"
@@ -392,6 +424,15 @@ for i, e in enumerate(ledger):
             check(
                 run_data.get("head_sha") == pv.get("head_sha"),
                 f"{tag} 补验 run head {run_data.get('head_sha')} 与台账一致",
+            )
+            # 台账记录的补验结论/完成时间须与 run 双向一致（正式证据不得与真实状态矛盾）
+            check(
+                pv.get("conclusion") == run_data.get("conclusion"),
+                f"{tag} 台账补验结论（{pv.get('conclusion')}）与 run 一致",
+            )
+            check(
+                pv.get("completed_at") == (run_data.get("completed_at") or run_data.get("updated_at")),
+                f"{tag} 台账补验完成时间（{pv.get('completed_at')}）与 run 一致",
             )
             # 补验 run 必须真实执行等价门禁：含成功的 PR Check Summary job
             # （仅 conclusion=success 的任意轻量 run 不构成等价验收）
