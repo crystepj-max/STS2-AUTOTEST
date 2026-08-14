@@ -52,7 +52,10 @@ FAKE="$(new_fake_runner running)"
 FAKE_BIN="$(new_probe_bin)"
 cat > "$FAKE_BIN/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
-echo '{"runners":[{"name":"Chris-Mac-mini-STS2-AUTOTEST","status":"online"}]}'
+# 模拟 gh api --jq @tsv：输出 "<status>\t<busy>" 行
+if [[ "$*" == *"--jq"* ]]; then
+    printf 'online\tfalse\n'
+fi
 exit 0
 FAKE_GH
 chmod +x "$FAKE_BIN/gh"
@@ -117,6 +120,185 @@ for KEY in ts service_state runner_pids github_online proxy_local_reachable dire
         fail "缺少字段 $KEY"
     fi
 done
+
+# --- 用例 6（R1 反例）：存在环境代理时，直连探测必须强制绕过代理 ---
+test_begin "probe: 直连探测强制绕过环境代理（--noproxy）"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_NP="$(mktemp -d "${TMPDIR:-/tmp}/probe-noproxy.XXXXXX")"
+cat > "$FAKE_BIN_NP/curl" <<'FAKE_CURL_NOPROXY'
+#!/usr/bin/env bash
+# fake curl：记录调用参数；直连调用（无 -x）必须带 --noproxy，否则视为泄漏
+echo "$@" >> "$NOPROXY_LOG"
+if [[ "$*" != *"-x "* ]]; then
+    if [[ "$*" != *"--noproxy"* ]]; then
+        echo "LEAKED-THROUGH-PROXY" >&2
+        exit 1
+    fi
+fi
+if [[ "$*" == *"ipify.org"* ]]; then
+    echo "203.0.113.9"
+    exit 0
+fi
+printf '%s' "200"
+echo
+exit 0
+FAKE_CURL_NOPROXY
+chmod +x "$FAKE_BIN_NP/curl"
+NOPROXY_LOG="$(mktemp "${TMPDIR:-/tmp}/noproxy-log.XXXXXX")"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" NOPROXY_LOG="$NOPROXY_LOG" \
+    http_proxy="http://127.0.0.1:9" https_proxy="http://127.0.0.1:9" all_proxy="http://127.0.0.1:9" \
+    PATH="$FAKE_BIN_NP:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "0" "存在环境代理时探针应正常退出(0)"
+# 对每条直连调用（不含 -x）断言都带 --noproxy
+LEAKED=0
+while IFS= read -r line; do
+    if [[ "$line" == *"-x "* ]]; then
+        continue
+    fi
+    if [[ "$line" != *"--noproxy"* ]]; then
+        echo "  FAIL: 直连调用未强制 --noproxy：$line" >&2
+        LEAKED=1
+    fi
+done < "$NOPROXY_LOG"
+if [[ "$LEAKED" -eq 0 ]]; then
+    pass "直连调用均强制 --noproxy"
+else
+    fail "存在泄漏到环境代理的直连调用"
+fi
+assert_eq "$(json_field "$OUT" direct_github_reachable)" "True" "直连可达应为 true（绕过代理实测）"
+
+# --- 用例 7（R2）：github_busy 字段 —— gh 返回 busy 时如实记录 ---
+test_begin "probe: github_busy 反映任务领取/忙闲"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_B="$(new_probe_bin)"
+cat > "$FAKE_BIN_B/gh" <<'FAKE_GH_BUSY'
+#!/usr/bin/env bash
+# 模拟 gh api --jq @tsv：busy=true
+if [[ "$*" == *"--jq"* ]]; then
+    printf 'online\ttrue\n'
+fi
+exit 0
+FAKE_GH_BUSY
+chmod +x "$FAKE_BIN_B/gh"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$FAKE_BIN_B:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" github_busy)" "True" "github_busy 应为 True（busy 领取任务中）"
+
+# --- 用例 8（R2）：维护操作留记录 —— PROBE_OP 注入操作标记 ---
+test_begin "probe: PROBE_OP 维护操作标记写入 JSON"
+FAKE="$(new_fake_runner stopped)"
+FAKE_BIN_O="$(new_probe_bin)"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OP="manual-stop" PATH="$FAKE_BIN_O:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" op)" "manual-stop" "op 字段应为 manual-stop"
+assert_eq "$(json_field "$OUT" service_state)" "stopped" "服务状态仍如实记录"
+
+# --- 用例 9（R2）：状态文件推导断线/恢复事件 transition ---
+test_begin "probe: 状态文件推导 disconnect/recover 事件"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_T="$(new_probe_bin)"
+cat > "$FAKE_BIN_T/gh" <<'FAKE_GH_T'
+#!/usr/bin/env bash
+# 模拟 gh api --jq @tsv：online
+if [[ "$*" == *"--jq"* ]]; then
+    printf 'online\tfalse\n'
+fi
+exit 0
+FAKE_GH_T
+chmod +x "$FAKE_BIN_T/gh"
+STATE_FILE="$(mktemp "${TMPDIR:-/tmp}/probe-state.XXXXXX")"
+# 上次采样：服务 running + GitHub offline（断线中）→ 本次 online = recover
+echo '{"service_state":"running","github_online":"offline"}' > "$STATE_FILE"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_STATE_FILE="$STATE_FILE" PATH="$FAKE_BIN_T:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" transition)" "recover" "断线→恢复应记为 recover"
+
+# 反例：上次 online → 本次 offline = disconnect
+cat > "$STATE_FILE" <<'PREV_ONLINE'
+{"service_state":"running","github_online":"online"}
+PREV_ONLINE
+FAKE_BIN_T2="$(new_probe_bin)"
+cat > "$FAKE_BIN_T2/gh" <<'FAKE_GH_OFF'
+#!/usr/bin/env bash
+# 模拟 gh api --jq @tsv：offline
+if [[ "$*" == *"--jq"* ]]; then
+    printf 'offline\tfalse\n'
+fi
+exit 0
+FAKE_GH_OFF
+chmod +x "$FAKE_BIN_T2/gh"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_STATE_FILE="$STATE_FILE" PATH="$FAKE_BIN_T2:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" transition)" "disconnect" "在线→断线应记为 disconnect"
+
+# --- 用例 10（S2）：超时后无残留子进程 ---
+test_begin "probe: gh 挂起超时后无残留子进程"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_H="$(new_probe_bin)"
+cat > "$FAKE_BIN_H/gh" <<'FAKE_GH_HANG'
+#!/usr/bin/env bash
+# 挂起替身：永不返回（模拟外部调用无响应）
+while true; do sleep 1; done
+FAKE_GH_HANG
+chmod +x "$FAKE_BIN_H/gh"
+# 挂起替身启动前记录自身 pid 基线（pgrep -f 匹配脚本路径）
+GH_HANG_PATTERN="$FAKE_BIN_H/gh"
+PRE_PIDS="$(pgrep -f "$GH_HANG_PATTERN" 2>/dev/null | wc -l | tr -d ' ' || true)"
+PRE_PIDS="${PRE_PIDS:-0}"
+(cd /tmp && RUNNER_DIR="$FAKE" PROBE_GH_TIMEOUT=2 PATH="$FAKE_BIN_H:/usr/bin:/bin" bash "$PROBE_SCRIPT" >/dev/null 2>&1) || true
+# 等待 kill 传播
+sleep 2
+POST_PIDS="$(pgrep -f "$GH_HANG_PATTERN" 2>/dev/null | wc -l | tr -d ' ' || true)"
+POST_PIDS="${POST_PIDS:-0}"
+if [[ "$POST_PIDS" -le "$PRE_PIDS" ]]; then
+    pass "超时后无残留挂起子进程（$PRE_PIDS → $POST_PIDS）"
+else
+    fail "超时后仍残留挂起子进程（$PRE_PIDS → $POST_PIDS）"
+fi
+
+# --- 用例 11（S1）：探针在超时后仍能输出 JSON（不因挂起卡死）---
+test_begin "probe: 外部调用挂起不阻塞探针输出"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_H2="$(new_probe_bin)"
+cat > "$FAKE_BIN_H2/gh" <<'FAKE_GH_HANG2'
+#!/usr/bin/env bash
+while true; do sleep 1; done
+FAKE_GH_HANG2
+chmod +x "$FAKE_BIN_H2/gh"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_GH_TIMEOUT=2 PATH="$FAKE_BIN_H2:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "0" "挂起替身下探针仍应正常退出(0)"
+assert_eq "$(json_field "$OUT" github_online)" "unknown" "挂起超时后 github_online 应为 unknown"
+
+# --- 用例 12（S2 反例）：超时后子进程也被回收（不残留孤儿）---
+test_begin "probe: 超时后子进程一并回收"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_C="$(new_probe_bin)"
+HANG_PID_FILE="$(mktemp "${TMPDIR:-/tmp}/hang-main.XXXXXX")"
+HANG_CHILD_PID_FILE="$(mktemp "${TMPDIR:-/tmp}/hang-child.XXXXXX")"
+cat > "$FAKE_BIN_C/gh" <<'FAKE_GH_CHILD'
+#!/usr/bin/env bash
+# 挂起替身：记录自身 pid 与一个长活子进程 pid
+echo $$ > "$HANG_PID_FILE"
+(sleep 300) &
+echo $! > "$HANG_CHILD_PID_FILE"
+while true; do sleep 1; done
+FAKE_GH_CHILD
+chmod +x "$FAKE_BIN_C/gh"
+(cd /tmp && RUNNER_DIR="$FAKE" HANG_PID_FILE="$HANG_PID_FILE" HANG_CHILD_PID_FILE="$HANG_CHILD_PID_FILE" \
+    PROBE_GH_TIMEOUT=2 PATH="$FAKE_BIN_C:/usr/bin:/bin" bash "$PROBE_SCRIPT" >/dev/null 2>&1) || true
+sleep 2
+CHILD_PID="$(cat "$HANG_CHILD_PID_FILE" 2>/dev/null || echo '')"
+MAIN_PID="$(cat "$HANG_PID_FILE" 2>/dev/null || echo '')"
+RESIDUAL=""
+if [[ -n "$MAIN_PID" ]] && kill -0 "$MAIN_PID" 2>/dev/null; then
+    RESIDUAL="主进程 $MAIN_PID "
+fi
+if [[ -n "$CHILD_PID" ]] && kill -0 "$CHILD_PID" 2>/dev/null; then
+    RESIDUAL="${RESIDUAL}子进程 $CHILD_PID "
+fi
+if [[ -n "$RESIDUAL" ]]; then
+    fail "超时后仍残留进程：$RESIDUAL"
+else
+    pass "超时后主进程与子进程均已回收"
+fi
 
 echo
 echo "runner-probe 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"

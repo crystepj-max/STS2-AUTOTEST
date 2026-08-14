@@ -20,6 +20,22 @@ set -euo pipefail
 RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner}"
 CMD="${1:-}"
 SVC_SCRIPT="$RUNNER_DIR/svc.sh"
+SVC_TIMEOUT="${SVC_TIMEOUT:-10}"
+
+# 带超时执行命令：svc.sh 可能挂起，逐项限时；killer 不持有调用方管道
+run_with_timeout() {
+    local timeout="$1"
+    shift
+    local pid rc killer
+    "$@" &
+    pid=$!
+    ( sleep "$timeout"; pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true ) >/dev/null 2>&1 &
+    killer=$!
+    if wait "$pid"; then rc=0; else rc=$?; fi
+    pkill -P "$killer" 2>/dev/null || true
+    kill "$killer" 2>/dev/null || true
+    return "$rc"
+}
 
 usage() {
     cat <<'EOF'
@@ -41,9 +57,10 @@ print_state() {
 }
 
 # 执行 svc.sh 子命令（强制在 RUNNER_DIR 内运行，svc.sh 依赖 cwd）
+# 包超时：svc.sh 挂起时不无期等待（S1）
 run_svc() {
     local sub="$1"
-    (cd "$RUNNER_DIR" && ./svc.sh "$sub")
+    (cd "$RUNNER_DIR" && run_with_timeout "$SVC_TIMEOUT" ./svc.sh "$sub")
 }
 
 cmd_status() {
@@ -63,8 +80,16 @@ cmd_status() {
         print_state "$out" "not-installed"
         return 2
     elif [[ "$out" == *"Started:"* ]]; then
-        print_state "$out" "running"
-        return 0
+        # 服务标记 started ≠ 真实进程存在（issue-24 R3）：
+        # Runner.Listener 进程缺失时状态应反映异常，而非误报 running。
+        if pgrep -f "Runner.Listener" >/dev/null 2>&1; then
+            print_state "$out" "running"
+            return 0
+        else
+            echo "WARNING: 服务标记 Started 但未找到 Runner.Listener 进程（服务假启动？）" >&2
+            print_state "$out" "running-no-process"
+            return 1
+        fi
     elif [[ "$out" == *"Stopped"* ]]; then
         print_state "$out" "stopped"
         return 1

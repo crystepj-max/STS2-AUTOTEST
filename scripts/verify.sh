@@ -12,7 +12,8 @@
 #   —— 仓库存在既有 Ruff/mypy 债务（归属 Issue #25），全量零错误不是当前基线
 #
 # 用法：./scripts/verify.sh [BASELINE_DIR=<main 分支 checkout 路径>]
-# 环境变量：PYTHON 覆盖解释器（默认 .venv/bin/python）
+# 环境变量：PYTHON 覆盖解释器（默认 .venv/bin/python）、VERIFY_STEP_TIMEOUT
+#          每步超时秒数（默认：shell 测试 600 / 单元测试 1800 / lint-imports 300）
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,11 +21,26 @@ PYTHON="${PYTHON:-$REPO_ROOT/.venv/bin/python}"
 BASELINE_DIR="${BASELINE_DIR:-}"
 FAILED=0
 
-step() {
-    local name="$1"
+# 带超时执行命令：pytest 等可能长时间挂起，逐项限时；killer 不持有调用方管道
+run_with_timeout() {
+    local timeout="$1"
     shift
+    local pid rc killer
+    "$@" &
+    pid=$!
+    ( sleep "$timeout"; pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true ) >/dev/null 2>&1 &
+    killer=$!
+    if wait "$pid"; then rc=0; else rc=$?; fi
+    pkill -P "$killer" 2>/dev/null || true
+    kill "$killer" 2>/dev/null || true
+    return "$rc"
+}
+
+step() {
+    local name="$1" timeout="$2"
+    shift 2
     echo "===== $name ====="
-    if "$@"; then
+    if run_with_timeout "$timeout" "$@"; then
         echo "PASS: $name"
     else
         echo "FAIL: $name"
@@ -35,17 +51,17 @@ step() {
 
 cd "$REPO_ROOT"
 
-step "shell 脚本测试" bash scripts/tests/run-all.sh
-step "单元测试" "$PYTHON" -m pytest tests/unit/ -q
-step "lint-imports" "$REPO_ROOT/.venv/bin/lint-imports"
+step "shell 脚本测试" "${VERIFY_STEP_TIMEOUT:-600}" bash scripts/tests/run-all.sh
+step "单元测试" "${VERIFY_STEP_TIMEOUT:-1800}" "$PYTHON" -m pytest tests/unit/ -q
+step "lint-imports" "${VERIFY_STEP_TIMEOUT:-300}" "$REPO_ROOT/.venv/bin/lint-imports"
 
 if [[ -n "$BASELINE_DIR" ]]; then
     # 基线脚本从 PATH 解析 mypy/ruff，须注入 .venv 保证基线环境一致
     # （否则 worktree 无 venv 时会解析到 homebrew mypy，错误集合失真）
     export PATH="$REPO_ROOT/.venv/bin:$PATH"
-    step "ruff 无新增债务" "$PYTHON" .github/scripts/check_ruff_baseline.py \
+    step "ruff 无新增债务" "${VERIFY_STEP_TIMEOUT:-300}" "$PYTHON" .github/scripts/check_ruff_baseline.py \
         --baseline-dir "$BASELINE_DIR" --current-dir "$REPO_ROOT"
-    step "mypy 无新增债务" "$PYTHON" .github/scripts/check_mypy_baseline.py \
+    step "mypy 无新增债务" "${VERIFY_STEP_TIMEOUT:-300}" "$PYTHON" .github/scripts/check_mypy_baseline.py \
         --baseline-dir "$BASELINE_DIR" --current-dir "$REPO_ROOT"
 else
     echo "===== ruff / mypy 增量基线 ====="

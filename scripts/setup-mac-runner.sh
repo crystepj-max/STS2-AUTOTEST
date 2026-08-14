@@ -11,13 +11,37 @@
 #   RUNNER_DIR=/custom/path ./scripts/setup-mac-runner.sh   # 自定义安装目录
 # 前提：仅新安装需要 gh CLI 已登录（gh auth login）
 #
-# 环境变量：RUNNER_DIR（默认 $HOME/actions-runner）、RUNNER_VERSION（默认 2.336.0）
+# 环境变量：RUNNER_DIR（默认 $HOME/actions-runner）、RUNNER_VERSION（默认 2.336.0）、
+#           SETUP_CMD_TIMEOUT（外部调用超时秒数，默认 30）、
+#           RUNNER_NAME（新安装必填：机器身份，默认不预设固定机器名）、
+#           ALLOW_REPLACE（=1 时允许覆盖同名既有注册，默认拒绝，R4 安全门禁）、
+#           PROXY_URL（写入 runner .env 的代理地址，默认 http://127.0.0.1:7890）
 
 set -euo pipefail
 
 REPO="crystepj-max/STS2-AUTOTEST"
 RUNNER_DIR="${RUNNER_DIR:-$HOME/actions-runner}"
 RUNNER_VERSION="${RUNNER_VERSION:-2.336.0}"
+SETUP_CMD_TIMEOUT="${SETUP_CMD_TIMEOUT:-30}"
+RUNNER_NAME="${RUNNER_NAME:-}"
+ALLOW_REPLACE="${ALLOW_REPLACE:-0}"
+PROXY_URL="${PROXY_URL:-http://127.0.0.1:7890}"
+
+# 带超时执行命令：外部调用（gh/curl/tar/config.sh/svc.sh）可能挂起，逐项限时；
+# killer 不持有调用方管道，超时后递归回收子进程
+run_with_timeout() {
+    local timeout="$1"
+    shift
+    local pid rc killer
+    "$@" &
+    pid=$!
+    ( sleep "$timeout"; pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true ) >/dev/null 2>&1 &
+    killer=$!
+    if wait "$pid"; then rc=0; else rc=$?; fi
+    pkill -P "$killer" 2>/dev/null || true
+    kill "$killer" 2>/dev/null || true
+    return "$rc"
+}
 
 # 架构 → runner 包名
 case "$(uname -m)" in
@@ -50,7 +74,7 @@ if ! command -v gh &>/dev/null; then
     echo "ERROR: GitHub CLI (gh) is required. Install: brew install gh" >&2
     exit 1
 fi
-if ! gh auth status &>/dev/null; then
+if ! run_with_timeout "$SETUP_CMD_TIMEOUT" gh auth status &>/dev/null; then
     echo "ERROR: gh not authenticated. Run: gh auth login" >&2
     exit 1
 fi
@@ -58,35 +82,71 @@ fi
 # --- 新安装：下载 + 注册 + 安装服务 ---
 echo "未检测到已配置安装（$RUNNER_DIR/svc.sh 不存在），开始新安装…"
 
+# 机器身份必须显式传入（R4）：不再默认固定机器名，防止误覆盖其他机器身份
+if [[ -z "$RUNNER_NAME" ]]; then
+    echo "ERROR: RUNNER_NAME 必须显式提供（新安装的机器身份）。" >&2
+    echo "示例: RUNNER_NAME=my-mac-runner ./scripts/setup-mac-runner.sh" >&2
+    exit 1
+fi
+
 mkdir -p "$RUNNER_DIR"
 cd "$RUNNER_DIR"
+
+# 同名注册保护（R4）：默认拒绝覆盖既有同名 runner，需显式 ALLOW_REPLACE=1
+if [[ "$ALLOW_REPLACE" != "1" ]]; then
+    EXISTING="$(run_with_timeout "$SETUP_CMD_TIMEOUT" gh api "repos/$REPO/actions/runners" \
+        --paginate --jq '.runners[] | select(.name == $name) | .id' --arg name "$RUNNER_NAME" 2>/dev/null || true)"
+    if [[ -n "$EXISTING" ]]; then
+        echo "ERROR: 已存在同名 runner '$RUNNER_NAME'（id=$EXISTING）。" >&2
+        echo "默认禁止覆盖注册；确认要替换请显式: ALLOW_REPLACE=1 ..." >&2
+        exit 1
+    fi
+fi
 
 TARBALL="actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
 if [[ ! -f "$TARBALL" ]]; then
     echo "下载 runner ${RUNNER_VERSION}（${RUNNER_ARCH}）…"
-    curl -o "$TARBALL" -L \
+    run_with_timeout "$SETUP_CMD_TIMEOUT" curl -o "$TARBALL" -L \
         "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
-    tar xzf "$TARBALL"
+    run_with_timeout "$SETUP_CMD_TIMEOUT" tar xzf "$TARBALL"
     rm "$TARBALL"
 fi
 
 # 获取注册 token（仅新安装）
 echo "获取注册 token…"
-RUNNER_TOKEN="$(gh api "repos/$REPO/actions/runners/registration-token" \
+RUNNER_TOKEN="$(run_with_timeout "$SETUP_CMD_TIMEOUT" gh api "repos/$REPO/actions/runners/registration-token" \
     --method POST --jq '.token')"
 
-# 配置（非交互，replace 保证幂等）
-./config.sh \
-    --url "https://github.com/$REPO" \
-    --token "$RUNNER_TOKEN" \
-    --name "Chris-Mac-mini-STS2-AUTOTEST" \
-    --labels "self-hosted,macos,autotest" \
-    --work "_work" \
-    --unattended \
-    --replace
+# 配置（非交互；仅 ALLOW_REPLACE=1 时带 --replace）
+CONFIG_ARGS=(--url "https://github.com/$REPO" --token "$RUNNER_TOKEN" --name "$RUNNER_NAME" \
+    --labels "self-hosted,macos,autotest" --work "_work" --unattended)
+if [[ "$ALLOW_REPLACE" == "1" ]]; then
+    CONFIG_ARGS+=(--replace)
+fi
+run_with_timeout "$SETUP_CMD_TIMEOUT" ./config.sh "${CONFIG_ARGS[@]}"
 
-# 安装 launchd 服务（svc.sh 形态，非自定义 plist）
-./svc.sh install
+# 运行环境写入 runner .env（R4：手册声明代理等运行环境位于 runner .env，追加而非覆盖）
+ENV_FILE="$RUNNER_DIR/.env"
+if [[ -f "$ENV_FILE" ]] && grep -q '^HTTP_PROXY=' "$ENV_FILE"; then
+    echo ".env 已含 HTTP_PROXY，跳过代理写入。"
+else
+    {
+        echo "HTTP_PROXY=$PROXY_URL"
+        echo "HTTPS_PROXY=$PROXY_URL"
+    } >> "$ENV_FILE"
+    echo "已写入运行环境（HTTP_PROXY/HTTPS_PROXY）到 $ENV_FILE"
+fi
+
+# 安装 launchd 服务（svc.sh 形态，非自定义 plist）并启动验证（R4：装后状态为真）
+run_with_timeout "$SETUP_CMD_TIMEOUT" ./svc.sh install
+run_with_timeout "$SETUP_CMD_TIMEOUT" ./svc.sh start
+SVC_STATUS="$(run_with_timeout "$SETUP_CMD_TIMEOUT" ./svc.sh status 2>/dev/null || true)"
+if [[ "$SVC_STATUS" == *"Started:"* ]]; then
+    echo "=== 服务已启动（svc.sh status 确认 Started）==="
+else
+    echo "WARNING: 服务安装后 status 未确认 Started（可能需手动启动或检查 svc.sh 输出）" >&2
+    echo "$SVC_STATUS" >&2
+fi
 
 echo "=== 安装完成。Runner 将出现在: https://github.com/$REPO/settings/actions/runners ==="
 echo "后续状态/停止/启动请使用: scripts/runner-ctl.sh {status|stop|start}"

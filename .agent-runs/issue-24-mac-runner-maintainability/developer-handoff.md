@@ -69,17 +69,34 @@ bash scripts/tests/run-all.sh
 
 ## 自测结果
 
-- shell 脚本测试：**PASSED**（4 套：runner-ctl 9 用例 / setup 6 用例 / probe 5 用例 / health 5 用例；突变验证确认测试能捕获缺陷）
+- shell 脚本测试：**PASSED**（4 套：runner-ctl 12 用例 / setup 11 用例 /
+  probe 12 用例 / health 9 用例，合计 40 用例；含 R1/R2/R3/S1/S2/R4 反例测试）
 - 单元测试 `tests/unit/`：**PASSED**（1757 passed，499.88s）
 - lint-imports：**PASSED**（Contracts: 1 kept, 0 broken）
 - ruff / mypy 增量（基线 origin/main）：**PASSED**（New: 0 / New: 0）
-- verify.sh 整体：**全部通过**（BASELINE_DIR=/tmp/ci-baseline-origin）
-- **真实 CI（PR #30 run 31772830402）：success，19/19 step 全绿**
-  （含 Runner health precheck 前置 step 首次实际执行、unit/integration、ruff/mypy 增量）
+- verify.sh 整体：**本地通过**（BASELINE_DIR=/tmp/ci-baseline-origin）
+- **表述更正**：此前记录的「真实 CI（PR #30 run 31772830402）19/19 全绿」
+  为**本地工作区/既有 PR 头的 CI 结果**；该 run 未执行新增 25 项脚本测试，
+  且 PR 头当时不含 S3 修正。返工后 PR 头已更新（含脚本测试 step），
+  **远端 CI 结果以最新 run 为准，不在本交接中预先声称**。
 - 真实环境只读实证：runner-ctl status 与 launchctl/进程/GitHub 侧一致；
   探针首条真实采集落盘；健康检查真实输出 HEALTHY
   （详见 evidence/verification-20260814.md）
 - Build / Smoke：NOT_RUN（无构建步骤；运行保障任务不涉及游戏内行为，无烟测项）
+
+## 返工修正（S4 REQUEST_CHANGES → S2，2026-08-14）
+
+按审核 7 项阻塞完成修正（详见 STATE.md「返工修正」节与
+`.agent-runs/issue-24-mac-runner-maintainability/` 的 stage-handoff-s4.md）：
+
+1. 提交 S3 已验证的两处脚本修正（e603b75）。
+2. `ci-pr.yml` 纳入 `scripts/tests/run-all.sh` 必跑 step。
+3. 探针直连强制 `--noproxy '*'`（R1，含反例测试）。
+4. 探针补录 `github_busy` / `op` / `transition`（R2，可重放样本验证四类归因）。
+5. 健康检查与 runner-ctl 核对真实进程与 GitHub 侧状态（R3，含反例测试）。
+6. 全部外部操作逐项超时 + 超时后进程树/临时文件回收（S1/S2，挂起替身验证）。
+7. 新安装路径：机器身份显式、默认禁覆盖、装后环境/启动/状态验证（R4/S3）。
+8. 文档表述更正：本地通过 ≠ 远端 PR 已通过。
 
 ## 未完成项（需授权 / 需时间）
 

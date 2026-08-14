@@ -74,6 +74,38 @@ run_ctl "$FAKE"
 assert_eq "$CTL_RC" "3" "无参数退出码应为 3"
 assert_contains "$CTL_OUT" "usage" "应打印 usage"
 
+# --- 用例 10（R3 反例）：svc.sh 报 Started 但 Runner.Listener 进程缺失 → 非 0 + 异常状态 ---
+test_begin "status: 服务标记 started 但进程缺失 → exit 非 0 + 状态异常"
+FAKE="$(new_fake_runner running)"
+RUN_CTL_NO_PROCESS=1 run_ctl "$FAKE" status
+assert_ne "$CTL_RC" "0" "进程缺失时退出码不应为 0（R3 反例）"
+assert_contains "$CTL_OUT" "process" "应给出进程相关提示"
+
+# --- 用例 11：svc.sh 报 Started 且进程存在 → exit 0（进程核验通过）---
+test_begin "status: 服务标记 started 且进程存在 → exit 0"
+FAKE="$(new_fake_runner running)"
+RUN_CTL_NO_PROCESS=0 run_ctl "$FAKE" status
+assert_eq "$CTL_RC" "0" "服务与进程一致时退出码应为 0"
+assert_contains "$CTL_OUT" "state: running" "输出应包含 state: running"
+
+# --- 用例 12（S1 反例）：svc.sh 挂起 → status 限时退出而非无期等待 ---
+test_begin "status: svc.sh 挂起 → 限时退出"
+FAKE="$(new_fake_runner running)"
+cat > "$FAKE/svc.sh" <<'FAKE_SVC_HANG'
+#!/usr/bin/env bash
+while true; do sleep 1; done
+FAKE_SVC_HANG
+chmod +x "$FAKE/svc.sh"
+START="$(date +%s)"
+RUN_CTL_NO_PROCESS=0 SVC_TIMEOUT=2 run_ctl "$FAKE" status
+ELAPSED="$(( $(date +%s) - START ))"
+if [[ "$ELAPSED" -le 10 ]]; then
+    pass "svc.sh 挂起时限时退出（用时 ${ELAPSED}s ≤ 10s）"
+else
+    fail "svc.sh 挂起时未限时（用时 ${ELAPSED}s）"
+fi
+assert_ne "$CTL_RC" "0" "svc.sh 挂起超时后不应报 running(0)"
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1

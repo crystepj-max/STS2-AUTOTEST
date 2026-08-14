@@ -37,12 +37,16 @@ gh api repos/crystepj-max/STS2-AUTOTEST/actions/runners \
   --jq '.runners[] | "\(.name) id=\(.id) status=\(.status) busy=\(.busy)"'
 ```
 
-健康检查（不依赖游戏环境，返回 0=可用）：
+健康检查（不依赖游戏环境，返回 0=可用；三路核验——服务状态、
+真实 Runner.Listener 进程、GitHub 侧 online 状态一致才报 HEALTHY）：
 
 ```bash
 scripts/check-runner-health.sh          # 人类可读
 scripts/check-runner-health.sh --json   # 结构化输出
 ```
+
+> 反例：服务标记 started 但进程缺失，或 GitHub 侧 offline 时，
+> 健康检查报 UNHEALTHY（避免「服务假启动仍误报可接任务」）。
 
 ## 3. 停止 / 启动
 
@@ -86,9 +90,13 @@ curl -s --max-time 5 -x http://127.0.0.1:7890 https://api.ipify.org
 | GitHub 侧 `busy=true` 持续数小时 | 任务执行中或卡死 | 查看 `_diag` 日志；按 run 取消/超时策略处理 |
 | job 排队 >15min 但 runner online | runner 领取异常 | 查 `_diag` 最新日志 + 探针数据归因（本机网络/代理/GitHub 上游） |
 
-> 探针：`scripts/runner-probe.sh` 输出 JSONL，记录服务状态、GitHub 侧状态、
-> 直连/代理可达性与出口 IP，用于区分四类归因（本机网络 / 代理出口 /
-> GitHub 上游 / 维护操作）。连续采集 ≥7 天后做归因（issue-24 T3/T7）。
+> 探针：`scripts/runner-probe.sh` 输出 JSONL，记录服务状态、真实进程、
+> GitHub 侧状态与忙闲（`github_online`/`github_busy`）、直连/代理可达性
+> 与出口 IP、事件（`transition`: disconnect/recover/service-stopped/
+> service-started）与维护操作标记（`op`，由 `PROBE_OP` 注入），用于区分
+> 四类归因（本机网络 / 代理出口 / GitHub 上游 / 维护操作）。
+> 直连探测强制绕过环境代理（`--noproxy '*'`），确保两条路径真实可区分。
+> 连续采集 ≥7 天后做归因（issue-24 T3/T7）。
 
 ## 6. 连续数据采集（issue-24 T3）
 
@@ -138,3 +146,8 @@ mkdir -p ~/.sts2-runner-probe
 - **磁盘膨胀**：`~/actions-runner/_diag/` 单文件可达 8–25MB，建议按天滚动归档。
 - **需要全新安装/修复**：`scripts/setup-mac-runner.sh`（幂等：
   已配置安装跳过下载与注册）。
+  - 新安装必须显式提供机器身份：`RUNNER_NAME=<机器名> ./scripts/setup-mac-runner.sh`
+    （不再默认固定机器名，防止误覆盖其他机器身份）。
+  - 同名已注册默认拒绝覆盖，需显式 `ALLOW_REPLACE=1` 才允许。
+  - 装后自动写入运行环境（HTTP_PROXY/HTTPS_PROXY 到 runner `.env`）、
+    `svc.sh install` → `start` 并验证 status 为 Started。

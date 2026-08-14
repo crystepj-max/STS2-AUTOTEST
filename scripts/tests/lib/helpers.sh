@@ -34,6 +34,15 @@ assert_contains() {
     fi
 }
 
+assert_ne() {
+    local actual="$1" unexpected="$2" msg="${3:-}"
+    if [[ "$actual" != "$unexpected" ]]; then
+        pass "$msg [${actual}]"
+    else
+        fail "$msg 不应等于 [${unexpected}]"
+    fi
+}
+
 # 记录用例开始
 test_begin() {
     CURRENT_TEST="$1"
@@ -102,14 +111,28 @@ FAKE_SVC
 
 # 运行 runner-ctl.sh，输出到 stdout，退出码返回
 # 用法：run_ctl <fake_dir> <args...>   ；stdout 存到变量 CTL_OUT，退出码存 CTL_RC
+# 隔离：默认注入 fake pgrep（Runner.Listener 存在，避免读到真实机器进程）；
+# RUN_CTL_NO_PROCESS=1 时注入"无进程"的 fake pgrep（R3 反例用）。
 CTL_OUT=""
 CTL_RC=0
 run_ctl() {
     local dir="$1"
     shift
-    local out rc
-    out="$(cd /tmp && RUNNER_DIR="$dir" bash "$SCRIPT_DIR/../runner-ctl.sh" "$@" 2>&1)" || rc=$?
+    local out rc fake_bin pgrep_body
+    fake_bin="$(mktemp -d "${TMPDIR:-/tmp}/ctl-bin.XXXXXX")"
+    if [[ "${RUN_CTL_NO_PROCESS:-0}" == "1" ]]; then
+        pgrep_body='exit 1'
+    else
+        pgrep_body='echo "40231 Runner.Listener"; exit 0'
+    fi
+    cat > "$fake_bin/pgrep" <<FAKE_PGREP
+#!/usr/bin/env bash
+$pgrep_body
+FAKE_PGREP
+    chmod +x "$fake_bin/pgrep"
+    out="$(cd /tmp && RUNNER_DIR="$dir" PATH="$fake_bin:/usr/bin:/bin" bash "$SCRIPT_DIR/../runner-ctl.sh" "$@" 2>&1)" || rc=$?
     rc="${rc:-0}"
     CTL_OUT="$out"
     CTL_RC="$rc"
+    rm -rf "$fake_bin"
 }
