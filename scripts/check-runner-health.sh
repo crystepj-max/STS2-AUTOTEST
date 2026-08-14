@@ -65,20 +65,17 @@ elif [[ -f "$RUNNER_DIR/svc.sh" ]]; then
 fi
 
 # --- 真实进程（Runner.Listener，issue-24 R3）---
+# 用 ps 而非 pgrep 检测：CI job 环境实测 pgrep 匹配不到 Listener（原因见
+# runner-恢复记录），ps -eo args 全局可见更可靠。
 process_present=false
-if command -v pgrep &>/dev/null; then
-    if pgrep -f "Runner.Listener" >/dev/null 2>&1; then
-        process_present=true
-    fi
-else
-    # pgrep 缺失时无法核验进程：按 R3 一致性要求报 UNHEALTHY（github 侧由 gh 兜底）
-    process_present=false
+if ps -eo args 2>/dev/null | grep -F "Runner.Listener" | grep -v grep >/dev/null; then
+    process_present=true
 fi
 # 诊断（仅失败时输出，不污染正常路径）
 if [[ "$process_present" == "false" ]]; then
-    echo "diag: pgrep='$(command -v pgrep 2>/dev/null || echo MISSING)'" >&2
+    echo "diag: ps -eo args | grep Runner.Listener → $(ps -eo args 2>/dev/null | grep -F 'Runner.Listener' | grep -v grep | head -3 | tr '\n' ' | ')" >&2
     echo "diag: pgrep -f 'Runner.Listener' → $(pgrep -f 'Runner.Listener' 2>&1 | head -3 | tr '\n' ' ')" >&2
-    echo "diag: ps runner 进程树 → $(ps -eo pid,ppid,args 2>/dev/null | grep -iE 'Runner|actions-runner' | grep -v grep | head -5 | tr '\n' ' | ')" >&2
+    echo "diag: ps 全部 runner 相关（不截断）→ $(ps -eo pid,ppid,args 2>/dev/null | grep -iE 'Runner|actions-runner' | grep -v grep | tr '\n' ' | ')" >&2
     echo "diag: HOME=$HOME RUNNER_DIR=$RUNNER_DIR" >&2
 fi
 
