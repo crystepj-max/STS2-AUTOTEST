@@ -3,9 +3,10 @@
 import asyncio
 import json
 import signal
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol
 from sts2_autotest.common.errors import ErrorCategory, STS2Error

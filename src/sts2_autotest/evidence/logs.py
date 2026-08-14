@@ -10,7 +10,7 @@ import re
 import shutil
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sts2_autotest.common.logging import get_logger
@@ -118,7 +118,7 @@ class LogCollector:
     @classmethod
     def from_config(
         cls, output_dir: Path, settings: LogCollectorSettings
-    ) -> "LogCollector":
+    ) -> LogCollector:
         """Construct LogCollector from a LogCollectorSettings protocol instance."""
         return cls(
             output_dir,
@@ -203,7 +203,7 @@ class LogCollector:
             return LogCollectionResult(source_path=log_path)
 
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         ms = now.microsecond // 1000
         dest = self._output_dir / f"{case_id}_tail_{timestamp}_{ms:03d}.log"
@@ -425,7 +425,7 @@ class LogCollector:
         Returns None if the file could not be read (locked + no backup).
         """
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         ms = now.microsecond // 1000
         dest = self._output_dir / f"{case_id}_{timestamp}_{ms:03d}.log"
@@ -456,7 +456,7 @@ class LogCollector:
     def _copy_log(self, log_path: Path, case_id: str) -> Path:
         """Copy log file to evidence output directory."""
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         ms = now.microsecond // 1000
         dest = self._output_dir / f"{case_id}_{timestamp}_{ms:03d}.log"
@@ -468,7 +468,7 @@ class LogCollector:
     ) -> Path:
         """Write filtered log entries to evidence output directory."""
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         ms = now.microsecond // 1000
         dest = self._output_dir / f"{case_id}_filtered_{timestamp}_{ms:03d}.log"

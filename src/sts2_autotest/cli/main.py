@@ -16,9 +16,10 @@ import subprocess
 import sys
 import time
 import zipfile
-from datetime import datetime, timezone
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Literal, Sequence, cast
+from typing import Any, Literal, cast
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
 from sts2_autotest.cli import mcp_server
@@ -603,7 +604,7 @@ def _final_state_snapshot(adapter: Any, loop: Any, state: Any) -> dict[str, Any]
         ),
         "has_new_run_action": any(name in actions for name in _NEW_RUN_ACTIONS),
         "state_timestamp": view.get("timestamp"),
-        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "captured_at": datetime.now(UTC).isoformat(),
     }
     if source == "state_reported":
         snapshot["actions_note"] = (
@@ -1590,9 +1591,9 @@ def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> i
 
 
 def datetime_now_iso() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def status_cmd(args: Any) -> int:

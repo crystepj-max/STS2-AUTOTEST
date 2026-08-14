@@ -10,7 +10,7 @@ import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
@@ -160,7 +160,7 @@ class GenericJourneys:
         if self._last_snapshot is None or _fingerprint(self._last_snapshot) != _fingerprint(payload):
             self._last_observed_change = screen or "UNKNOWN"
             self._scene_trace.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "screen": screen,
                 "state": payload,
             })
@@ -207,7 +207,7 @@ class GenericJourneys:
             "steps": self._steps,
             "recovering": False,
             "elapsed_ms": int((time.monotonic() - self._started) * 1000),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         self._progress_callback(payload)
 
@@ -235,7 +235,7 @@ class GenericJourneys:
         self._last_action = action
         after = await self.snapshot()
         self._operations.append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "action": action,
             "params": params or {},
             "status": getattr(result, "status", "unknown"),
@@ -250,7 +250,7 @@ class GenericJourneys:
             map_before = before.get("map") or {}
             map_after = after.get("map") or {}
             self._map_route.append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "before_coordinate": map_before.get("current_node") or map_before.get("current_coordinate"),
                 "available_nodes": map_before.get("available_nodes") or map_before.get("travelable_coords") or [],
                 "selected": params or {},

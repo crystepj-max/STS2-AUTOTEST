@@ -5,7 +5,8 @@ points during the test lifecycle.
 """
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 _logger = logging.getLogger("sts2_autotest.pytest_plugin.hooks")
 

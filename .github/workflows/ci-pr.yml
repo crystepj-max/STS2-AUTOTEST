@@ -13,113 +13,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 并行阶段 1：代码质量检查 ──
-
-  lint:
-    name: Lint (ruff)
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Checkout historical baseline
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: .ci-baseline
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install project
-        run: pip install -e ".[dev]"
-      - name: Check no new Ruff debt
-        run: python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir .
-
-  mypy:
-    name: Type Check (mypy)
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Checkout historical baseline
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: .ci-baseline
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install project
-        run: pip install -e ".[dev,visual]"
-      - name: Check no new mypy debt
-        run: python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir .
-
-  lint-imports:
-    name: Import Layer Check
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install project
-        run: pip install -e ".[dev]"
-      - name: Run lint-imports
-        run: lint-imports
-
-  # ── 阶段 2：单元测试（等待阶段 1 全部通过）──
-
-  unit-test:
-    name: Unit Tests
-    needs: [lint, mypy, lint-imports]
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install project
-        run: pip install -e ".[dev]"
-      - name: Check no new unit-test failures
-        run: python .github/scripts/check_pytest_baseline.py
-      - name: Upload JUnit artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: junit-unit-${{ matrix.os }}
-          path: junit-unit.xml
-
-  # ── 阶段 3：真实 CLI 集成测试（需要自托管 Mac）──
-
-  cli-integration:
-    name: CLI Integration Tests
-    needs: [unit-test]
+  validation:
+    name: PR Check Summary
     runs-on: ["self-hosted", "macos", "autotest"]
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Install project
+
+      - name: Checkout historical baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .ci-baseline
+
+      - name: Verify Python 3.11
+        id: python
+        continue-on-error: true
+        run: python3.11 --version
+
+      - name: Install project dev dependencies
+        id: install
+        if: always() && steps.python.outcome == 'success'
+        continue-on-error: true
         run: |
           python3.11 -m venv .venv-ci
           .venv-ci/bin/python -m pip install -e ".[dev]"
+          echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+
+      - name: Check no new Ruff debt
+        id: ruff
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: .venv-ci/bin/python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir .
+
+      - name: Run lint-imports
+        id: imports
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: .venv-ci/bin/lint-imports
+
+      - name: Check no new unit-test failures
+        id: unit
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: .venv-ci/bin/python .github/scripts/check_pytest_baseline.py
+
       - name: Verify real STS2 CLI is available
+        id: cli_check
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
         run: |
           .venv-ci/bin/python - <<'PY'
           from sts2_autotest.adapters.discovery import discover_sts2_cli
@@ -132,32 +74,77 @@ jobs:
               )
           print(f"Using STS2 CLI: {cli_path}")
           PY
+
       - name: Run CLI-only integration tests
+        id: cli_tests
+        if: always() && steps.cli_check.outcome == 'success'
+        continue-on-error: true
         run: .venv-ci/bin/python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
-      - name: Upload JUnit artifact
+
+      - name: Upload unit JUnit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-unit-macos-self-hosted
+          path: junit-unit.xml
+
+      - name: Upload integration JUnit artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-integration
           path: junit-integration.xml
 
-  # ── Job Summary ──
+      - name: Install visual dependency for mypy
+        id: visual
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: .venv-ci/bin/python -m pip install -e ".[visual]"
 
-  summary:
-    name: PR Check Summary
-    needs: [lint, mypy, lint-imports, unit-test, cli-integration]
-    if: always()
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
+      - name: Check no new mypy debt
+        id: mypy
+        if: always() && steps.visual.outcome == 'success'
+        continue-on-error: true
+        run: .venv-ci/bin/python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir .
+
       - name: Generate summary
+        if: always()
         run: |
-          echo "## B11 CI — PR Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| mypy | ${{ needs.mypy.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| lint-imports | ${{ needs['lint-imports'].result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| unit-test | ${{ needs['unit-test'].result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| cli-integration | ${{ needs['cli-integration'].result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "## STS2-AUTOTEST — PR Validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Daily PR validation currently runs only on the existing self-hosted Mac; GitHub-hosted Linux/Windows duplication is temporarily disabled." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Python 3.11 | ${{ steps.python.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Install dev dependencies | ${{ steps.install.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Ruff baseline | ${{ steps.ruff.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| mypy baseline | ${{ steps.mypy.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Import layer | ${{ steps.imports.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Unit tests | ${{ steps.unit.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Real STS2 CLI discovery | ${{ steps.cli_check.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CLI integration | ${{ steps.cli_tests.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce validation result
+        if: always()
+        run: |
+          failed=0
+          check() {
+            name="$1"
+            outcome="$2"
+            if [ "$outcome" != "success" ]; then
+              echo "::error::$name outcome: $outcome"
+              failed=1
+            fi
+          }
+
+          check "Python 3.11" "${{ steps.python.outcome }}"
+          check "Install dev dependencies" "${{ steps.install.outcome }}"
+          check "Ruff baseline" "${{ steps.ruff.outcome }}"
+          check "mypy baseline" "${{ steps.mypy.outcome }}"
+          check "Import layer" "${{ steps.imports.outcome }}"
+          check "Unit tests" "${{ steps.unit.outcome }}"
+          check "Real STS2 CLI discovery" "${{ steps.cli_check.outcome }}"
+          check "CLI integration" "${{ steps.cli_tests.outcome }}"
+
+          exit "$failed"

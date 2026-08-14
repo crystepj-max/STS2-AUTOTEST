@@ -10,7 +10,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sts2_autotest import __version__
@@ -119,7 +119,7 @@ class EvidencePackager:
             ValueError: compatibility_block_reason 非空但 run_result 不是 "blocked"。
         """
         if pack_id is None:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             pack_id = now.strftime("run_%Y%m%dT%H%M%S")
 
         reason_stripped = compatibility_block_reason.strip() if compatibility_block_reason else ""

@@ -134,7 +134,7 @@ def test_select_deck_card_cursor_exhausts_then_proceed_or_none() -> None:
 # ── 3) 选择后继续：progress_until 选不同索引后离开 CARD_REWARD ──
 
 
-def _make_deck_get(issued: list[int], n_cards: int = 3) -> "callable":
+def _make_deck_get(issued: list[int], n_cards: int = 3) -> callable:
     """构造一个 get_state：前 n_cards 次 select 仍停留 CARD_REWARD，之后到达 MAP。"""
 
     class _Get:

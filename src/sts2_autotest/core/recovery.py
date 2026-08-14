@@ -6,9 +6,10 @@ DefaultRecoveryStrategy: pure-function decide() + async execute().
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger

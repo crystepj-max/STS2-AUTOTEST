@@ -20,7 +20,7 @@ import json
 import re
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthStatus
@@ -288,7 +288,7 @@ class CliModAdapter:
         控制台执行；CliMod 走 sts2 CLI 子进程，没有 run_console_command 通道。
         诚实地报告"未支持"，避免只按配置声明能力。此探测无副作用。
         """
-        checked_at = datetime.now(timezone.utc).isoformat()
+        checked_at = datetime.now(UTC).isoformat()
         return DebugVerification(
             configured=False,
             verified=False,
@@ -722,7 +722,7 @@ class CliModAdapter:
         return {
             "game_state": state,
             "available_actions": actions,
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": datetime.now(UTC),
         }
 
     # ── version handshake ────────────────────────────────────

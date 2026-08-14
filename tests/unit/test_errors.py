@@ -1,6 +1,6 @@
 """Tests for common/errors.py — ErrorCategory, ErrorSubType, STS2Error."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -96,13 +96,13 @@ class TestSTS2Error:
         assert err.detail == detail
 
     def test_timestamp_defaults_to_utc_now(self) -> None:
-        before = datetime.now(timezone.utc)
+        before = datetime.now(UTC)
         err = STS2Error(category=ErrorCategory.GAME_ERROR, message="test")
-        after = datetime.now(timezone.utc)
+        after = datetime.now(UTC)
         assert before <= err.timestamp <= after
 
     def test_custom_timestamp(self) -> None:
-        ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
         err = STS2Error(
             category=ErrorCategory.CRASH_ERROR,
             message="test",
@@ -117,7 +117,7 @@ class TestSTS2Error:
             raise err
 
     def test_to_dict_structure(self) -> None:
-        ts = datetime(2026, 5, 10, 8, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2026, 5, 10, 8, 0, 0, tzinfo=UTC)
         err = STS2Error(
             category=ErrorCategory.ASSERTION_ERROR,
             message="HP mismatch",
