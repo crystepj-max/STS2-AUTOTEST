@@ -230,6 +230,28 @@ else
     fail "并发写入行数异常（期望 2 实际 $LINE_COUNT_C）: $(cat "$OPS_FILE_C" 2>/dev/null)"
 fi
 
+# --- 用例 19（P2）：活持有者的锁不回收（进程卡顿/休眠时 kill -0 仍成功，不得按年龄回收）---
+test_begin "stop: 活持有者的锁不回收（即使锁龄超限）"
+FAKE="$(new_fake_runner running)"
+OPS_DIR_L="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir-l.XXXXXX")"
+OPS_FILE_L="$OPS_DIR_L/ops.jsonl"
+printf '{"ts": "2026-08-14T00:00:00Z", "op": "manual-stop"}\n' > "$OPS_FILE_L"
+# 预置锁：holder 是当前 shell 的 PID（活进程）+ 10 分钟前的超龄时间戳
+mkdir "$OPS_DIR_L/.ops.lock"
+printf '%s %s\n' "$$" "$(( $(date +%s) - 600 ))" > "$OPS_DIR_L/.ops.lock/holder"
+LINE_BEFORE_L="$(wc -l < "$OPS_FILE_L" | tr -d ' ')"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE_L" RUN_CTL_OPS_TIMEOUT=3 \
+    RUN_CTL_OPS_STALE=300 run_ctl "$FAKE" stop
+assert_eq "$CTL_RC" "0" "活持有者锁存在时 stop 正常执行（等待后跳过标记写入）"
+LINE_AFTER_L="$(wc -l < "$OPS_FILE_L" | tr -d ' ')"
+assert_eq "$LINE_AFTER_L" "$LINE_BEFORE_L" "活持有者锁不被回收（ops 不新增行）"
+if [[ -d "$OPS_DIR_L/.ops.lock" ]]; then
+    pass "活持有者锁保留（未被年龄回收删除）"
+else
+    fail "活持有者锁被误删（应按年龄回收仅限死进程）"
+fi
+rmdir "$OPS_DIR_L/.ops.lock" 2>/dev/null || true
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1

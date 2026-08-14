@@ -123,13 +123,12 @@ log_operation() {
         reclaim=""
         orig_inode=""   # 陈旧判定时绑定的锁实例标识（inode，认领前记录）
         if [[ -f "$lock/holder" ]]; then
-            # 有持有者标识：进程已死或锁超龄 → 认领回收
+            # 有持有者标识：仅回收「持有进程已死」的锁。
+            # 活进程的锁永不按年龄回收（进程可能因 I/O 卡顿/休眠超时，
+            # kill -0 仍成功——按年龄回收会删除有效锁，原持有者恢复后覆盖新记录）。
             holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
-            holder_ts="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2)"
             if ! kill -0 "${holder_pid:-0}" 2>/dev/null; then
                 reclaim="持有进程 ${holder_pid:-?} 已不存在"
-            elif [[ -n "$holder_ts" ]] && [[ "$(( now_ts - holder_ts ))" -gt "$stale_after" ]]; then
-                reclaim="锁龄超过 ${stale_after}s"
             fi
         else
             # 无 holder 文件（mkdir 后写 holder 前中断残留）：按锁目录 mtime 安全年龄回收
