@@ -78,6 +78,8 @@ fi
 if [[ "$process_present" == "false" ]]; then
     echo "diag: pgrep='$(command -v pgrep 2>/dev/null || echo MISSING)'" >&2
     echo "diag: pgrep -f 'Runner.Listener' → $(pgrep -f 'Runner.Listener' 2>&1 | head -3 | tr '\n' ' ')" >&2
+    echo "diag: ps runner 进程树 → $(ps -eo pid,ppid,args 2>/dev/null | grep -iE 'Runner|actions-runner' | grep -v grep | head -5 | tr '\n' ' | ')" >&2
+    echo "diag: HOME=$HOME RUNNER_DIR=$RUNNER_DIR" >&2
 fi
 
 # --- GitHub 侧状态（gh api runners，失败 → unknown，issue-24 R3）---
