@@ -90,16 +90,16 @@ DEFAULT_RULESET_JSON = json.dumps(
 DEFAULT_JOBS_JSON = json.dumps(
     {"jobs": [{"name": "PR Check Summary", "conclusion": "success"}]}
 )
-# 原因链接资源的评论：台账 authorization_comment_id 引用的预存授权记录
-# （真实 Issue #23 的 5289650944，04:56:31Z，早于绕过操作 05:50:11Z）
-DEFAULT_COMMENTS_JSON = json.dumps(
-    [
-        {
-            "id": 5289650944,
-            "created_at": "2026-08-14T04:56:31Z",
-            "body": "紧急绕过有明确权限、原因记录和事后补验要求",
-        }
-    ]
+# 授权评论（按 ID 直接回读）：台账 authorization_comment_id 引用的预存授权记录
+# （真实 Issue #23 的 5289650944，04:56:31Z，作者 crystepj-max，早于绕过操作 05:50:11Z）
+DEFAULT_COMMENT_JSON = json.dumps(
+    {
+        "id": 5289650944,
+        "issue_url": "https://api.github.com/repos/crystepj-max/STS2-AUTOTEST/issues/23",
+        "user": {"login": "crystepj-max"},
+        "created_at": "2026-08-14T04:56:31Z",
+        "body": "紧急绕过有明确权限、原因记录和事后补验要求",
+    }
 )
 # branch protection 层（T7 演练曾临时解除 enforce_admins，须逐层回读）
 DEFAULT_BP_JSON = json.dumps(
@@ -151,7 +151,7 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         *"/rulesets/"*) echo "$FAKE_RULESET_JSON" ;;
         *"/branches/main/protection"*) echo "$FAKE_BP_JSON" ;;
         *"/compare/"*) echo "$FAKE_COMPARE_JSON" ;;
-        *"/issues/"*"/comments"*) echo "$FAKE_COMMENTS_JSON" ;;
+        *"/issues/comments/"*) echo "$FAKE_COMMENT_JSON" ;;
         *"/issues/"*) "${FAKE_GH_PYTHON:-python3}" -c "import json,os,sys; print(json.dumps({'body': sys.stdin.read(), 'created_at': os.environ.get('FAKE_ISSUE_CREATED_AT', '2026-08-14T00:00:00Z')}))" <<< "$FAKE_ISSUE_BODY" ;;
         *) echo "fake gh: 未预期的 URL: $url" >&2; exit 1 ;;
     esac
@@ -214,7 +214,7 @@ def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]
     env["FAKE_GH_PYTHON"] = overrides.pop("FAKE_GH_PYTHON", sys.executable)
     env["FAKE_GH_FAIL_FRAGMENT"] = overrides.pop("FAKE_GH_FAIL_FRAGMENT", "")
     env["FAKE_ISSUE_CREATED_AT"] = overrides.pop("FAKE_ISSUE_CREATED_AT", "2026-08-14T00:00:00Z")
-    env["FAKE_COMMENTS_JSON"] = overrides.pop("FAKE_COMMENTS_JSON", DEFAULT_COMMENTS_JSON)
+    env["FAKE_COMMENT_JSON"] = overrides.pop("FAKE_COMMENT_JSON", DEFAULT_COMMENT_JSON)
     env["FAKE_RUN_JSON"] = overrides.pop("FAKE_RUN_JSON", DEFAULT_RUN_JSON)
     env["FAKE_JOBS_JSON"] = overrides.pop("FAKE_JOBS_JSON", DEFAULT_JOBS_JSON)
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
@@ -760,16 +760,9 @@ def test_gate_detects_authorization_not_bound_to_bypass(tmp_path: Path) -> None:
 )
 def test_gate_detects_missing_pre_operation_authorization_comment(tmp_path: Path) -> None:
     """台账引用的授权评论晚于操作时对账门禁应失败（时间戳授权记录须先于绕过）。"""
-    comments_json = json.dumps(
-        [
-            {
-                "id": 5289650944,
-                "created_at": "2026-08-14T07:00:00Z",  # 晚于操作
-                "body": "紧急绕过事后记录",
-            }
-        ]
-    )
-    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENTS_JSON=comments_json)
+    comment_json = json.loads(DEFAULT_COMMENT_JSON)
+    comment_json["created_at"] = "2026-08-14T07:00:00Z"  # 晚于操作
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENT_JSON=json.dumps(comment_json))
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "授权评论" in proc.stdout + proc.stderr
@@ -780,20 +773,29 @@ def test_gate_detects_missing_pre_operation_authorization_comment(tmp_path: Path
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
 def test_gate_detects_authorization_comment_missing(tmp_path: Path) -> None:
-    """台账引用的授权评论不存在时对账门禁应失败。"""
-    comments_json = json.dumps(
-        [
-            {
-                "id": 999999,
-                "created_at": "2026-08-14T04:56:31Z",
-                "body": "紧急绕过有明确权限、原因记录和事后补验要求",
-            }
-        ]
+    """台账引用的授权评论不存在（按 ID 回读 404）时对账门禁应失败。"""
+    env = _base_env(
+        _fake_gh(tmp_path),
+        tmp_path,
+        FAKE_GH_FAIL_FRAGMENT="issues/comments/5289650944",
     )
-    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENTS_JSON=comments_json)
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "授权评论" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_authorization_comment_wrong_author(tmp_path: Path) -> None:
+    """授权评论非仓库所有者发布时对账门禁应失败（授权人仅限 crystepj-max）。"""
+    comment_json = json.loads(DEFAULT_COMMENT_JSON)
+    comment_json["user"] = {"login": "unauthorized-user"}
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENT_JSON=json.dumps(comment_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "仓库所有者发布" in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(

@@ -374,7 +374,7 @@ fi
 # 故 Python 代码经 $(cat <<'PY') 取出后以 -c 传入，不能靠 stdin 传递脚本。
 if [[ -f "$EVIDENCE_JSON" ]]; then
     ledger_code="$(cat <<'PY'
-import json, pathlib, psutil, re, subprocess, sys, datetime
+import json, os, pathlib, psutil, re, signal, subprocess, sys, datetime
 
 evidence_json, evidence_dir, repo, timeout = sys.argv[1:5]
 timeout = float(timeout)
@@ -391,14 +391,20 @@ def check(ok: bool, msg: str) -> None:
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """执行外部调用并整树超时回收（psutil 树清理，防遗留后代进程）。
+    """执行外部调用并整树超时回收（独立进程组 + psutil 树清理，防遗留后代进程）。
 
     显式 UTF-8 解码：gh API 输出可能含中文标题/正文，Windows 默认代码页解码会抛错。
     """
-    proc = psutil.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
+    proc = psutil.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
+        # 父进程已退出但后代被重新托管后 children() 为空——按进程组回收（POSIX）
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (AttributeError, ProcessLookupError, OSError):
+            pass
         try:
             for child in proc.children(recursive=True):
                 try:
@@ -461,32 +467,35 @@ for i, e in enumerate(ledger):
                 issue_data.get("created_at", "") <= e.get("completed_at", ""),
                 f"{tag} 授权记录时间早于操作（created_at={issue_data.get('created_at')}）",
             )
-            # 时间戳授权记录：台账须引用具体评论 ID（不可变记录），该评论须早于
-            # 操作完成时间且正文含「紧急绕过」条款——Issue 正文事后补写会被较早的
-            # created_at 掩盖，评论 ID + 时间戳可验证且不可抵赖
+            # 时间戳授权记录：台账须引用具体评论 ID（不可变记录），按 ID 直接回读
+            # （无分页问题），核验归属、发布者（仓库所有者）、时间早于操作、正文含
+            # 「紧急绕过」条款——Issue 正文事后补写会被较早的 created_at 掩盖，
+            # 评论 ID + 时间戳可验证且不可抵赖
             auth_cid = e.get("authorization_comment_id")
             if not auth_cid:
                 check(False, f"{tag} 缺少 authorization_comment_id（须引用具体授权评论）")
             else:
-                cmts = run(["gh", "api", f"repos/{repo}/issues/{m.group(1)}/comments"])
-                if cmts.returncode != 0:
-                    check(False, f"{tag} 拉取原因链接资源的评论失败")
+                cmt = run(["gh", "api", f"repos/{repo}/issues/comments/{auth_cid}"])
+                if cmt.returncode != 0:
+                    check(False, f"{tag} 授权评论 {auth_cid} 不存在")
                 else:
-                    auth_comment = next(
-                        (c for c in json.loads(cmts.stdout) if str(c.get("id")) == str(auth_cid)),
-                        None,
+                    auth_comment = json.loads(cmt.stdout)
+                    check(
+                        f"issues/{m.group(1)}" in auth_comment.get("issue_url", ""),
+                        f"{tag} 授权评论 {auth_cid} 属于原因链接资源（issue #{m.group(1)}）",
                     )
-                    if auth_comment is None:
-                        check(False, f"{tag} 授权评论 {auth_cid} 不存在")
-                    else:
-                        check(
-                            auth_comment.get("created_at", "") <= e.get("completed_at", ""),
-                            f"{tag} 授权评论 {auth_cid} 早于操作（created_at={auth_comment.get('created_at')}）",
-                        )
-                        check(
-                            "紧急绕过" in auth_comment.get("body", ""),
-                            f"{tag} 授权评论 {auth_cid} 正文含紧急绕过条款",
-                        )
+                    check(
+                        auth_comment.get("user", {}).get("login") == "crystepj-max",
+                        f"{tag} 授权评论 {auth_cid} 由仓库所有者发布（{auth_comment.get('user', {}).get('login')}）",
+                    )
+                    check(
+                        auth_comment.get("created_at", "") <= e.get("completed_at", ""),
+                        f"{tag} 授权评论 {auth_cid} 早于操作（created_at={auth_comment.get('created_at')}）",
+                    )
+                    check(
+                        "紧急绕过" in auth_comment.get("body", ""),
+                        f"{tag} 授权评论 {auth_cid} 正文含紧急绕过条款",
+                    )
     check(bool(e.get("authorization_note")), f"{tag} 授权说明已记录")
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")
