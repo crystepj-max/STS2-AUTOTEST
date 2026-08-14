@@ -27,10 +27,13 @@ FAILED=0
 GATE_CMD_TIMEOUT="${CHECK_ENV_GITIGNORE_CMD_TIMEOUT:-10}"
 
 # run_timeout 使用的 Python 解释器：优先项目 venv（psutil 依赖的安装位置），
+# Windows venv（.venv/Scripts/python.exe）与 Unix venv（.venv/bin/python3）均识别；
 # 可用 CHECK_ENV_GITIGNORE_PYTHON 显式指定；psutil 缺失时明确失败而非静默挂起。
 GATE_PYTHON="${CHECK_ENV_GITIGNORE_PYTHON:-}"
 if [[ -z "$GATE_PYTHON" ]]; then
-    if [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
+    if [[ -x "$REPO_ROOT/.venv/Scripts/python.exe" ]]; then
+        GATE_PYTHON="$REPO_ROOT/.venv/Scripts/python.exe"
+    elif [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
         GATE_PYTHON="$REPO_ROOT/.venv/bin/python3"
     else
         GATE_PYTHON="python3"

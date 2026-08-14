@@ -42,6 +42,8 @@ DEFAULT_CHECKS_JSON = json.dumps(
 DEFAULT_RULESET_JSON = json.dumps(
     {
         "enforcement": "active",
+        "target": "branch",
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
         "bypass_actors": [],
         "current_user_can_bypass": "never",
         "rules": [
@@ -60,6 +62,10 @@ DEFAULT_RULESET_JSON = json.dumps(
             },
         ],
     }
+)
+# 补验 run 的 jobs：含成功的 PR Check Summary 才算等价验收
+DEFAULT_JOBS_JSON = json.dumps(
+    {"jobs": [{"name": "PR Check Summary", "conclusion": "success"}]}
 )
 # branch protection 层（T7 演练曾临时解除 enforce_admins，须逐层回读）
 DEFAULT_BP_JSON = json.dumps(
@@ -95,6 +101,7 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         shift
     done
     case "$url" in
+        *"/actions/runs/"*"/jobs"*) echo "$FAKE_JOBS_JSON" ;;
         *"/actions/runs/"*) echo "$FAKE_RUN_JSON" ;;
         *"/commits/"*"/check-runs") echo "$FAKE_CHECKS_JSON" ;;
         *"/pulls/"*) echo "$FAKE_PR_JSON" ;;
@@ -161,6 +168,7 @@ def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]
     env = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     env["FAKE_RUN_JSON"] = overrides.pop("FAKE_RUN_JSON", DEFAULT_RUN_JSON)
+    env["FAKE_JOBS_JSON"] = overrides.pop("FAKE_JOBS_JSON", DEFAULT_JOBS_JSON)
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
     env["FAKE_PR_JSON"] = overrides.pop("FAKE_PR_JSON", DEFAULT_PR_JSON)
     env["FAKE_RULESET_JSON"] = overrides.pop("FAKE_RULESET_JSON", DEFAULT_RULESET_JSON)
@@ -318,3 +326,31 @@ def test_gate_detects_bp_missing_required_check(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "required_check" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_not_covering_default_branch(tmp_path: Path) -> None:
+    """ruleset 条件不再覆盖默认分支时对账门禁应失败（规则内容再对也只在其他分支生效）。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["conditions"]["ref_name"]["include"] = ["release/*"]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RULESET_JSON=json.dumps(ruleset_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "covers_default" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_post_verification_without_gate_job(tmp_path: Path) -> None:
+    """补验 run 不含成功的 PR Check Summary job 时对账门禁应失败（轻量 run 不构成等价验收）。"""
+    jobs_json = json.loads(DEFAULT_JOBS_JSON)
+    jobs_json["jobs"] = [{"name": "docs-only", "conclusion": "success"}]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_JOBS_JSON=json.dumps(jobs_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "PR Check Summary" in proc.stdout + proc.stderr

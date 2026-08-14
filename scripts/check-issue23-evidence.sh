@@ -30,11 +30,15 @@ EVIDENCE_JSON="${CHECK_ISSUE23_EVIDENCE:-$REPO_ROOT/.agent-runs/issue-23-main-me
 EVIDENCE_DIR="$(dirname "$EVIDENCE_JSON")"
 GOV_DOC="$REPO_ROOT/docs/process/main-merge-protection.md"
 CMD_TIMEOUT="${CHECK_ISSUE23_CMD_TIMEOUT:-15}"
-# run_timeout 使用的 Python 解释器：优先项目 venv（psutil 依赖的安装位置），
-# 可用 CHECK_ISSUE23_PYTHON 显式指定；psutil 缺失时明确失败而非静默挂起。
+# 项目 Python 解释器（run_timeout 与内嵌 python 统一使用）：优先项目 venv
+# （psutil 依赖的安装位置），Windows venv（.venv/Scripts/python.exe）与
+# Unix venv（.venv/bin/python3）均识别；可用 CHECK_ISSUE23_PYTHON 显式指定；
+# psutil 缺失时明确失败而非静默挂起。
 GATE_PYTHON="${CHECK_ISSUE23_PYTHON:-}"
 if [[ -z "$GATE_PYTHON" ]]; then
-    if [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
+    if [[ -x "$REPO_ROOT/.venv/Scripts/python.exe" ]]; then
+        GATE_PYTHON="$REPO_ROOT/.venv/Scripts/python.exe"
+    elif [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
         GATE_PYTHON="$REPO_ROOT/.venv/bin/python3"
     else
         GATE_PYTHON="python3"
@@ -83,7 +87,7 @@ PY
 
 # 提取 JSON 字段：json_field '<json>' '<python 表达式（d 为解析结果）>'
 json_field() {
-    printf '%s' "$1" | python3 -c "import json,sys; d=json.load(sys.stdin); print($2)"
+    printf '%s' "$1" | "$GATE_PYTHON" -c "import json,sys; d=json.load(sys.stdin); print($2)"
 }
 
 fail() {
@@ -99,8 +103,8 @@ if ! command -v gh >/dev/null 2>&1; then
     echo "FAIL: 需要 gh CLI（远端 API 对账），未找到" >&2
     exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "FAIL: 需要 python3（JSON 解析），未找到" >&2
+if ! "$GATE_PYTHON" -c "import psutil" 2>/dev/null; then
+    echo "FAIL: 需要带 psutil 的 Python（项目依赖）；请使用项目 venv（.venv/bin/python3 或 .venv/Scripts/python.exe）或设置 CHECK_ISSUE23_PYTHON" >&2
     exit 1
 fi
 
@@ -159,10 +163,14 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
         and "PR Check Summary" in [c.get("context") for c in r.get("parameters", {}).get("required_status_checks", [])]
         for r in d.get("rules", [])
     )).lower()')"
-    if [[ "$enforcement" == "active" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" ]]; then
-        pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、必填 PR Check Summary、线程=${thread}、无绕过者"
+    # ruleset 必须实际覆盖默认分支（target=branch 且 conditions 包含 ~DEFAULT_BRANCH），
+    # 否则规则内容再对也只是覆盖了其他分支
+    target="$(json_field "$ruleset_json" 'd.get("target", "missing")')"
+    covers_default="$(json_field "$ruleset_json" 'str("~DEFAULT_BRANCH" in d.get("conditions", {}).get("ref_name", {}).get("include", [])).lower()')"
+    if [[ "$enforcement" == "active" && "$target" == "branch" && "$covers_default" == "true" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" ]]; then
+        pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、覆盖默认分支、必填 PR Check Summary、线程=${thread}、无绕过者"
     else
-        fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、required_check_ok=${rsc_ok}、thread=${thread}、bypass_actors_ok=${bypass_ok}"
+        fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、target=${target}、covers_default=${covers_default}、required_check_ok=${rsc_ok}、thread=${thread}、bypass_actors_ok=${bypass_ok}"
     fi
 else
     fail "拉取 ruleset $RULESET_ID 失败"
@@ -184,7 +192,7 @@ else
 fi
 
 # --- 4. 治理文档 Markdown 相对链接 ---
-broken_links="$(python3 - "$GOV_DOC" <<'PY'
+broken_links="$("$GATE_PYTHON" - "$GOV_DOC" <<'PY'
 import re, sys, pathlib
 doc = pathlib.Path(sys.argv[1])
 base = doc.parent
@@ -262,6 +270,20 @@ for i, e in enumerate(ledger):
                 run_data.get("head_sha") == pv.get("head_sha"),
                 f"{tag} 补验 run head {run_data.get('head_sha')} 与台账一致",
             )
+            # 补验 run 必须真实执行等价门禁：含成功的 PR Check Summary job
+            # （仅 conclusion=success 的任意轻量 run 不构成等价验收）
+            jobs = run(["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs"])
+            if jobs.returncode != 0:
+                check(False, f"{tag} 拉取补验 run {run_id} 的 jobs 失败")
+            else:
+                job_list = json.loads(jobs.stdout).get("jobs", [])
+                summary_job = next(
+                    (j for j in job_list if j.get("name") == "PR Check Summary"), None
+                )
+                check(
+                    summary_job is not None and summary_job.get("conclusion") == "success",
+                    f"{tag} 补验 run 含成功 PR Check Summary job（{summary_job.get('conclusion') if summary_job else '缺失'}）",
+                )
             try:
                 # 部分 run 的 completed_at 为空，回退 updated_at（实测 31774866515 用 updated_at）
                 done_at = run_data.get("completed_at") or run_data.get("updated_at") or ""
@@ -301,7 +323,7 @@ for i, e in enumerate(ledger):
 sys.exit(failed)
 PY
 )"
-    ledger_out="$(run_timeout python3 -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$REPO" "$CMD_TIMEOUT" 2>&1)"
+    ledger_out="$(run_timeout "$GATE_PYTHON" -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$REPO" "$CMD_TIMEOUT" 2>&1)"
     if [[ $? -eq 0 ]]; then
         pass "绕过台账核验全部通过"
     else
