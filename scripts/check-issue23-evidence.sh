@@ -168,10 +168,14 @@ if [[ -f "$EVIDENCE_JSON" ]]; then
     else
         actual_env="$(printf '%s\n' "$ls_output" | grep -E '(^|/)\.env($|\.)|^\.env' | sort)"
         expected_env="$(json_field "$(cat "$EVIDENCE_JSON")" '"\\n".join(sorted(d["env_guard"]["tracked_env_files"]))' | sort)"
-        if [[ "$actual_env" == "$expected_env" ]]; then
-            pass "实际跟踪的环境文件与证据 JSON 一致：$(echo "$actual_env" | tr '\n' ' ')"
-        else
+        if [[ "$actual_env" != "$expected_env" ]]; then
             fail "实际跟踪的环境文件与证据 JSON 不一致：实际=[$(echo "$actual_env" | tr '\n' ' ')] 证据=[$(echo "$expected_env" | tr '\n' ' ')]"
+        elif [[ "$actual_env" != ".env.example" ]]; then
+            # 允许列表约束（与 check-env-gitignore.sh 一致）：即使两侧协调一致，
+            # 强制跟踪 .env 等非模板文件仍必须失败
+            fail "实际跟踪的环境文件含非模板条目（只允许 .env.example）：$(echo "$actual_env" | tr '\n' ' ')"
+        else
+            pass "实际跟踪的环境文件与证据 JSON 一致且仅含模板：$(echo "$actual_env" | tr '\n' ' ')"
         fi
     fi
 fi
@@ -457,6 +461,19 @@ for i, e in enumerate(ledger):
                 issue_data.get("created_at", "") <= e.get("completed_at", ""),
                 f"{tag} 授权记录时间早于操作（created_at={issue_data.get('created_at')}）",
             )
+            # 时间戳授权记录：资源上须存在早于操作完成时间的评论且正文含「紧急绕过」
+            # 条款——Issue 正文事后补写会被较早的 created_at 掩盖，评论时间戳可验证
+            cmts = run(["gh", "api", f"repos/{repo}/issues/{m.group(1)}/comments"])
+            if cmts.returncode != 0:
+                check(False, f"{tag} 拉取原因链接资源的评论失败")
+            else:
+                pre_op_auth = [
+                    c
+                    for c in json.loads(cmts.stdout)
+                    if c.get("created_at", "") <= e.get("completed_at", "")
+                    and "紧急绕过" in c.get("body", "")
+                ]
+                check(bool(pre_op_auth), f"{tag} 存在早于操作的时间戳授权记录（评论含紧急绕过）")
     check(bool(e.get("authorization_note")), f"{tag} 授权说明已记录")
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")

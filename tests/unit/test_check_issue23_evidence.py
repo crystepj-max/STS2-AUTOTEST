@@ -90,6 +90,15 @@ DEFAULT_RULESET_JSON = json.dumps(
 DEFAULT_JOBS_JSON = json.dumps(
     {"jobs": [{"name": "PR Check Summary", "conclusion": "success"}]}
 )
+# 原因链接资源的评论：含早于操作的「紧急绕过」授权记录（时间戳可验证）
+DEFAULT_COMMENTS_JSON = json.dumps(
+    [
+        {
+            "created_at": "2026-08-14T04:56:31Z",
+            "body": "紧急绕过有明确权限、原因记录和事后补验要求",
+        }
+    ]
+)
 # branch protection 层（T7 演练曾临时解除 enforce_admins，须逐层回读）
 DEFAULT_BP_JSON = json.dumps(
     {
@@ -140,6 +149,7 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         *"/rulesets/"*) echo "$FAKE_RULESET_JSON" ;;
         *"/branches/main/protection"*) echo "$FAKE_BP_JSON" ;;
         *"/compare/"*) echo "$FAKE_COMPARE_JSON" ;;
+        *"/issues/"*"/comments"*) echo "$FAKE_COMMENTS_JSON" ;;
         *"/issues/"*) "${FAKE_GH_PYTHON:-python3}" -c "import json,os,sys; print(json.dumps({'body': sys.stdin.read(), 'created_at': os.environ.get('FAKE_ISSUE_CREATED_AT', '2026-08-14T00:00:00Z')}))" <<< "$FAKE_ISSUE_BODY" ;;
         *) echo "fake gh: 未预期的 URL: $url" >&2; exit 1 ;;
     esac
@@ -202,6 +212,7 @@ def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]
     env["FAKE_GH_PYTHON"] = overrides.pop("FAKE_GH_PYTHON", sys.executable)
     env["FAKE_GH_FAIL_FRAGMENT"] = overrides.pop("FAKE_GH_FAIL_FRAGMENT", "")
     env["FAKE_ISSUE_CREATED_AT"] = overrides.pop("FAKE_ISSUE_CREATED_AT", "2026-08-14T00:00:00Z")
+    env["FAKE_COMMENTS_JSON"] = overrides.pop("FAKE_COMMENTS_JSON", DEFAULT_COMMENTS_JSON)
     env["FAKE_RUN_JSON"] = overrides.pop("FAKE_RUN_JSON", DEFAULT_RUN_JSON)
     env["FAKE_JOBS_JSON"] = overrides.pop("FAKE_JOBS_JSON", DEFAULT_JOBS_JSON)
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
@@ -739,6 +750,21 @@ def test_gate_detects_authorization_not_bound_to_bypass(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "本次绕过的授权记录" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_missing_pre_operation_authorization_comment(tmp_path: Path) -> None:
+    """原因链接资源上不存在早于操作的时间戳授权评论时对账门禁应失败。"""
+    comments_json = json.dumps(
+        [{"created_at": "2026-08-14T07:00:00Z", "body": "紧急绕过事后记录"}]  # 晚于操作
+    )
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENTS_JSON=comments_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "时间戳授权记录" in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(
