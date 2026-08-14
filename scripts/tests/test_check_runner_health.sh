@@ -29,16 +29,21 @@ echo
 exit 0
 FAKE_CURL
     chmod +x "$dir/curl"
-    # fake pgrep：默认存在 Runner.Listener 进程（R3 真实进程检查）
-    cat > "$dir/pgrep" <<'FAKE_PGREP'
+    # fake ps：默认存在 Runner.Listener 进程（R3 真实进程检查）
+    # 健康检查用 ps -eo args 检测进程（CI 环境 pgrep 实测不可靠），测试须隔离 ps
+    cat > "$dir/ps" <<'FAKE_PS'
 #!/usr/bin/env bash
-if [[ "$*" == *"Runner.Listener"* ]]; then
-    echo "40231 Runner.Listener"
-    exit 0
+if [[ "$*" == *"-eo"* || "$*" == *"args"* ]]; then
+    printf '%s\n' \
+        '  1 1 /sbin/launchd' \
+        '40231 80357 /Users/chris/actions-runner/bin/Runner.Listener run --startuptype service' \
+        '40235 40231 /Users/chris/actions-runner/bin/Runner.Worker'
+else
+    /bin/ps "$@"
 fi
-exit 1
-FAKE_PGREP
-    chmod +x "$dir/pgrep"
+exit 0
+FAKE_PS
+    chmod +x "$dir/ps"
     # fake gh：默认 GitHub 侧 online（R3 GitHub 侧状态检查）
     cat > "$dir/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
@@ -106,12 +111,17 @@ fi
 test_begin "health: 服务 started 但 Runner.Listener 进程缺失 → exit 1 UNHEALTHY"
 FAKE="$(new_fake_runner running)"
 BIN="$(new_health_bin 200)"
-cat > "$BIN/pgrep" <<'FAKE_PGREP_NONE'
+cat > "$BIN/ps" <<'FAKE_PS_NONE'
 #!/usr/bin/env bash
-# 无 Runner.Listener 进程
-exit 1
-FAKE_PGREP_NONE
-chmod +x "$BIN/pgrep"
+# 无 Runner.Listener 进程（ps 输出不含 Listener）
+if [[ "$*" == *"-eo"* || "$*" == *"args"* ]]; then
+    printf '%s\n' '  1 1 /sbin/launchd'
+else
+    /bin/ps "$@"
+fi
+exit 0
+FAKE_PS_NONE
+chmod +x "$BIN/ps"
 RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" bash "$HEALTH_SCRIPT" 2>&1)" || RC=$?
 RC="${RC:-0}"
 assert_eq "$RC" "1" "服务标记启动但进程缺失时退出码应为 1"
