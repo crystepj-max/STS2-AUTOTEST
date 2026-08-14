@@ -52,6 +52,7 @@ DEFAULT_CHECKS_JSON = json.dumps(
                 "name": "PR Check Summary",
                 "conclusion": "success",
                 "app": {"id": 15368},
+                "details_url": "https://github.com/crystepj-max/STS2-AUTOTEST/actions/runs/31833525853/job/94874564465",
             }
         ]
     }
@@ -652,6 +653,20 @@ def test_gate_detects_post_verification_wrong_workflow(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "工作流" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_pr_check_wrong_workflow(tmp_path: Path) -> None:
+    """PR head 的 PR Check Summary 来自非 ci-pr.yml 工作流时对账门禁应失败。"""
+    run_json = json.loads(DEFAULT_RUN_JSON)
+    run_json["path"] = ".github/workflows/ci-nightly.yml"
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RUN_JSON=json.dumps(run_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "非正式工作流" in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(

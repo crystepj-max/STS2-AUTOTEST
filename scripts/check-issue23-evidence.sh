@@ -211,7 +211,21 @@ if pr_json="$(run_timeout gh api "repos/$REPO/pulls/$PR_NUMBER")"; then
         # 成功 check 不满足保护要求，也不得算作 PR 门禁结果
         summary="$(json_field "$checks_json" 'next((c["conclusion"] for c in d.get("check_runs", []) if c.get("name") == "PR Check Summary" and c.get("app", {}).get("id") == 15368), "missing")')"
         if [[ "$summary" == "success" ]]; then
-            pass "PR #$PR_NUMBER head $head_sha 的 PR Check Summary=success"
+            # 绑定正式工作流：解析 details_url 的 run id 并回读 path/event——
+            # 其他工作流的同名成功 job（同为 Actions App）不算正式验收结果
+            run_url="$(json_field "$checks_json" 'next((c.get("details_url", "") for c in d.get("check_runs", []) if c.get("name") == "PR Check Summary" and c.get("app", {}).get("id") == 15368), "")')"
+            run_id="$(printf '%s' "$run_url" | sed -E 's#.*/actions/runs/([0-9]+)/.*#\1#')"
+            if [[ -n "$run_id" ]] && run_meta="$(run_timeout gh api "repos/$REPO/actions/runs/$run_id")"; then
+                wf_path="$(json_field "$run_meta" 'd.get("path", "")')"
+                wf_event="$(json_field "$run_meta" 'd.get("event", "")')"
+                if [[ "$wf_path" == ".github/workflows/ci-pr.yml" && "$wf_event" == "pull_request" ]]; then
+                    pass "PR #$PR_NUMBER head $head_sha 的 PR Check Summary=success（run $run_id，ci-pr.yml/pull_request）"
+                else
+                    fail "PR #$PR_NUMBER 的 PR Check Summary 非正式工作流（path=${wf_path}、event=${wf_event}）"
+                fi
+            else
+                fail "PR #$PR_NUMBER 的 PR Check Summary 无法绑定工作流（run 回读失败）"
+            fi
         else
             fail "PR #$PR_NUMBER head $head_sha 的 PR Check Summary=${summary}（应 success）"
         fi
@@ -516,15 +530,20 @@ for i, e in enumerate(ledger):
                 if not af.exists():
                     check(False, f"{tag} 授权记录文件存在（{auth_file}）")
                 else:
-                    # 文件必须已被 git 跟踪（内容经提交不可变；未提交的工作树文件不算）
+                    # 文件必须已被 git 跟踪，且从已提交 blob 读取内容核验绑定——
+                    # 工作树未提交修改（事后补入 PR/SHA）不算不可变记录
                     tracked = run(["git", "ls-files", "--error-unmatch", str(af)])
                     check(tracked.returncode == 0, f"{tag} 授权记录文件 {auth_file} 已被 git 跟踪")
-                    af_body = af.read_text(encoding="utf-8", errors="replace")
-                    check(
-                        f"PR #{e.get('bypassed_pr')}" in af_body
-                        and e.get("bypassed_sha", "")[:7] in af_body,
-                        f"{tag} 授权记录文件 {auth_file} 绑定本次绕过（PR #{e.get('bypassed_pr')} / {e.get('bypassed_sha', '')[:7]}）",
-                    )
+                    blob = run(["git", "show", f"HEAD:{auth_file}"])
+                    if blob.returncode != 0:
+                        check(False, f"{tag} 授权记录文件 {auth_file} 无法从已提交 blob 读取")
+                    else:
+                        af_body = blob.stdout
+                        check(
+                            f"PR #{e.get('bypassed_pr')}" in af_body
+                            and e.get("bypassed_sha", "")[:7] in af_body,
+                            f"{tag} 授权记录文件 {auth_file} 已提交内容绑定本次绕过（PR #{e.get('bypassed_pr')} / {e.get('bypassed_sha', '')[:7]}）",
+                        )
             if not auth_cid:
                 check(False, f"{tag} 缺少 authorization_comment_id（须引用具体授权评论）")
             else:
