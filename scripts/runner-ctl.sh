@@ -102,13 +102,30 @@ cmd_status() {
 # 维护操作标记：stop/start 成功后追加一行到 ops 文件（探针消费，用于四类归因中
 # 的「维护操作」类——区分人工停启与意外中断，issue-24 R2/T3）。
 # PROBE_OPS_FILE 可覆盖（默认 ~/.sts2-runner-probe/ops.jsonl）。
+# 原子追加：同目录临时文件 + 合并 + mv 替换；加锁防并发/中断产生半行
+# （探针 tail -1 读取，半行会永久丢失该标记并污染七天归因）。
 PROBE_OPS_FILE="${PROBE_OPS_FILE:-$HOME/.sts2-runner-probe/ops.jsonl}"
 log_operation() {
     local op="$1"
-    local ts
+    local ts dir tmp lock
     ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    mkdir -p "$(dirname "$PROBE_OPS_FILE")" 2>/dev/null || true
-    printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$PROBE_OPS_FILE"
+    dir="$(dirname "$PROBE_OPS_FILE")"
+    mkdir -p "$dir" 2>/dev/null || true
+    tmp="$dir/.ops.$$.tmp"
+    lock="$dir/.ops.lock"
+    # 简单文件锁：等待持有者释放（最多 5 秒），防并发追加交错
+    local i=0
+    while ! mkdir "$lock" 2>/dev/null; do
+        i=$((i + 1))
+        [[ "$i" -ge 50 ]] && break
+        sleep 0.1
+    done
+    if [[ -f "$PROBE_OPS_FILE" ]]; then
+        cp "$PROBE_OPS_FILE" "$tmp" 2>/dev/null
+    fi
+    printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$tmp"
+    mv -f "$tmp" "$PROBE_OPS_FILE"
+    rmdir "$lock" 2>/dev/null || true
 }
 
 cmd_stop() {

@@ -173,7 +173,14 @@ try:
 except Exception:
     print('')" "$OP_TS" 2>/dev/null || echo '')"
             if [[ -n "$OP_EPOCH" ]] && [[ "$(( NOW_EPOCH - OP_EPOCH ))" -ge 0 ]] && [[ "$(( NOW_EPOCH - OP_EPOCH ))" -le "$PROBE_OP_WINDOW" ]]; then
-                PROBE_OP="$OP_NAME"
+                # P1：op 必须与当前 transition 匹配才关联——manual-stop 只关联
+                # service-stopped，manual-start 只关联 service-started；
+                # 否则启动后窗口内的意外断线（disconnect）会被误标为维护操作。
+                case "$OP_NAME:$transition" in
+                    manual-stop:service-stopped|manual-start:service-started)
+                        PROBE_OP="$OP_NAME"
+                        ;;
+                esac
             fi
         fi
     fi
