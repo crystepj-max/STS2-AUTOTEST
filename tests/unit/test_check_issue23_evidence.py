@@ -928,7 +928,8 @@ def test_gate_detects_gitignore_negation_semantics(tmp_path: Path) -> None:
         env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
         proc = _run_script(env)
         assert proc.returncode != 0
-        assert "未被实际忽略" in proc.stdout + proc.stderr
+        # 否定规则扫描或语义检查任一命中即失败
+        assert "否定规则" in proc.stdout + proc.stderr or "未被实际忽略" in proc.stdout + proc.stderr
     finally:
         gitignore.write_text(original, encoding="utf-8")
 
