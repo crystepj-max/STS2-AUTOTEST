@@ -1,9 +1,9 @@
 # STATE — issue-23-main-merge-protection
 
-- 更新时间：2026-08-14（复审修复轮已合入 + 门禁脚本 macOS 兼容性修复 PR #33 待复审）
+- 更新时间：2026-08-14（复审修复轮已合入 + 门禁脚本 macOS 兼容性修复 PR #33 全绿可合并）
 - 阶段：复审修复 PR #32 已合并入 main（7d36d25）；门禁脚本 macOS 兼容性修复 PR #33
-  已推送并确认修复有效（bash 3.2 + C.UTF-8 缺陷实测复现），PR Check Summary **success**，
-  已解除 Draft；Bot 审查 4 条线程意见处理中（复验回应 + 超时/bash 跳过已修复，待回复解决）
+  已确认修复有效（bash 3.2 + C.UTF-8 缺陷实测复现），PR Check Summary **success**
+  （最终提交 85965bb，run 31802894268），Bot 12 条审查线程全部解决，**mergeState=CLEAN（可合并）**，待 Review 节点复审
 - 状态机位置：`DEV_REVIEW` → `DEV_ASSIGNED`（S4 REQUEST_CHANGES 回退）→ 修复完成（PR #32 合入）
   → 门禁脚本 macOS 兼容性修复（PR #33）→ 待复审
 
