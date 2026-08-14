@@ -816,6 +816,35 @@ def test_gate_detects_authorization_comment_edited_after(tmp_path: Path) -> None
     shutil.which("bash") is None,
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
+def test_gate_detects_authorization_record_not_bound(tmp_path: Path) -> None:
+    """不可变授权记录文件未绑定本条 PR/SHA 时对账门禁应失败。"""
+    tmp_ev = tmp_path / "evidence"
+    tmp_ev.mkdir()
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    (tmp_ev / "t5-final-evidence.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (tmp_ev / "t7-emergency-bypass-drill.md").write_text(
+        "探针 PR #99（未绑定本条绕过）", encoding="utf-8"
+    )
+    (tmp_ev / "t7-post-verification.md").write_text("x", encoding="utf-8")
+    (tmp_ev / "t7-ruleset-after.json").write_text(
+        json.dumps({"bypass_actors": [], "current_user_can_bypass": "never"}), encoding="utf-8"
+    )
+    (tmp_ev / "t7-branch-protection-after.json").write_text(
+        json.dumps({"enforce_admins": True}), encoding="utf-8"
+    )
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(tmp_ev / "t5-final-evidence.json")
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "授权记录文件" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
 def test_gate_detects_authorization_comment_wrong_issue(tmp_path: Path) -> None:
     """授权评论属于其他 Issue（URL 末尾编号不匹配）时对账门禁应失败（子串会误判 #230）。"""
     comment_json = json.loads(DEFAULT_COMMENT_JSON)

@@ -418,7 +418,10 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 
     显式 UTF-8 解码：gh API 输出可能含中文标题/正文，Windows 默认代码页解码会抛错。
     """
-    popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
+    if os.name == "nt":
+        popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        popen_kwargs = {"start_new_session": True}
     proc = psutil.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kwargs)
     try:
         out, err = proc.communicate(timeout=timeout)
@@ -503,6 +506,22 @@ for i, e in enumerate(ledger):
             # 「紧急绕过」条款——Issue 正文事后补写会被较早的 created_at 掩盖，
             # 评论 ID + 时间戳可验证且不可抵赖
             auth_cid = e.get("authorization_comment_id")
+            # 不可变专用授权记录：台账须引用 git 提交的授权记录文件（内容不可变），
+            # 文件须绑定本条 bypassed_pr 与 bypassed_sha（正文可编辑的 Issue 不算）
+            auth_file = e.get("authorization_record_file")
+            if not auth_file:
+                check(False, f"{tag} 缺少 authorization_record_file（须引用不可变授权记录文件）")
+            else:
+                af = pathlib.Path(f"{evidence_dir}/{auth_file}")
+                if not af.exists():
+                    check(False, f"{tag} 授权记录文件存在（{auth_file}）")
+                else:
+                    af_body = af.read_text(encoding="utf-8", errors="replace")
+                    check(
+                        f"PR #{e.get('bypassed_pr')}" in af_body
+                        and e.get("bypassed_sha", "")[:7] in af_body,
+                        f"{tag} 授权记录文件 {auth_file} 绑定本次绕过（PR #{e.get('bypassed_pr')} / {e.get('bypassed_sha', '')[:7]}）",
+                    )
             if not auth_cid:
                 check(False, f"{tag} 缺少 authorization_comment_id（须引用具体授权评论）")
             else:
