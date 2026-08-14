@@ -113,11 +113,16 @@ log_operation() {
     mkdir -p "$dir" 2>/dev/null || true
     tmp="$dir/.ops.$$.tmp"
     lock="$dir/.ops.lock"
-    # 简单文件锁：等待持有者释放（最多 5 秒），防并发追加交错
+    # 简单文件锁：等待持有者释放（最多 5 秒）。仅在成功创建锁目录后才更新文件；
+    # 获取失败（前次中断残留锁或并发超窗）则中止本次写入，避免覆盖/删除他人锁。
     local i=0
+    local max_wait="${OPS_LOCK_TIMEOUT:-50}"   # 0.1s × N，默认 5 秒
     while ! mkdir "$lock" 2>/dev/null; do
         i=$((i + 1))
-        [[ "$i" -ge 50 ]] && break
+        if [[ "$i" -ge "$max_wait" ]]; then
+            echo "WARNING: ops 日志锁获取失败（$lock），跳过本次维护标记写入" >&2
+            return 1
+        fi
         sleep 0.1
     done
     if [[ -f "$PROBE_OPS_FILE" ]]; then
@@ -126,16 +131,18 @@ log_operation() {
     printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$tmp"
     mv -f "$tmp" "$PROBE_OPS_FILE"
     rmdir "$lock" 2>/dev/null || true
+    return 0
 }
 
 cmd_stop() {
     run_svc stop
-    log_operation "manual-stop"
+    # 维护标记写入失败不阻塞服务操作（仅影响归因数据完整性，已有 WARNING）
+    log_operation "manual-stop" || true
 }
 
 cmd_start() {
     run_svc start
-    log_operation "manual-start"
+    log_operation "manual-start" || true
 }
 
 case "$CMD" in

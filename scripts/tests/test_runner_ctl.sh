@@ -140,6 +140,26 @@ else
     fail "start 未写入 ops.jsonl（维护操作标记缺失）"
 fi
 
+# --- 用例 15（P2）：锁获取失败时中止写入（不覆盖/删除他人锁，不产生半行）---
+test_begin "stop: 锁被占用时中止维护标记写入"
+FAKE="$(new_fake_runner running)"
+OPS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir.XXXXXX")"
+OPS_FILE="$OPS_DIR/ops.jsonl"
+printf '{"ts": "2026-08-14T00:00:00Z", "op": "manual-stop"}\n' > "$OPS_FILE"
+# 预置锁目录（模拟前次中断残留）
+mkdir "$OPS_DIR/.ops.lock"
+LINE_BEFORE="$(wc -l < "$OPS_FILE" | tr -d ' ')"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE" RUN_CTL_OPS_TIMEOUT=3 run_ctl "$FAKE" stop
+assert_eq "$CTL_RC" "0" "锁占用时 stop 仍应正常执行（标记写入跳过但不影响服务操作）"
+LINE_AFTER="$(wc -l < "$OPS_FILE" | tr -d ' ')"
+assert_eq "$LINE_AFTER" "$LINE_BEFORE" "锁占用时 ops.jsonl 不应新增行"
+if [[ -d "$OPS_DIR/.ops.lock" ]]; then
+    pass "他人锁未被删除"
+else
+    fail "锁目录被误删（应保留他人持有的锁）"
+fi
+rmdir "$OPS_DIR/.ops.lock" 2>/dev/null || true
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1
