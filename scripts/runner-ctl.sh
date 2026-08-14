@@ -162,11 +162,20 @@ log_operation() {
             # 活进程的认领不按年龄回收（回收者可能因 I/O 卡顿/暂停超过年龄阈值，
             # 按年龄删除会让另一进程误删其有效认领并并发替换日志）。
             if [[ -d "$claimant" ]]; then
-                claim_pid="$(cat "$claimant/pid" 2>/dev/null || echo '')"
-                if [[ -n "$claim_pid" ]] && ! kill -0 "$claim_pid" 2>/dev/null; then
-                    # 持有进程已死 → 清理残留认领
-                    rm -rf "$claimant" 2>/dev/null || true
-                elif [[ -z "$claim_pid" ]]; then
+                claim_pid="$(cat "$claimant/pid" 2>/dev/null | cut -d' ' -f1 || echo '')"
+                claim_start="$(cat "$claimant/pid" 2>/dev/null | cut -d' ' -f2- || echo '')"
+                if [[ -n "$claim_pid" ]]; then
+                    if ! kill -0 "$claim_pid" 2>/dev/null; then
+                        # 持有进程已死 → 清理残留认领
+                        rm -rf "$claimant" 2>/dev/null || true
+                    elif [[ -n "$claim_start" ]]; then
+                        # PID 复用校验：进程启动时间不符 → 视为旧认领残留，可清理
+                        claim_live_start="$(ps -o lstart= -p "$claim_pid" 2>/dev/null | xargs -I{} date -j -f "%a %b %e %H:%M:%S %Y" "{}" +%s 2>/dev/null || echo '')"
+                        if [[ -n "$claim_live_start" ]] && [[ "$claim_live_start" != "$claim_start" ]]; then
+                            rm -rf "$claimant" 2>/dev/null || true
+                        fi
+                    fi
+                else
                     # 空 pid 的 claimant：只可能是 mkdir 后写 pid 前中断残留
                     # （活认领必然已写 pid），按年龄安全回收避免永久阻塞。
                     claim_age="$(( now_ts - $(stat -f %m "$claimant" 2>/dev/null || echo "$now_ts") ))"
@@ -176,7 +185,9 @@ log_operation() {
                 fi
             fi
             if mkdir "$claimant" 2>/dev/null; then
-                printf '%s\n' "$$" > "$claimant/pid"
+                # claimant 身份：PID + 进程启动时间（供 PID 复用校验，与主锁 holder 一致）
+                claim_start="$(ps -o lstart= -p $$ 2>/dev/null | xargs -I{} date -j -f "%a %b %e %H:%M:%S %Y" "{}" +%s 2>/dev/null || echo '')"
+                printf '%s %s\n' "$$" "$claim_start" > "$claimant/pid"
                 # 认领成功：重读 inode 确认仍是绑定的陈旧实例（未变才回收）
                 curr_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
                 if [[ -n "$orig_inode" ]] && [[ "$orig_inode" == "$curr_inode" ]]; then
