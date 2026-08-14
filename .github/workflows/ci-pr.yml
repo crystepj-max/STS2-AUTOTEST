@@ -20,6 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Runner health precheck (issue-24 T4)
+        # 业务验收开始前判定 runner 是否可用（服务状态 + GitHub 网络链路），
+        # 不可用则快速失败，避免排队/执行后才发现环境故障
+        run: |
+          bash scripts/check-runner-health.sh --json
+          echo "## Runner Health Precheck" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/check-runner-health.sh --json >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout historical baseline
         uses: actions/checkout@v4
         with:
@@ -51,6 +59,12 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         continue-on-error: true
         run: .venv-ci/bin/lint-imports
+
+      - name: Run runner script tests (issue-24)
+        # 自托管 runner 运维脚本（runner-ctl/setup/probe/health）的 shell 测试；
+        # 必须随 PR 必跑，防止脚本回归在 CI 绿灯下漏网
+        id: script_tests
+        run: bash scripts/tests/run-all.sh
 
       - name: Check no new unit-test failures
         id: unit
@@ -121,6 +135,7 @@ jobs:
           echo "| Ruff baseline | ${{ steps.ruff.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| mypy baseline | ${{ steps.mypy.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Import layer | ${{ steps.imports.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Runner script tests | ${{ steps.script_tests.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Unit tests | ${{ steps.unit.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Real STS2 CLI discovery | ${{ steps.cli_check.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| CLI integration | ${{ steps.cli_tests.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
@@ -143,6 +158,7 @@ jobs:
           check "Ruff baseline" "${{ steps.ruff.outcome }}"
           check "mypy baseline" "${{ steps.mypy.outcome }}"
           check "Import layer" "${{ steps.imports.outcome }}"
+          check "Runner script tests" "${{ steps.script_tests.outcome }}"
           check "Unit tests" "${{ steps.unit.outcome }}"
           check "Real STS2 CLI discovery" "${{ steps.cli_check.outcome }}"
           check "CLI integration" "${{ steps.cli_tests.outcome }}"
