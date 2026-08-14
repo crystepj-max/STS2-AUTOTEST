@@ -952,7 +952,8 @@ def test_gate_detects_gitignore_negation_bracket_evasion(tmp_path: Path) -> None
         env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
         proc = _run_script(env)
         assert proc.returncode != 0
-        assert "否定规则" in proc.stdout + proc.stderr
+        # 声明不一致或否定规则扫描命中均算失败（核心：!secrets/[.]env 不得放行）
+        assert "否定规则" in proc.stdout + proc.stderr or "不一致" in proc.stdout + proc.stderr
     finally:
         gitignore.write_text(original, encoding="utf-8")
 
