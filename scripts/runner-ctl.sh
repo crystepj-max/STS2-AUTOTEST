@@ -122,6 +122,10 @@ log_operation() {
         now_ts="$(date +%s)"
         reclaim=""
         orig_inode=""   # 陈旧判定时绑定的锁实例标识（inode，认领前记录）
+        # 陈旧判定前先绑定锁实例（inode）：判定与认领始终针对同一实例。
+        # 若 A 判定后 B 换新锁，A 的 orig_inode 仍是旧锁 → 认领时校验失败放弃，
+        # 不会误删 B 的新锁（TOCTOU）。
+        orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
         if [[ -f "$lock/holder" ]]; then
             # 有持有者标识：仅回收「持有进程已死」的锁。
             # 活进程的锁永不按年龄回收（进程可能因 I/O 卡顿/休眠超时，
@@ -151,10 +155,6 @@ log_operation() {
             fi
         fi
         if [[ -n "$reclaim" ]]; then
-            # 判定陈旧时立即绑定锁实例（inode）：认领操作只可能作用于该实例。
-            # 若 A 判定后 B 换新锁，A 的 orig_inode 仍是旧锁 → 认领时校验失败放弃，
-            # 不会误删 B 的新锁（TOCTOU）。
-            orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
             # 无破坏原子认领：所有竞争者共享单一认领名 .claim（mkdir 原子互斥）。
             # 只有一个进程能成功创建 → 唯一回收者；认领后校验锁 inode 仍是绑定的实例。
             claimant="$lock/.claim"
@@ -217,7 +217,13 @@ log_operation() {
     # trap 清理：仅本进程持有期间退出时释放锁（防止中断残留）
     trap 'rm -rf "$lock"' RETURN EXIT
     if [[ -f "$PROBE_OPS_FILE" ]]; then
-        cp "$PROBE_OPS_FILE" "$tmp" 2>/dev/null
+        # 复制加超时（I/O 卡顿时不无限阻塞）：超时保留原日志、释放锁并告警
+        if ! run_with_timeout "${OPS_CP_TIMEOUT:-10}" cp "$PROBE_OPS_FILE" "$tmp" 2>/dev/null; then
+            echo "WARNING: ops 日志复制超时，保留原日志并跳过本次写入" >&2
+            rm -rf "$lock"
+            trap - RETURN EXIT
+            return 1
+        fi
     fi
     printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$tmp"
     mv -f "$tmp" "$PROBE_OPS_FILE"
