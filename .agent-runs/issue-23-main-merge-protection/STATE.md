@@ -1,8 +1,8 @@
 # STATE — issue-23-main-merge-protection
 
-- 更新时间：2026-08-14（复审修复轮已合入 + macOS 兼容性补充修复 PR #33 待复审）
+- 更新时间：2026-08-14（复审修复轮已合入 + macOS 兼容性补充修复 PR #33 CI 全绿待复审）
 - 阶段：复审修复 PR #32 已合并入 main（7d36d25）；测试节点发现门禁脚本 macOS 兼容性缺陷，
-  补充修复已推送并建 Draft PR #33，待 CI 与复审
+  补充修复已推送；PR #33 已解除 Draft，PR Check Summary **success**（run 31788773304，12m20s），待复审
 - 状态机位置：`DEV_REVIEW` → `DEV_ASSIGNED`（S4 REQUEST_CHANGES 回退）→ 修复完成（PR #32 合入）
   → macOS 兼容性补充修复（PR #33）→ 待复审
 
@@ -27,10 +27,11 @@
 - 双向验证回顾：T3a 直接 push 拒绝（GH013）；T3b 失败 CI PR（#26）合并 405 + BLOCKED；
   T4 成功样例 PR #27 合并（a0673525）。
 - **复审修复 PR #32 已合并入 main（`7d36d25`）**：T6–T8 与 .env 门禁主体随 PR #32 合入，CI PASS。
-- **macOS 兼容性补充修复（PR #33，Draft）**：测试节点（round-001/测试/attempt-002）实测发现
+- **macOS 兼容性补充修复（PR #33）**：测试节点（round-001/测试/attempt-002）实测发现
   门禁脚本 `scripts/check-env-gitignore.sh` 在 macOS 上变量插值写法触发 shell 解析差异
   （`$f` → `${f}`），并新增回归单测 `tests/unit/test_check_env_gitignore.py`；
-  补充修复提交 `1153dce` 已推送，PR #33 待 CI。
+  补充修复提交 `1153dce` + 文档同步 `8ea990f` 已推送，**PR Check Summary success**
+  （run 31788773304），已解除 Draft 待复审。
 
 ## 本轮（复审修复）变更清单
 
@@ -56,6 +57,6 @@
 
 ## 下一步
 
-1. PR #33（macOS 兼容性补充修复）通过 PR Check Summary 后合并入 main。
+1. PR #33（macOS 兼容性补充修复）PR Check Summary 已 success，待 Review 节点复审。
 2. Review 节点复审：核对 S4 四项阻塞问题（紧急绕过可执行、.env 忽略、缺失样例证据、线程规则恢复）的修复证据 + PR #33 兼容性修复。
-3. 复审通过后关闭 Issue #23。
+3. 复审通过后合并 PR #33 并关闭 Issue #23。
