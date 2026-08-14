@@ -92,3 +92,6 @@ tests/output/
 # 本地项目登记（机器相关的项目路径，不随平台分发）
 sts2-autotest.yaml
 sts2-autotest.yml
+
+# CodeGraph 本地索引（代码地图缓存，不入库）
+.codegraph/
