@@ -121,15 +121,16 @@ run_ctl() {
     local out rc fake_bin pgrep_body
     fake_bin="$(mktemp -d "${TMPDIR:-/tmp}/ctl-bin.XXXXXX")"
     if [[ "${RUN_CTL_NO_PROCESS:-0}" == "1" ]]; then
-        pgrep_body='exit 1'
+        ps_body='exit 1'
     else
-        pgrep_body='echo "40231 Runner.Listener"; exit 0'
+        # 输出与 runner-ctl 新检测匹配：ps -eo args 且命令行含 $dir/bin/Runner.Listener
+        ps_body="printf '%s\\\\n' '  1 1 /sbin/launchd' '40231 80357 $dir/bin/Runner.Listener run --startuptype service'"
     fi
-    cat > "$fake_bin/pgrep" <<FAKE_PGREP
+    cat > "$fake_bin/ps" <<FAKE_PS
 #!/usr/bin/env bash
-$pgrep_body
-FAKE_PGREP
-    chmod +x "$fake_bin/pgrep"
+$ps_body
+FAKE_PS
+    chmod +x "$fake_bin/ps"
     out="$(cd /tmp && RUNNER_DIR="$dir" PATH="$fake_bin:/usr/bin:/bin" bash "$SCRIPT_DIR/../runner-ctl.sh" "$@" 2>&1)" || rc=$?
     rc="${rc:-0}"
     CTL_OUT="$out"

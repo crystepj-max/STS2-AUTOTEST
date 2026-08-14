@@ -30,13 +30,14 @@ exit 0
 FAKE_CURL
     chmod +x "$dir/curl"
     # fake ps：默认存在 Runner.Listener 进程（R3 真实进程检查）
-    # 健康检查用 ps -eo args 检测进程（CI 环境 pgrep 实测不可靠），测试须隔离 ps
+    # 健康检查用 ps -eo args 检测进程且限定 RUNNER_DIR/bin/ 路径（CI 环境 pgrep
+    # 实测不可靠 + 多 runner 隔离），测试须隔离 ps 并输出与 RUNNER_DIR 一致的路径
     cat > "$dir/ps" <<'FAKE_PS'
 #!/usr/bin/env bash
 if [[ "$*" == *"-eo"* || "$*" == *"args"* ]]; then
     printf '%s\n' \
         '  1 1 /sbin/launchd' \
-        '40231 80357 /Users/chris/actions-runner/bin/Runner.Listener run --startuptype service' \
+        "40231 80357 ${RUNNER_DIR:-/Users/chris/actions-runner}/bin/Runner.Listener run --startuptype service" \
         '40235 40231 /Users/chris/actions-runner/bin/Runner.Worker'
 else
     /bin/ps "$@"

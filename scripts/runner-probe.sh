@@ -70,10 +70,10 @@ run_with_timeout() {
     return "$rc"
 }
 
-# --- 服务状态（svc.sh status 解析）---
+# --- 服务状态（svc.sh status 解析，带超时：svc.sh 挂起时不阻塞探针输出）---
 service_state="not-installed"
 if [[ -f "$RUNNER_DIR/svc.sh" ]]; then
-    svc_out="$(cd "$RUNNER_DIR" && ./svc.sh status 2>/dev/null || true)"
+    svc_out="$(cd "$RUNNER_DIR" && run_with_timeout "$GH_TIMEOUT" ./svc.sh status 2>/dev/null || true)"
     if [[ "$svc_out" == *"Started:"* ]]; then
         service_state="running"
     elif [[ "$svc_out" == *"Stopped"* ]]; then
@@ -129,8 +129,9 @@ if [[ -f "$PROBE_STATE_FILE" ]]; then
     fi
 fi
 # 写回本次采样（临时文件 + mv 原子替换，避免中断留下半写状态）
+# 临时文件必须在目标同目录：跨文件系统 mv 会失败（TMPDIR 可能与目标不同卷）
 mkdir -p "$(dirname "$PROBE_STATE_FILE")" 2>/dev/null || true
-state_tmp="$(mktemp "${TMPDIR:-/tmp}/probe-state.XXXXXX")"
+state_tmp="$(mktemp "$(dirname "$PROBE_STATE_FILE")/.probe-state.XXXXXX")"
 PROBE_TMP_FILES+=("$state_tmp")
 python3 - "$state_tmp" "$service_state" "$github_online" <<'PY'
 import json, sys

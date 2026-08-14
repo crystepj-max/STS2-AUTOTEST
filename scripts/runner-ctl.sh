@@ -82,7 +82,8 @@ cmd_status() {
     elif [[ "$out" == *"Started:"* ]]; then
         # 服务标记 started ≠ 真实进程存在（issue-24 R3）：
         # Runner.Listener 进程缺失时状态应反映异常，而非误报 running。
-        if pgrep -f "Runner.Listener" >/dev/null 2>&1; then
+        # 限定目标安装目录：避免同主机多个 runner / 测试安装误判。
+        if ps -eo args 2>/dev/null | grep -F "$RUNNER_DIR/bin/Runner.Listener" | grep -v grep >/dev/null; then
             print_state "$out" "running"
             return 0
         else

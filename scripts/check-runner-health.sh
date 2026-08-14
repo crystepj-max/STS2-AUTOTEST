@@ -67,8 +67,10 @@ fi
 # --- 真实进程（Runner.Listener，issue-24 R3）---
 # 用 ps 而非 pgrep 检测：CI job 环境实测 pgrep 匹配不到 Listener（原因见
 # runner-恢复记录），ps -eo args 全局可见更可靠。
+# 限定目标安装目录：命令行需包含 $RUNNER_DIR/bin/Runner.Listener，
+# 避免同主机多个 runner 或测试/备用安装误判。
 process_present=false
-if ps -eo args 2>/dev/null | grep -F "Runner.Listener" | grep -v grep >/dev/null; then
+if ps -eo args 2>/dev/null | grep -F "$RUNNER_DIR/bin/Runner.Listener" | grep -v grep >/dev/null; then
     process_present=true
 fi
 # 诊断（仅失败时输出，不污染正常路径）
@@ -129,7 +131,9 @@ fi
 if [[ -z "$reasons" ]]; then
     healthy=true
     exit_code=0
-    summary="HEALTHY: runner 可接收任务（service=running, process=present, github=online, direct=${direct_reachable}, proxy=${proxy_reachable}）"
+    # github 值如实输出（online / unknown）：gh 查询失败时 unknown 不判死，
+    # 但不得谎报 online（服务+进程+网络已核验，GitHub 侧未确认时如实标注）
+    summary="HEALTHY: runner 可接收任务（service=running, process=present, github=${github_online}, direct=${direct_reachable}, proxy=${proxy_reachable}）"
 else
     healthy=false
     exit_code=1

@@ -29,17 +29,26 @@ PROXY_URL="${PROXY_URL:-http://127.0.0.1:7890}"
 
 # 带超时执行命令：外部调用（gh/curl/tar/config.sh/svc.sh）可能挂起，逐项限时；
 # killer 不持有调用方管道，超时后递归回收子进程
+# 递归终止进程树（含子进程，防止超时后残留孤儿）
+kill_tree() {
+    local pid="$1" child
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        kill_tree "$child"
+    done
+    kill "$pid" 2>/dev/null || true
+}
+
 run_with_timeout() {
     local timeout="$1"
     shift
     local pid rc killer
     "$@" &
     pid=$!
-    ( sleep "$timeout"; pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true ) >/dev/null 2>&1 &
+    # 后台杀手：超时后递归终止整个进程树（config.sh/svc.sh 可能派生子进程）
+    ( sleep "$timeout"; kill_tree "$pid" ) >/dev/null 2>&1 &
     killer=$!
     if wait "$pid"; then rc=0; else rc=$?; fi
-    pkill -P "$killer" 2>/dev/null || true
-    kill "$killer" 2>/dev/null || true
+    kill_tree "$killer"
     return "$rc"
 }
 
@@ -56,9 +65,11 @@ RUNNER_NAME_FILE="$RUNNER_DIR/.runner"
 echo "=== STS2-AUTOTEST Mac Runner Setup（真实安装为准）==="
 echo "安装目录: ${RUNNER_DIR}（架构 ${RUNNER_ARCH}）"
 
-# 已配置安装（svc.sh 存在）→ 跳过下载/注册，幂等（不需要 gh）
-if [[ -f "$SVC_SCRIPT" ]]; then
-    echo "检测到已配置安装（${SVC_SCRIPT}），跳过下载与注册。"
+# 已配置安装（svc.sh + .runner 注册文件都存在）→ 跳过下载/注册，幂等（不需要 gh）
+# 注意：svc.sh 是压缩包自带文件，解压后即存在，不能单独作为「已配置」证据；
+# .runner 由 config.sh 注册时生成，才是注册完成的标志。
+if [[ -f "$SVC_SCRIPT" && -f "$RUNNER_NAME_FILE" ]]; then
+    echo "检测到已配置安装（${SVC_SCRIPT} + ${RUNNER_NAME_FILE}），跳过下载与注册。"
     RUNNER_NAME=""
     if [[ -f "$RUNNER_NAME_FILE" ]]; then
         RUNNER_NAME="$(grep -o '"agentName": *"[^"]*"' "$RUNNER_NAME_FILE" | sed 's/.*: *"//;s/"//')"
@@ -80,7 +91,7 @@ if ! run_with_timeout "$SETUP_CMD_TIMEOUT" gh auth status &>/dev/null; then
 fi
 
 # --- 新安装：下载 + 注册 + 安装服务 ---
-echo "未检测到已配置安装（$RUNNER_DIR/svc.sh 不存在），开始新安装…"
+echo "未检测到已配置安装（svc.sh 或 .runner 缺失），开始新安装…"
 
 # 机器身份必须显式传入（R4）：不再默认固定机器名，防止误覆盖其他机器身份
 if [[ -z "$RUNNER_NAME" ]]; then
@@ -94,8 +105,11 @@ cd "$RUNNER_DIR"
 
 # 同名注册保护（R4）：默认拒绝覆盖既有同名 runner，需显式 ALLOW_REPLACE=1
 if [[ "$ALLOW_REPLACE" != "1" ]]; then
-    EXISTING="$(run_with_timeout "$SETUP_CMD_TIMEOUT" gh api "repos/$REPO/actions/runners" \
-        --paginate --jq '.runners[] | select(.name == $name) | .id' --arg name "$RUNNER_NAME" 2>/dev/null || true)"
+    # jq 的 env. 读取环境变量（gh api REST 模式不支持 --arg，且 --jq 内嵌变量名
+    # 有转义风险）；RUNNER_NAME 经 env 显式注入，任何字符都安全。
+    EXISTING="$(run_with_timeout "$SETUP_CMD_TIMEOUT" env RUNNER_NAME="$RUNNER_NAME" \
+        gh api "repos/$REPO/actions/runners" --paginate \
+        --jq '.runners[] | select(.name == env.RUNNER_NAME) | .id' 2>/dev/null || true)"
     if [[ -n "$EXISTING" ]]; then
         echo "ERROR: 已存在同名 runner '$RUNNER_NAME'（id=$EXISTING）。" >&2
         echo "默认禁止覆盖注册；确认要替换请显式: ALLOW_REPLACE=1 ..." >&2
@@ -104,13 +118,21 @@ if [[ "$ALLOW_REPLACE" != "1" ]]; then
 fi
 
 TARBALL="actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+# 已有 tarball（预缓存或上次残留）也需解压；解压失败视为残留，删后重下。
+# 避免「跳过下载+跳过解压」后 config.sh 找不到可执行文件。
 if [[ ! -f "$TARBALL" ]]; then
     echo "下载 runner ${RUNNER_VERSION}（${RUNNER_ARCH}）…"
     run_with_timeout "$SETUP_CMD_TIMEOUT" curl -o "$TARBALL" -L \
         "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
-    run_with_timeout "$SETUP_CMD_TIMEOUT" tar xzf "$TARBALL"
-    rm "$TARBALL"
 fi
+if ! run_with_timeout "$SETUP_CMD_TIMEOUT" tar xzf "$TARBALL"; then
+    echo "WARNING: tarball 解压失败（可能为残留），删除重下…" >&2
+    rm -f "$TARBALL"
+    run_with_timeout "$SETUP_CMD_TIMEOUT" curl -o "$TARBALL" -L \
+        "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
+    run_with_timeout "$SETUP_CMD_TIMEOUT" tar xzf "$TARBALL"
+fi
+rm -f "$TARBALL"
 
 # 获取注册 token（仅新安装）
 echo "获取注册 token…"
@@ -144,8 +166,9 @@ SVC_STATUS="$(run_with_timeout "$SETUP_CMD_TIMEOUT" ./svc.sh status 2>/dev/null 
 if [[ "$SVC_STATUS" == *"Started:"* ]]; then
     echo "=== 服务已启动（svc.sh status 确认 Started）==="
 else
-    echo "WARNING: 服务安装后 status 未确认 Started（可能需手动启动或检查 svc.sh 输出）" >&2
+    echo "ERROR: 服务安装后 status 未确认 Started（安装可能失败）" >&2
     echo "$SVC_STATUS" >&2
+    exit 1
 fi
 
 echo "=== 安装完成。Runner 将出现在: https://github.com/$REPO/settings/actions/runners ==="

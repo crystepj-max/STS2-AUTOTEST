@@ -35,7 +35,11 @@ test_begin "已配置安装幂等：不重复注册"
 FAKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/setup-runner-home.XXXXXX")"
 FAKE_RUNNER="$FAKE_HOME/actions-runner"
 mkdir -p "$FAKE_RUNNER"
-# 已配置安装的形态：svc.sh 存在 + .env 存在
+# 已配置安装的形态：svc.sh 存在 + .runner 注册文件存在
+# （.runner 由 config.sh 生成，是注册完成标志；仅 svc.sh 存在=解压残留，不算已配置）
+cat > "$FAKE_RUNNER/.runner" <<'FAKE_RUNNER_FILE'
+{"agentName": "Chris-Mac-mini-STS2-AUTOTEST"}
+FAKE_RUNNER_FILE
 # fake svc.sh 镜像真实语义：install/start 成功（exit 0），其余 usage（exit 1）
 cat > "$FAKE_RUNNER/svc.sh" <<'FAKE_SVC'
 #!/usr/bin/env bash
@@ -291,9 +295,18 @@ cat > "$FAKE_BIN5/tar" <<'FAKE_TAR5'
 #!/usr/bin/env bash
 cat > svc.sh <<'SVC'
 #!/usr/bin/env bash
+# fake svc.sh：install/start 后 status 报告 Started（R4 装后验证）
+STATE="$PWD/.fake-state"
 case "${1:-}" in
-    status) echo "not installed"; exit 0 ;;
-    install|start) echo "fake svc.sh: $1"; exit 0 ;;
+    status)
+        if [[ -f "$STATE" && "$(cat "$STATE")" == "started" ]]; then
+            echo "Started:"
+        else
+            echo "not installed"
+        fi
+        exit 0 ;;
+    install) echo "installed" > "$STATE"; exit 0 ;;
+    start) echo "started" > "$STATE"; exit 0 ;;
     *) echo "Usage: ./svc.sh [install, start, stop, status, uninstall]" >&2; exit 1 ;;
 esac
 SVC
@@ -388,9 +401,18 @@ cat > "$FAKE_BIN7/tar" <<'FAKE_TAR7'
 #!/usr/bin/env bash
 cat > svc.sh <<'SVC'
 #!/usr/bin/env bash
+# fake svc.sh：install/start 后 status 报告 Started（R4 装后验证）
+STATE="$PWD/.fake-state"
 case "${1:-}" in
-    status) echo "not installed"; exit 0 ;;
-    install|start) echo "fake svc.sh: $1"; exit 0 ;;
+    status)
+        if [[ -f "$STATE" && "$(cat "$STATE")" == "started" ]]; then
+            echo "Started:"
+        else
+            echo "not installed"
+        fi
+        exit 0 ;;
+    install) echo "installed" > "$STATE"; exit 0 ;;
+    start) echo "started" > "$STATE"; exit 0 ;;
     *) echo "Usage: ./svc.sh [install, start, stop, status, uninstall]" >&2; exit 1 ;;
 esac
 SVC
