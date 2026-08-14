@@ -487,7 +487,9 @@ for i, e in enumerate(ledger):
 sys.exit(failed)
 PY
 )"
-    ledger_out="$(run_timeout "$GATE_PYTHON" -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$REPO" "$CMD_TIMEOUT" 2>&1)"
+    # 台账核验本身不设总限时：内层每次 gh/git 调用已各自限时（run() 内 timeout），
+    # 外层再套 run_timeout 会把「多次调用累计耗时」误判为超时（网络稍慢即误报）
+    ledger_out="$("$GATE_PYTHON" -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$REPO" "$CMD_TIMEOUT" 2>&1)"
     if [[ $? -eq 0 ]]; then
         pass "绕过台账核验全部通过"
     else
