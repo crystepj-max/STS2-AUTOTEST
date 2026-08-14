@@ -32,6 +32,9 @@ DEFAULT_RUN_JSON = json.dumps(
         "conclusion": "success",
         "head_sha": "64ed09fcd1f0174ca211da7170ce61da2a1b6b50",
         "completed_at": "2026-08-14T07:47:43Z",
+        "updated_at": "2026-08-14T07:47:43Z",
+        "path": ".github/workflows/ci-pr.yml",
+        "event": "pull_request",
     }
 )
 DEFAULT_PR_JSON = json.dumps(
@@ -620,3 +623,69 @@ def test_gate_detects_ruleset_name_mismatch(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "ruleset" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_post_verification_wrong_workflow(tmp_path: Path) -> None:
+    """补验 run 非 ci-pr.yml 工作流时对账门禁应失败（其他工作流的同名 job 不算等价验收）。"""
+    run_json = json.loads(DEFAULT_RUN_JSON)
+    run_json["path"] = ".github/workflows/ci-nightly.yml"
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RUN_JSON=json.dumps(run_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "工作流" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_restoration_evidence_content(tmp_path: Path) -> None:
+    """恢复证据内容自相矛盾（bypass 非空 / enforce_admins=false）时对账门禁应失败。"""
+    tmp_ev = tmp_path / "evidence"
+    tmp_ev.mkdir()
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    (tmp_ev / "t5-final-evidence.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    # 误用 during 快照：绕过者非空 + enforce_admins=false
+    (tmp_ev / "t7-ruleset-after.json").write_text(
+        json.dumps(
+            {
+                "bypass_actors": [{"actor_id": 5}],
+                "current_user_can_bypass": "pull_requests_only",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_ev / "t7-branch-protection-after.json").write_text(
+        json.dumps({"enforce_admins": {"enabled": False}}), encoding="utf-8"
+    )
+    (tmp_ev / "t7-post-verification.md").write_text("x", encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(tmp_ev / "t5-final-evidence.json")
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "无绕过者" in proc.stdout + proc.stderr or "enforce_admins=true" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_reason_url_other_repo(tmp_path: Path) -> None:
+    """原因链接指向其他仓库时对账门禁应失败（host/owner/repo 必须匹配当前仓库）。"""
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    data["emergency_bypass"]["ledger"][0]["reason_url"] = (
+        "https://github.com/other-org/other-repo/issues/23"
+    )
+    broken_json = tmp_path / "t5-other-repo.json"
+    broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "原因链接" in proc.stdout + proc.stderr

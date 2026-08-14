@@ -382,8 +382,12 @@ for i, e in enumerate(ledger):
         e.get("authorizer") == "crystepj-max",
         f"{tag} 授权人为仓库所有者（{e.get('authorizer', '')}）",
     )
-    # 原因链接须可回读：解析 issues/pull 数字并请求确认资源存在（仅子串匹配会放过不存在的 Issue）
-    m = re.search(r"/(?:issues|pull)/(\d+)/?$", e.get("reason_url", ""))
+    # 原因链接须绑定当前仓库且可回读：host/owner/repo 必须匹配，解析 issues/pull 数字
+    # 并请求确认资源存在（其他仓库的链接或不存在 Issue 均不算可审计原因）
+    m = re.match(
+        rf"^https://github\.com/{re.escape(repo)}/(?:issues|pull)/(\d+)/?$",
+        e.get("reason_url", ""),
+    )
     if not m:
         check(False, f"{tag} 原因链接格式不正确（应为 issues/<数字> 或 pull/<数字>）：{e.get('reason_url', '')}")
     else:
@@ -414,8 +418,28 @@ for i, e in enumerate(ledger):
     check(e.get("restored") is True, f"{tag} 恢复终态 restored=true")
     check(bool(e.get("restoration_evidence")), f"{tag} 恢复证据列表非空")
     for ev in e.get("restoration_evidence", []):
-        p = f"{evidence_dir}/{ev}"
-        check(pathlib.Path(p).exists(), f"{tag} 恢复证据文件存在（{ev}）")
+        p = pathlib.Path(f"{evidence_dir}/{ev}")
+        if not p.exists():
+            check(False, f"{tag} 恢复证据文件存在（{ev}）")
+            continue
+        check(True, f"{tag} 恢复证据文件存在（{ev}）")
+        # 内容核验（存在性不够）：ruleset 回读须无绕过者；branch protection 回读须
+        # enforce_admins=true——恢复证据自相矛盾（如误用 during 快照）必须失败
+        try:
+            snap = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            check(False, f"{tag} 恢复证据文件 {ev} 无法解析为 JSON")
+            continue
+        if "bypass_actors" in snap:
+            check(
+                snap.get("bypass_actors") == [] and snap.get("current_user_can_bypass") == "never",
+                f"{tag} 恢复证据 {ev} 无绕过者（ruleset 终态）",
+            )
+        if "enforce_admins" in snap:
+            # API 形态兼容：旧快照为布尔（true/false），现行 API 为 {"enabled": bool}
+            ea = snap.get("enforce_admins")
+            ea_ok = ea.get("enabled") is True if isinstance(ea, dict) else ea is True
+            check(ea_ok, f"{tag} 恢复证据 {ev} enforce_admins=true（branch protection 终态）")
 
     pv = e.get("post_verification", {})
     run_id = pv.get("run_id")
@@ -438,6 +462,13 @@ for i, e in enumerate(ledger):
             check(
                 pv.get("completed_at") == (run_data.get("completed_at") or run_data.get("updated_at")),
                 f"{tag} 台账补验完成时间（{pv.get('completed_at')}）与 run 一致",
+            )
+            # 补验 run 必须绑定正式验收工作流 ci-pr.yml（pull_request 事件）——
+            # 其他工作流的同名轻量 job 不构成等价验收
+            check(
+                run_data.get("path") == ".github/workflows/ci-pr.yml"
+                and run_data.get("event") == "pull_request",
+                f"{tag} 补验 run 绑定 ci-pr.yml 工作流（path={run_data.get('path')}、event={run_data.get('event')}）",
             )
             # 补验 run 必须真实执行等价门禁：含成功的 PR Check Summary job
             # （仅 conclusion=success 的任意轻量 run 不构成等价验收）
