@@ -40,6 +40,7 @@ DEFAULT_CHECKS_JSON = json.dumps(
 )
 DEFAULT_RULESET_JSON = json.dumps(
     {
+        "enforcement": "active",
         "bypass_actors": [],
         "current_user_can_bypass": "never",
         "rules": [
@@ -48,6 +49,13 @@ DEFAULT_RULESET_JSON = json.dumps(
                 "parameters": {"required_review_thread_resolution": True},
             }
         ],
+    }
+)
+# branch protection 层（T7 演练曾临时解除 enforce_admins，须逐层回读）
+DEFAULT_BP_JSON = json.dumps(
+    {
+        "enforce_admins": {"enabled": True},
+        "required_status_checks": {"strict": True},
     }
 )
 # compare API：status=ahead 表示 base（被绕过 SHA）是 head（补验 run head）的祖先
@@ -78,6 +86,7 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         *"/commits/"*"/check-runs") echo "$FAKE_CHECKS_JSON" ;;
         *"/pulls/"*) echo "$FAKE_PR_JSON" ;;
         *"/rulesets/"*) echo "$FAKE_RULESET_JSON" ;;
+        *"/branches/main/protection"*) echo "$FAKE_BP_JSON" ;;
         *"/compare/"*) echo "$FAKE_COMPARE_JSON" ;;
         *"/issues/"*) python3 -c "import json,sys; print(json.dumps({'body': sys.stdin.read()}))" <<< "$FAKE_ISSUE_BODY" ;;
         *) echo "fake gh: 未预期的 URL: $url" >&2; exit 1 ;;
@@ -117,6 +126,7 @@ def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
     env["FAKE_PR_JSON"] = overrides.pop("FAKE_PR_JSON", DEFAULT_PR_JSON)
     env["FAKE_RULESET_JSON"] = overrides.pop("FAKE_RULESET_JSON", DEFAULT_RULESET_JSON)
+    env["FAKE_BP_JSON"] = overrides.pop("FAKE_BP_JSON", DEFAULT_BP_JSON)
     env["FAKE_COMPARE_JSON"] = overrides.pop("FAKE_COMPARE_JSON", DEFAULT_COMPARE_JSON)
     env["FAKE_ISSUE_BODY"] = overrides.pop("FAKE_ISSUE_BODY", DEFAULT_ISSUE_BODY)
     env.update(overrides)
@@ -154,22 +164,29 @@ def test_gate_detects_run_failure(tmp_path: Path) -> None:
     assert "补验" in proc.stdout + proc.stderr
 
 
+@pytest.mark.parametrize(
+    "completed_at,label",
+    [
+        ("2026-08-16T07:47:43Z", "超过 24h（操作完成 05:50:11Z 后 2 天）"),
+        ("2026-08-14T04:00:00Z", "早于操作完成时间（负时长）"),
+    ],
+)
 @pytest.mark.skipif(
     shutil.which("bash") is None,
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
-def test_gate_detects_24h_window_violation(tmp_path: Path) -> None:
-    """补验 run 完成时间超过操作后 24h 时对账门禁应失败。"""
+def test_gate_detects_24h_window_violation(tmp_path: Path, completed_at: str, label: str) -> None:
+    """补验窗口制度固定 0~24h：超出或负时长时对账门禁应失败。"""
     run_json = json.dumps(
         {
             "conclusion": "success",
             "head_sha": "64ed09fcd1f0174ca211da7170ce61da2a1b6b50",
-            "completed_at": "2026-08-16T07:47:43Z",  # 操作完成（05:50:11Z）后 2 天
+            "completed_at": completed_at,
         }
     )
     env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RUN_JSON=run_json)
     proc = _run_script(env)
-    assert proc.returncode != 0
+    assert proc.returncode != 0, f"{label} 应使对账门禁失败"
     assert "24" in proc.stdout + proc.stderr
 
 
@@ -201,3 +218,35 @@ def test_gate_detects_issue_body_out_of_sync(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "Issue" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_disabled_ruleset(tmp_path: Path) -> None:
+    """ruleset enforcement 非 active 时对账门禁应失败（已停用的保护不算生效）。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["enforcement"] = "disabled"
+    env = _base_env(
+        _fake_gh(tmp_path),
+        tmp_path,
+        FAKE_RULESET_JSON=json.dumps(ruleset_json),
+    )
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "enforcement" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_branch_protection_weakened(tmp_path: Path) -> None:
+    """branch protection 层 enforce_admins=false 时对账门禁应失败（只查 ruleset 会漏掉）。"""
+    bp_json = json.loads(DEFAULT_BP_JSON)
+    bp_json["enforce_admins"]["enabled"] = False
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_BP_JSON=json.dumps(bp_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "branch protection" in proc.stdout + proc.stderr

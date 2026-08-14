@@ -5,10 +5,13 @@
 #   1. .gitignore 的 env 条目 ↔ t5-final-evidence.json 的 env_guard.gitignore；
 #   2. PR head ↔ 该 head 的 PR Check Summary 结论（必须 success）；
 #   3. Issue 正文 ↔ 实时规则（正文含 T8 缺失样例引用与线程解决要求标记；
-#      ruleset 回读 required_review_thread_resolution=true 且无绕过者）；
+#      ruleset 回读 enforcement=active + required_review_thread_resolution=true 且无绕过者；
+#      branch protection 回读 enforce_admins=true 且 strict=true——紧急演练时两层都被临时改过，
+#      只查 ruleset 会漏掉 branch protection 层仍被削弱的情况）；
 #   4. 治理文档 Markdown 相对链接可解析；
 #   5. 绕过台账逐条核验：授权/原因链接、被绕过 SHA 可解析（远端 compare API）、
-#      恢复终态与证据文件、补验 run success 且 head 一致、24 小时内完成、
+#      恢复证据列表非空且文件存在、补验 run success 且 head 一致、
+#      制度固定 0~24 小时内完成（不被台账字段放宽）、补验证据文件存在、
 #      补验 head 祖先链包含被绕过合并（compare API，与本地克隆深度无关）。
 #
 # 依赖：gh（远端 API）、bash、python3（JSON 解析）。
@@ -29,25 +32,39 @@ GOV_DOC="$REPO_ROOT/docs/process/main-merge-protection.md"
 CMD_TIMEOUT="${CHECK_ISSUE23_CMD_TIMEOUT:-15}"
 FAILED=0
 
-# 外部命令限时：后台运行 + 截止时间轮询 + TERM（bash 原生机制，macOS/Linux/Git Bash
-# 行为一致）。超时 → 发送 TERM 并回收，返回 142（128+SIGTERM 惯例）。
+# 外部命令限时：python3 + psutil 封装（项目依赖，macOS/Linux/Windows 一致）。
+# 超时 → 终止整棵进程树（AGENTS.md 防僵尸/防遗留）并返回 142（128+SIGTERM 惯例）；
+# 正常结束 → 返回命令退出码。
 run_timeout() {
-    local deadline pid rc
-    deadline=$(( $(date +%s) + CMD_TIMEOUT ))
-    "$@" &
-    pid=$!
-    while kill -0 "$pid" 2>/dev/null; do
-        if [[ "$(date +%s)" -ge "$deadline" ]]; then
-            echo "TIMEOUT: 命令 '$*' 超过 ${CMD_TIMEOUT}s 未完成，已终止" >&2
-            kill "$pid" 2>/dev/null
-            wait "$pid" 2>/dev/null
-            return 142
-        fi
-        sleep 0.2
-    done
-    wait "$pid"
-    rc=$?
-    return "$rc"
+    python3 - "$CMD_TIMEOUT" "$@" <<'PY'
+import psutil, subprocess, sys
+
+timeout = float(sys.argv[1])
+proc = psutil.Popen(sys.argv[2:])
+try:
+    rc = proc.wait(timeout=timeout)
+except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
+    # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
+    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后终止整棵进程树防遗留
+    try:
+        for child in proc.children(recursive=True):
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+    finally:
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired, subprocess.TimeoutExpired):
+            pass
+    print(f"TIMEOUT: 命令 {' '.join(sys.argv[2:])} 超过 {timeout:.0f}s 未完成，已终止整棵进程树", file=sys.stderr)
+    sys.exit(142)
+sys.exit(rc)
+PY
 }
 
 # 提取 JSON 字段：json_field '<json>' '<python 表达式（d 为解析结果）>'
@@ -118,15 +135,29 @@ else
 fi
 
 if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
+    enforcement="$(json_field "$ruleset_json" 'd.get("enforcement", "missing")')"
     thread="$(json_field "$ruleset_json" 'str([r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_review_thread_resolution")).lower()')"
     bypass_ok="$(json_field "$ruleset_json" 'str(d.get("bypass_actors", []) == [] and d.get("current_user_can_bypass") == "never").lower()')"
-    if [[ "$thread" == "true" && "$bypass_ok" == "true" ]]; then
-        pass "ruleset $RULESET_ID 实时回读：线程解决要求=${thread}、无绕过者"
+    if [[ "$enforcement" == "active" && "$thread" == "true" && "$bypass_ok" == "true" ]]; then
+        pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、线程解决要求=${thread}、无绕过者"
     else
-        fail "ruleset $RULESET_ID 实时回读异常：required_review_thread_resolution=${thread}、bypass_actors_ok=${bypass_ok}"
+        fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、required_review_thread_resolution=${thread}、bypass_actors_ok=${bypass_ok}"
     fi
 else
     fail "拉取 ruleset $RULESET_ID 失败"
+fi
+
+# branch protection 层回读（T7 演练曾临时解除 enforce_admins，只查 ruleset 会漏掉该层仍被削弱）
+if bp_json="$(run_timeout gh api "repos/$REPO/branches/main/protection")"; then
+    enforce_admins="$(json_field "$bp_json" 'str(d.get("enforce_admins", {}).get("enabled")).lower()')"
+    strict="$(json_field "$bp_json" 'str(d.get("required_status_checks", {}).get("strict")).lower()')"
+    if [[ "$enforce_admins" == "true" && "$strict" == "true" ]]; then
+        pass "branch protection 实时回读：enforce_admins=${enforce_admins}、strict=${strict}"
+    else
+        fail "branch protection 实时回读异常：enforce_admins=${enforce_admins}、strict=${strict}"
+    fi
+else
+    fail "拉取 branch protection 失败"
 fi
 
 # --- 4. 治理文档 Markdown 相对链接 ---
@@ -190,6 +221,7 @@ for i, e in enumerate(ledger):
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")
     check(e.get("restored") is True, f"{tag} 恢复终态 restored=true")
+    check(bool(e.get("restoration_evidence")), f"{tag} 恢复证据列表非空")
     for ev in e.get("restoration_evidence", []):
         p = f"{evidence_dir}/{ev}"
         check(pathlib.Path(p).exists(), f"{tag} 恢复证据文件存在（{ev}）")
@@ -213,8 +245,10 @@ for i, e in enumerate(ledger):
                 done = datetime.datetime.fromisoformat(done_at.replace("Z", "+00:00"))
                 base = datetime.datetime.fromisoformat(e["completed_at"].replace("Z", "+00:00"))
                 hours = (done - base).total_seconds() / 3600
-                within = hours <= float(pv.get("within_hours", 24))
-                check(within, f"{tag} 补验在操作后 {hours:.1f}h 内完成（期限 {pv.get('within_hours', 24)}h）")
+                # 制度固定窗口：0 ≤ 补验耗时 ≤ 24h（不被台账 within_hours 放宽；
+                # hours<0 表示补验时间早于操作完成时间，同样不通过）
+                within = 0 <= hours <= 24
+                check(within, f"{tag} 补验在操作后 {hours:.1f}h 内完成（制度固定 0~24h）")
             except (KeyError, ValueError) as err:
                 check(False, f"{tag} 补验时间解析失败：{err}")
             check(
@@ -236,6 +270,7 @@ for i, e in enumerate(ledger):
     else:
         check(False, f"{tag} 缺少补验 run_id")
 
+    check(bool(pv.get("evidence_file")), f"{tag} 补验证据文件已指定")
     ev_file = pv.get("evidence_file")
     if ev_file:
         check(pathlib.Path(f"{evidence_dir}/{ev_file}").exists(), f"{tag} 补验证据文件存在（{ev_file}）")

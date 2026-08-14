@@ -20,52 +20,83 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FAILED=0
 
-# 外部命令限时执行：后台运行 + 截止时间轮询 + kill（bash 原生机制，
-# macOS / Linux / Git Bash（Windows）行为一致，无 perl/第三方依赖）。
-# 命令超时 → 发送 TERM 并回收，返回 142（128+SIGTERM 惯例）。
+# 外部命令限时执行：python3 + psutil 封装（项目依赖，macOS/Linux/Windows 一致）。
+# 超时 → 终止整棵进程树（AGENTS.md 防僵尸/防遗留）并返回 142（128+SIGTERM 惯例）；
+# 正常结束 → 返回命令退出码。超时/执行错误与「预期失败结果」必须区分——
+# 只有命令明确返回预期的「未命中/未跟踪」状态码才算 PASS。
 GATE_CMD_TIMEOUT="${CHECK_ENV_GITIGNORE_CMD_TIMEOUT:-10}"
 
 run_timeout() {
-    local deadline pid rc
-    deadline=$(( $(date +%s) + GATE_CMD_TIMEOUT ))
-    "$@" &
-    pid=$!
-    while kill -0 "$pid" 2>/dev/null; do
-        if [[ "$(date +%s)" -ge "$deadline" ]]; then
-            echo "TIMEOUT: 命令 '$*' 超过 ${GATE_CMD_TIMEOUT}s 未完成，已终止" >&2
-            kill "$pid" 2>/dev/null
-            wait "$pid" 2>/dev/null
-            return 142
-        fi
-        sleep 0.2
-    done
-    wait "$pid"
-    rc=$?
-    return "$rc"
+    python3 - "$GATE_CMD_TIMEOUT" "$@" <<'PY'
+import psutil, subprocess, sys
+
+timeout = float(sys.argv[1])
+proc = psutil.Popen(sys.argv[2:])
+try:
+    rc = proc.wait(timeout=timeout)
+except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
+    # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
+    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后终止整棵进程树防遗留
+    try:
+        for child in proc.children(recursive=True):
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+    finally:
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired, subprocess.TimeoutExpired):
+            pass
+    print(f"TIMEOUT: 命令 {' '.join(sys.argv[2:])} 超过 {timeout:.0f}s 未完成，已终止整棵进程树", file=sys.stderr)
+    sys.exit(142)
+sys.exit(rc)
+PY
 }
 
 cd "$REPO_ROOT"
 
 echo "===== 环境文件忽略规则检查 ====="
 
-# 1. .env 必须被忽略
-if run_timeout git check-ignore -q .env; then
+# 1. .env 必须被忽略（git check-ignore 退出码：0=命中忽略，1=未命中，142=超时/错误）
+run_timeout git check-ignore -q .env
+rc=$?
+if [[ $rc -eq 0 ]]; then
     echo "PASS: .env 已被 git 忽略"
+elif [[ $rc -eq 142 ]]; then
+    echo "FAIL: 无法确认 .env 是否被忽略（git 超时，已终止）"
+    FAILED=1
 else
     echo "FAIL: .env 未被 git 忽略（.gitignore 缺少 .env 条目）"
     FAILED=1
 fi
 
-# 2. .env 不得被跟踪
-if run_timeout git ls-files --error-unmatch .env >/dev/null 2>&1; then
+# 2. .env 不得被跟踪（git ls-files --error-unmatch 退出码：0=已跟踪，1=未跟踪，142=超时/错误）
+run_timeout git ls-files --error-unmatch .env >/dev/null 2>&1
+rc=$?
+if [[ $rc -eq 0 ]]; then
     echo "FAIL: .env 已被 git 跟踪，必须 git rm --cached .env"
+    FAILED=1
+elif [[ $rc -eq 142 ]]; then
+    echo "FAIL: 无法确认 .env 是否被跟踪（git 超时，已终止）"
     FAILED=1
 else
     echo "PASS: .env 未被 git 跟踪"
 fi
 
-# 3. 已跟踪的环境文件只允许 .env.example
-TRACKED_ENV_FILES="$(run_timeout git ls-files | grep -E '(^|/)\.env($|\.)|^\.env' || true)"
+# 3. 已跟踪的环境文件只允许 .env.example（先单独取列表，超时/错误直接判失败，
+#    不让 grep/管道掩盖 git 的执行错误）
+ls_output="$(run_timeout git ls-files)"
+ls_rc=$?
+if [[ $ls_rc -eq 142 ]]; then
+    echo "FAIL: 无法读取 git 跟踪文件列表（git 超时，已终止）"
+    FAILED=1
+fi
+TRACKED_ENV_FILES="$(printf '%s\n' "$ls_output" | grep -E '(^|/)\.env($|\.)|^\.env' || true)"
 for f in $TRACKED_ENV_FILES; do
     if [[ "$f" == ".env.example" ]]; then
         echo "PASS: 跟踪文件 ${f}（允许的模板）"
