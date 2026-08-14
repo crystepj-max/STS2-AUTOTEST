@@ -121,10 +121,12 @@ log_operation() {
     while ! mkdir "$lock" 2>/dev/null; do
         now_ts="$(date +%s)"
         reclaim=""
+        holder_sig=""   # 认领前捕获的锁实例标识（holder 内容）
         if [[ -f "$lock/holder" ]]; then
             # 有持有者标识：进程已死或锁超龄 → 认领回收
             holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
             holder_ts="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2)"
+            holder_sig="$(cat "$lock/holder" 2>/dev/null)"
             if ! kill -0 "${holder_pid:-0}" 2>/dev/null; then
                 reclaim="持有进程 ${holder_pid:-?} 已不存在"
             elif [[ -n "$holder_ts" ]] && [[ "$(( now_ts - holder_ts ))" -gt "$stale_after" ]]; then
@@ -138,14 +140,22 @@ log_operation() {
             fi
         fi
         if [[ -n "$reclaim" ]]; then
-            # 原子认领：mv 改名只有一方成功；成功者回收，失败者继续等待。
-            # 避免两进程同时 rm -rf 误删对方刚创建的新锁（TOCTOU 竞态）。
+            # 原子认领 + 实例校验：mv 前重读锁目录 inode，确认仍是刚检查的同一实例
+            # （防止 A 检查后 B 已换新锁，A 误移 B 的新锁——TOCTOU 竞态）。
+            # inode 校验对「有/无 holder」两种场景都可靠（holder 内容可能为空）。
             stale_dir="$lock.stale.$$"
-            if mv "$lock" "$stale_dir" 2>/dev/null; then
-                echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
-                rm -rf "$stale_dir"
-                continue
+            orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
+            if [[ -n "$orig_inode" ]] && mv "$lock" "$stale_dir" 2>/dev/null; then
+                moved_inode="$(stat -f %i "$stale_dir" 2>/dev/null || echo '')"
+                if [[ "$moved_inode" == "$orig_inode" ]]; then
+                    echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
+                    rm -rf "$stale_dir"
+                    continue
+                fi
+                # mv 走的不是同一实例（极端竞态）→ 恢复原目录
+                mv "$stale_dir" "$lock" 2>/dev/null || true
             fi
+            # 认领失败（锁已被他人替换）→ 放弃本次回收，继续等待
         fi
         i=$((i + 1))
         if [[ "$i" -ge "$max_wait" ]]; then
