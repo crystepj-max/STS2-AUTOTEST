@@ -121,12 +121,11 @@ log_operation() {
     while ! mkdir "$lock" 2>/dev/null; do
         now_ts="$(date +%s)"
         reclaim=""
-        holder_sig=""   # 认领前捕获的锁实例标识（holder 内容）
+        orig_inode=""   # 陈旧判定时绑定的锁实例标识（inode，认领前记录）
         if [[ -f "$lock/holder" ]]; then
             # 有持有者标识：进程已死或锁超龄 → 认领回收
             holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
             holder_ts="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2)"
-            holder_sig="$(cat "$lock/holder" 2>/dev/null)"
             if ! kill -0 "${holder_pid:-0}" 2>/dev/null; then
                 reclaim="持有进程 ${holder_pid:-?} 已不存在"
             elif [[ -n "$holder_ts" ]] && [[ "$(( now_ts - holder_ts ))" -gt "$stale_after" ]]; then
@@ -140,10 +139,12 @@ log_operation() {
             fi
         fi
         if [[ -n "$reclaim" ]]; then
+            # 判定陈旧时立即绑定锁实例（inode）：认领操作只可能作用于该实例。
+            # 若 A 判定后 B 换新锁，A 的 orig_inode 仍是旧锁 → 认领时校验失败放弃，
+            # 不会误删 B 的新锁（TOCTOU）。
+            orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
             # 无破坏原子认领：所有竞争者共享单一认领名 .claim（mkdir 原子互斥）。
-            # 只有一个进程能成功创建 → 唯一回收者；认领后校验锁 inode 未变
-            # （A 认领后 B 换新锁 → A inode 校验失败放弃认领，不动 B 的新锁）。
-            # 认领名固定（不含 PID）：两进程同时认领时 mkdir 保证仅一方成功。
+            # 只有一个进程能成功创建 → 唯一回收者；认领后校验锁 inode 仍是绑定的实例。
             claimant="$lock/.claim"
             # 清理残留认领（认领者在 rm -rf 前中断）：超龄 .claim 可回收
             if [[ -d "$claimant" ]]; then
@@ -153,8 +154,7 @@ log_operation() {
                 fi
             fi
             if mkdir "$claimant" 2>/dev/null; then
-                orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
-                # 认领成功：重读 inode 确认锁仍是刚检查的实例（未变才回收）
+                # 认领成功：重读 inode 确认仍是绑定的陈旧实例（未变才回收）
                 curr_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
                 if [[ -n "$orig_inode" ]] && [[ "$orig_inode" == "$curr_inode" ]]; then
                     echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
