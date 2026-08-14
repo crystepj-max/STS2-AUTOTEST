@@ -90,10 +90,12 @@ DEFAULT_RULESET_JSON = json.dumps(
 DEFAULT_JOBS_JSON = json.dumps(
     {"jobs": [{"name": "PR Check Summary", "conclusion": "success"}]}
 )
-# 原因链接资源的评论：含早于操作的「紧急绕过」授权记录（时间戳可验证）
+# 原因链接资源的评论：台账 authorization_comment_id 引用的预存授权记录
+# （真实 Issue #23 的 5289650944，04:56:31Z，早于绕过操作 05:50:11Z）
 DEFAULT_COMMENTS_JSON = json.dumps(
     [
         {
+            "id": 5289650944,
             "created_at": "2026-08-14T04:56:31Z",
             "body": "紧急绕过有明确权限、原因记录和事后补验要求",
         }
@@ -757,14 +759,41 @@ def test_gate_detects_authorization_not_bound_to_bypass(tmp_path: Path) -> None:
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
 def test_gate_detects_missing_pre_operation_authorization_comment(tmp_path: Path) -> None:
-    """原因链接资源上不存在早于操作的时间戳授权评论时对账门禁应失败。"""
+    """台账引用的授权评论晚于操作时对账门禁应失败（时间戳授权记录须先于绕过）。"""
     comments_json = json.dumps(
-        [{"created_at": "2026-08-14T07:00:00Z", "body": "紧急绕过事后记录"}]  # 晚于操作
+        [
+            {
+                "id": 5289650944,
+                "created_at": "2026-08-14T07:00:00Z",  # 晚于操作
+                "body": "紧急绕过事后记录",
+            }
+        ]
     )
     env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENTS_JSON=comments_json)
     proc = _run_script(env)
     assert proc.returncode != 0
-    assert "时间戳授权记录" in proc.stdout + proc.stderr
+    assert "授权评论" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_authorization_comment_missing(tmp_path: Path) -> None:
+    """台账引用的授权评论不存在时对账门禁应失败。"""
+    comments_json = json.dumps(
+        [
+            {
+                "id": 999999,
+                "created_at": "2026-08-14T04:56:31Z",
+                "body": "紧急绕过有明确权限、原因记录和事后补验要求",
+            }
+        ]
+    )
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENTS_JSON=comments_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "授权评论" in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(

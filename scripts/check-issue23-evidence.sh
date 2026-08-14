@@ -461,19 +461,32 @@ for i, e in enumerate(ledger):
                 issue_data.get("created_at", "") <= e.get("completed_at", ""),
                 f"{tag} 授权记录时间早于操作（created_at={issue_data.get('created_at')}）",
             )
-            # 时间戳授权记录：资源上须存在早于操作完成时间的评论且正文含「紧急绕过」
-            # 条款——Issue 正文事后补写会被较早的 created_at 掩盖，评论时间戳可验证
-            cmts = run(["gh", "api", f"repos/{repo}/issues/{m.group(1)}/comments"])
-            if cmts.returncode != 0:
-                check(False, f"{tag} 拉取原因链接资源的评论失败")
+            # 时间戳授权记录：台账须引用具体评论 ID（不可变记录），该评论须早于
+            # 操作完成时间且正文含「紧急绕过」条款——Issue 正文事后补写会被较早的
+            # created_at 掩盖，评论 ID + 时间戳可验证且不可抵赖
+            auth_cid = e.get("authorization_comment_id")
+            if not auth_cid:
+                check(False, f"{tag} 缺少 authorization_comment_id（须引用具体授权评论）")
             else:
-                pre_op_auth = [
-                    c
-                    for c in json.loads(cmts.stdout)
-                    if c.get("created_at", "") <= e.get("completed_at", "")
-                    and "紧急绕过" in c.get("body", "")
-                ]
-                check(bool(pre_op_auth), f"{tag} 存在早于操作的时间戳授权记录（评论含紧急绕过）")
+                cmts = run(["gh", "api", f"repos/{repo}/issues/{m.group(1)}/comments"])
+                if cmts.returncode != 0:
+                    check(False, f"{tag} 拉取原因链接资源的评论失败")
+                else:
+                    auth_comment = next(
+                        (c for c in json.loads(cmts.stdout) if str(c.get("id")) == str(auth_cid)),
+                        None,
+                    )
+                    if auth_comment is None:
+                        check(False, f"{tag} 授权评论 {auth_cid} 不存在")
+                    else:
+                        check(
+                            auth_comment.get("created_at", "") <= e.get("completed_at", ""),
+                            f"{tag} 授权评论 {auth_cid} 早于操作（created_at={auth_comment.get('created_at')}）",
+                        )
+                        check(
+                            "紧急绕过" in auth_comment.get("body", ""),
+                            f"{tag} 授权评论 {auth_cid} 正文含紧急绕过条款",
+                        )
     check(bool(e.get("authorization_note")), f"{tag} 授权说明已记录")
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")
