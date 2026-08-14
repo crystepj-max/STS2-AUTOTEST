@@ -1,10 +1,11 @@
 # STATE — issue-24-mac-runner-maintainability
 
-- 更新时间：2026-08-14（已合并 + T2/T3/T6 完成，T7 待 8/21）
+- 更新时间：2026-08-14（已合并；T2/T6 完成；T3 采集中；T7 待 8/21）
 - 阶段：T1 取证已归档；T2/T3(脚本)/T4/T5 开发完成；S4 返工完成；
   PR #30 已合并（f1c1ab3，2026-08-14）；T2 实证与 T6 演练完成；
-  T3 探针已部署采集（2026-08-21 满 7 天）；T7 归因待定时检视。
-- 状态机位置：`REVIEW` →（用户验收通过 + 合并授权 + 已合并）→ 待 T7 收口关闭
+  T3 探针已部署、连续采集中（2026-08-21 满 7 天，**满 7 天前不视为完成**）；
+  T7 归因待 8/21 定时检视。
+- 状态机位置：`REVIEW` →（用户验收通过 + 合并授权 + 已合并）→ T3 采集中 → 待 T7 收口关闭
 
 ## 当前事实（均已落盘，不依赖会话记忆）
 
@@ -64,9 +65,9 @@
 
 1. **T2 实证：✅ 完成** → evidence/verification-t2-20260814.md
    （stop → GitHub 侧 offline 不可接收；start → 新进程 + online 可接收）。
-2. **T3 部署：✅ 已部署** → evidence/deployment-t3-20260814.md
+2. **T3 部署：✅ 已部署，⏳ 采集中（未完成）** → evidence/deployment-t3-20260814.md
    （launchd `com.sts2.autotest.runner-probe` 每 10 分钟，JSONL 落盘
-   `~/.sts2-runner-probe/`，2026-08-21 满 7 天）。
+   `~/.sts2-runner-probe/`；**连续采集满 7 天（2026-08-21）才算 T3 完成**）。
 3. **T6 演练：✅ 完成** → evidence/drill-20260814.md
    （stop→offline→start→online→真实 CI 领取执行成功）。
 4. **T7 收口：⏳ 待 8/21**——定时任务已设（2026-08-21 09:17，持久化），
