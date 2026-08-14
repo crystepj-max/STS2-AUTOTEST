@@ -252,6 +252,29 @@ else
 fi
 rmdir "$OPS_DIR_L/.ops.lock" 2>/dev/null || true
 
+# --- 用例 20（P2）：空 pid 的陈旧 claimant（mkdir 后写 pid 前中断）按年龄回收 ---
+test_begin "stop: 空 pid 陈旧 claimant 按年龄回收并写入标记"
+FAKE="$(new_fake_runner running)"
+OPS_DIR_E="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir-e.XXXXXX")"
+OPS_FILE_E="$OPS_DIR_E/ops.jsonl"
+printf '{"ts": "2026-08-14T00:00:00Z", "op": "manual-stop"}\n' > "$OPS_FILE_E"
+# 预置死进程陈旧锁 + 空 pid 的 claimant（mkdir 后写 pid 前中断残留）
+mkdir "$OPS_DIR_E/.ops.lock"
+printf '%s %s\n' "999999" "$(date +%s)" > "$OPS_DIR_E/.ops.lock/holder"
+mkdir "$OPS_DIR_E/.ops.lock/.claim"
+touch -t "$(date -v-10M +%Y%m%d%H%M.%S 2>/dev/null || date -d '10 minutes ago' +%Y%m%d%H%M.%S)" "$OPS_DIR_E/.ops.lock/.claim"
+LINE_BEFORE_E="$(wc -l < "$OPS_FILE_E" | tr -d ' ')"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE_E" RUN_CTL_OPS_TIMEOUT=30 \
+    RUN_CTL_OPS_STALE=300 run_ctl "$FAKE" stop
+assert_eq "$CTL_RC" "0" "空 pid claimant 回收后 stop 正常执行"
+LINE_AFTER_E="$(wc -l < "$OPS_FILE_E" | tr -d ' ')"
+assert_eq "$LINE_AFTER_E" "$((LINE_BEFORE_E + 1))" "空 pid claimant 回收后应新增一行标记"
+if [[ ! -d "$OPS_DIR_E/.ops.lock" ]]; then
+    pass "空 pid claimant + 陈旧锁均已回收"
+else
+    fail "空 pid claimant 未被回收（陈旧锁永久阻塞）"
+fi
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1

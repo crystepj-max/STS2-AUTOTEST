@@ -151,7 +151,15 @@ log_operation() {
             if [[ -d "$claimant" ]]; then
                 claim_pid="$(cat "$claimant/pid" 2>/dev/null || echo '')"
                 if [[ -n "$claim_pid" ]] && ! kill -0 "$claim_pid" 2>/dev/null; then
+                    # 持有进程已死 → 清理残留认领
                     rm -rf "$claimant" 2>/dev/null || true
+                elif [[ -z "$claim_pid" ]]; then
+                    # 空 pid 的 claimant：只可能是 mkdir 后写 pid 前中断残留
+                    # （活认领必然已写 pid），按年龄安全回收避免永久阻塞。
+                    claim_age="$(( now_ts - $(stat -f %m "$claimant" 2>/dev/null || echo "$now_ts") ))"
+                    if [[ "$claim_age" -gt "$stale_after" ]]; then
+                        rm -rf "$claimant" 2>/dev/null || true
+                    fi
                 fi
             fi
             if mkdir "$claimant" 2>/dev/null; then
