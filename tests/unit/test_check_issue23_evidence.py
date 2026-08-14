@@ -938,6 +938,29 @@ def test_gate_detects_gitignore_negation_semantics(tmp_path: Path) -> None:
     shutil.which("bash") is None,
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
+def test_gate_detects_gitignore_negation_bracket_evasion(tmp_path: Path) -> None:
+    """否定规则用括号通配隐藏 .env（!secrets/[.]env）时对账门禁应失败（字面子串会漏过）。"""
+    gitignore = REPO_ROOT / ".gitignore"
+    original = gitignore.read_text(encoding="utf-8")
+    try:
+        gitignore.write_text(original + "\n!secrets/[.]env\n", encoding="utf-8")
+        data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+        data["env_guard"]["gitignore"] = [".env", ".env.*", "!.env.example", "!secrets/[.]env"]
+        broken_json = tmp_path / "t5-bracket.json"
+        broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        env = _base_env(_fake_gh(tmp_path), tmp_path)
+        env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+        proc = _run_script(env)
+        assert proc.returncode != 0
+        assert "否定规则" in proc.stdout + proc.stderr
+    finally:
+        gitignore.write_text(original, encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
 def test_gate_detects_restoration_evidence_missing_snapshot_types(tmp_path: Path) -> None:
     """恢复证据缺少两类终态快照（如只列空 JSON）时对账门禁应失败。"""
     tmp_ev = tmp_path / "evidence"

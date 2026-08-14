@@ -197,7 +197,8 @@ else
     else
         # 语义验证 ①：禁止放行 .env 的否定规则（嵌套路径如 !secrets/.env 会重新
         # 暴露本地凭据；唯一允许的否定规则是 !.env.example）
-        neg_rules="$(grep -E '^!' "$REPO_ROOT/.gitignore" | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+        # 先剥离括号表达式（[.] 等通配可隐藏字面 .env）再按 gitignore 语义识别
+        neg_rules="$(grep -E '^!' "$REPO_ROOT/.gitignore" | sed -E 's/\[[^]]*\]//g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
         if [[ -n "$neg_rules" ]]; then
             fail "存在放行 .env 的否定规则（只允许 !.env.example）：$(echo "$neg_rules" | tr '\n' ' ')"
         else

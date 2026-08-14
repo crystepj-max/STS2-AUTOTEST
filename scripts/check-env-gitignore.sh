@@ -154,6 +154,15 @@ cd "$REPO_ROOT"
 
 echo "===== 环境文件忽略规则检查 ====="
 
+# 0. 禁止放行 .env 的否定规则（嵌套路径如 !secrets/.env 或通配隐藏 !secrets/[.]env
+#    会重新暴露本地凭据；唯一允许的否定规则是 !.env.example）
+#    先剥离括号表达式（[.] 等通配可隐藏字面 .env）再按 gitignore 语义识别
+neg_rules="$(grep -E '^!' "$REPO_ROOT/.gitignore" | sed -E 's/\[[^]]*\]//g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+if [[ -n "$neg_rules" ]]; then
+    echo "FAIL: 存在放行 .env 的否定规则（只允许 !.env.example）：$(echo "$neg_rules" | tr '\n' ' ')"
+    FAILED=1
+fi
+
 # 1. .env 必须被忽略（git check-ignore 退出码：0=命中忽略，1=未命中；
 #    其他非零码=仓库损坏/I/O 等执行错误，一律判失败，只有 1 才是「未忽略」）
 run_timeout git check-ignore -q .env
