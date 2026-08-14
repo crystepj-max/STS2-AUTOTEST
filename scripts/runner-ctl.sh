@@ -120,26 +120,30 @@ log_operation() {
     local stale_after="${OPS_LOCK_STALE_AFTER:-300}"  # 锁年龄超 300s 视为陈旧（前次中断残留）
     while ! mkdir "$lock" 2>/dev/null; do
         now_ts="$(date +%s)"
+        reclaim=""
         if [[ -f "$lock/holder" ]]; then
-            # 有持有者标识：进程已死或锁超龄 → 回收
+            # 有持有者标识：进程已死或锁超龄 → 认领回收
             holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
             holder_ts="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2)"
             if ! kill -0 "${holder_pid:-0}" 2>/dev/null; then
-                echo "WARNING: 回收陈旧 ops 锁（持有进程 ${holder_pid:-?} 已不存在）" >&2
-                rm -rf "$lock"
-                continue
-            fi
-            if [[ -n "$holder_ts" ]] && [[ "$(( now_ts - holder_ts ))" -gt "$stale_after" ]]; then
-                echo "WARNING: 回收陈旧 ops 锁（锁龄 ${holder_ts}，超过 ${stale_after}s）" >&2
-                rm -rf "$lock"
-                continue
+                reclaim="持有进程 ${holder_pid:-?} 已不存在"
+            elif [[ -n "$holder_ts" ]] && [[ "$(( now_ts - holder_ts ))" -gt "$stale_after" ]]; then
+                reclaim="锁龄超过 ${stale_after}s"
             fi
         else
             # 无 holder 文件（mkdir 后写 holder 前中断残留）：按锁目录 mtime 安全年龄回收
             lock_age="$(( now_ts - $(stat -f %m "$lock" 2>/dev/null || echo "$now_ts") ))"
             if [[ "$lock_age" -gt "$stale_after" ]]; then
-                echo "WARNING: 回收无持有者的陈旧 ops 锁（目录龄 ${lock_age}s，超过 ${stale_after}s）" >&2
-                rm -rf "$lock"
+                reclaim="无持有者且目录龄 ${lock_age}s 超过 ${stale_after}s"
+            fi
+        fi
+        if [[ -n "$reclaim" ]]; then
+            # 原子认领：mv 改名只有一方成功；成功者回收，失败者继续等待。
+            # 避免两进程同时 rm -rf 误删对方刚创建的新锁（TOCTOU 竞态）。
+            stale_dir="$lock.stale.$$"
+            if mv "$lock" "$stale_dir" 2>/dev/null; then
+                echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
+                rm -rf "$stale_dir"
                 continue
             fi
         fi

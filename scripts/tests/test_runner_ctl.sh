@@ -201,6 +201,35 @@ else
     fail "无 holder 陈旧锁未被回收"
 fi
 
+# --- 用例 18（P2）：并发竞争陈旧锁——原子认领，两进程写入均完整不丢失 ---
+test_begin "并发: 两进程竞争死进程锁，写入均完整"
+OPS_DIR_C="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir-c.XXXXXX")"
+OPS_FILE_C="$OPS_DIR_C/ops.jsonl"
+# 预置死进程陈旧锁
+mkdir "$OPS_DIR_C/.ops.lock"
+printf '%s %s\n' "999999" "$(date +%s)" > "$OPS_DIR_C/.ops.lock/holder"
+# 并发写入：两个子 shell 各自直接调用 runner-ctl stop（触发 log_operation）
+# stop 在 fake runner 上执行，两个进程同时竞争回收死进程锁并写 ops.jsonl
+FAKE_C="$(new_fake_runner running)"
+for OP in stop stop; do
+    ( RUNNER_DIR="$FAKE_C" PROBE_OPS_FILE="$OPS_FILE_C" OPS_LOCK_TIMEOUT=50 \
+        PATH="/usr/bin:/bin" bash "$SCRIPT_DIR/../runner-ctl.sh" "$OP" >/dev/null 2>&1 ) &
+done
+wait
+LINE_COUNT_C="$(wc -l < "$OPS_FILE_C" 2>/dev/null | tr -d ' ')"
+if [[ "$LINE_COUNT_C" == "2" ]]; then
+    # 两行都必须是合法 JSON
+    if python3 -c 'import json,sys
+for line in open(sys.argv[1]): json.loads(line)
+print("ok")' "$OPS_FILE_C" 2>/dev/null | grep -q ok; then
+        pass "并发写入两行均合法（无覆盖无半行）"
+    else
+        fail "并发写入存在非法行: $(cat "$OPS_FILE_C")"
+    fi
+else
+    fail "并发写入行数异常（期望 2 实际 $LINE_COUNT_C）: $(cat "$OPS_FILE_C" 2>/dev/null)"
+fi
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1
