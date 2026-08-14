@@ -160,6 +160,26 @@ else
 fi
 rmdir "$OPS_DIR/.ops.lock" 2>/dev/null || true
 
+# --- 用例 16（P2）：陈旧锁（持有进程已死）自动回收并正常写入 ---
+test_begin "stop: 陈旧锁（死进程持有）自动回收并写入标记"
+FAKE="$(new_fake_runner running)"
+OPS_DIR_S="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir-s.XXXXXX")"
+OPS_FILE_S="$OPS_DIR_S/ops.jsonl"
+printf '{"ts": "2026-08-14T00:00:00Z", "op": "manual-stop"}\n' > "$OPS_FILE_S"
+# 预置陈旧锁：holder PID 999999（必然不存在）
+mkdir "$OPS_DIR_S/.ops.lock"
+printf '%s %s\n' "999999" "$(date +%s)" > "$OPS_DIR_S/.ops.lock/holder"
+LINE_BEFORE_S="$(wc -l < "$OPS_FILE_S" | tr -d ' ')"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE_S" RUN_CTL_OPS_TIMEOUT=30 run_ctl "$FAKE" stop
+assert_eq "$CTL_RC" "0" "陈旧锁回收后 stop 正常执行"
+LINE_AFTER_S="$(wc -l < "$OPS_FILE_S" | tr -d ' ')"
+assert_eq "$LINE_AFTER_S" "$((LINE_BEFORE_S + 1))" "陈旧锁回收后应新增一行标记"
+if [[ ! -d "$OPS_DIR_S/.ops.lock" ]]; then
+    pass "陈旧锁已被回收"
+else
+    fail "陈旧锁未被回收"
+fi
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1

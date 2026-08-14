@@ -115,9 +115,26 @@ log_operation() {
     lock="$dir/.ops.lock"
     # 简单文件锁：等待持有者释放（最多 5 秒）。仅在成功创建锁目录后才更新文件；
     # 获取失败（前次中断残留锁或并发超窗）则中止本次写入，避免覆盖/删除他人锁。
-    local i=0
+    local i=0 holder_pid holder_ts now_ts
     local max_wait="${OPS_LOCK_TIMEOUT:-50}"   # 0.1s × N，默认 5 秒
+    local stale_after="${OPS_LOCK_STALE_AFTER:-300}"  # 锁年龄超 300s 视为陈旧（前次中断残留）
     while ! mkdir "$lock" 2>/dev/null; do
+        # 陈旧锁回收：锁目录内有 holder 文件（PID+时间戳）；持有进程已死或锁超龄 → 回收
+        if [[ -f "$lock/holder" ]]; then
+            holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
+            holder_ts="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2)"
+            now_ts="$(date +%s)"
+            if ! kill -0 "${holder_pid:-0}" 2>/dev/null; then
+                echo "WARNING: 回收陈旧 ops 锁（持有进程 ${holder_pid:-?} 已不存在）" >&2
+                rm -rf "$lock"
+                continue
+            fi
+            if [[ -n "$holder_ts" ]] && [[ "$(( now_ts - holder_ts ))" -gt "$stale_after" ]]; then
+                echo "WARNING: 回收陈旧 ops 锁（锁龄 ${holder_ts}，超过 ${stale_after}s）" >&2
+                rm -rf "$lock"
+                continue
+            fi
+        fi
         i=$((i + 1))
         if [[ "$i" -ge "$max_wait" ]]; then
             echo "WARNING: ops 日志锁获取失败（$lock），跳过本次维护标记写入" >&2
@@ -125,12 +142,17 @@ log_operation() {
         fi
         sleep 0.1
     done
+    # 持有者标识：PID + 时间戳（供陈旧锁回收）
+    printf '%s %s\n' "$$" "$(date +%s)" > "$lock/holder"
+    # trap 清理：仅本进程持有期间退出时释放锁（防止中断残留）
+    trap 'rm -rf "$lock"' RETURN EXIT
     if [[ -f "$PROBE_OPS_FILE" ]]; then
         cp "$PROBE_OPS_FILE" "$tmp" 2>/dev/null
     fi
     printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$tmp"
     mv -f "$tmp" "$PROBE_OPS_FILE"
-    rmdir "$lock" 2>/dev/null || true
+    rm -rf "$lock"
+    trap - RETURN EXIT
     return 0
 }
 
