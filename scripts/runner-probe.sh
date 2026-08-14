@@ -226,7 +226,9 @@ code="$(curl -s --max-time 5 --noproxy '*' -o /dev/null -w '%{http_code}' https:
 if [[ "$code" == "200" ]]; then
     internet_reachable=true
 fi
-if getent hosts api.ipify.org >/dev/null 2>&1 || nslookup api.ipify.org >/dev/null 2>&1; then
+# DNS 探测也带硬超时（DNS 卡住时探针仍按时输出 JSON，降级 dns_resolvable=false）
+if run_with_timeout "$GH_TIMEOUT" getent hosts api.ipify.org >/dev/null 2>&1 \
+    || run_with_timeout "$GH_TIMEOUT" nslookup api.ipify.org >/dev/null 2>&1; then
     dns_resolvable=true
 fi
 
