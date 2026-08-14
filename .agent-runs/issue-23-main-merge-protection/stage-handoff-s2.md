@@ -1,12 +1,12 @@
-# Stage Handoff — S2 开发 → Review（复审修复轮 + macOS 兼容性补充）
+# Stage Handoff — S2 开发 → Review（复审修复轮 + macOS 兼容性修复）
 
 - task_id: issue-23-main-merge-protection
 - 来源 Issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/23
 - 交接时间：2026-08-14（S4 复审 REQUEST_CHANGES → 开发修复完成，重新交接；
-  macOS 兼容性补充修复轮 2026-08-14，PR #33）
+  macOS 兼容性修复轮 2026-08-14，PR #33）
 - 下一阶段：Review（复审）——**第一件事读本文件、developer-handoff.md、S4 review-report.md 与本 PR 的修复证据**
 - 复审修复主体（T6–T8 + .env 门禁）已随 PR #32 合入 main（`7d36d25`）；
-  本交接（S2 修订版）覆盖补充修复轮 PR #33（macOS 兼容性 + 回归单测）
+  本交接（S2 修订版）覆盖补充轮 PR #33（门禁脚本 macOS 兼容性修复 + 回归测试）
 
 ## 必读（按序）
 
@@ -30,10 +30,14 @@
 1. **四项修复的证据链**：每项阻塞问题都能在 PR #32 中找到对应证据文件与回读 JSON。
 2. **演练无残留**：`bypass_actors=[]`、`current_user_can_bypass=never`、`enforce_admins=true`、`required_review_thread_resolution=true`（可实时回读核对）。
 3. **配置一致性**：治理文档表格 ↔ 回读 JSON（含 t6 终态）。
-4. **未越界**：`src/`、`.github/workflows/` 均未改动（可 diff 核对）；PR #32 新增文件为 .gitignore、scripts/check-env-gitignore.sh、docs 与证据；PR #33 仅改脚本两处 echo 插值 + 新增 1 个单测文件。
+4. **未越界**：`src/`、`.github/workflows/` 均未改动（可 diff 核对）；PR #32 新增文件为 .gitignore、scripts/check-env-gitignore.sh、docs 与证据；PR #33 改动为脚本两处插值 + 新增 1 个单测文件。
 5. **治理文档无夸大**：完成标准对照 failure/missing 分列、紧急流程为演练实证机制。
-6. **PR #33 兼容性修复**：`scripts/check-env-gitignore.sh` 变量插值 `$f`→`${f}`（macOS shell 解析差异），
-   新增 `tests/unit/test_check_env_gitignore.py` 回归测试；本地验证：脚本 3 项 PASS + 全量单测 1758 passed + lint-imports 通过。
+6. **PR #33 macOS 兼容性修复（复验确认有效）**：`scripts/check-env-gitignore.sh` `$f`→`${f}` +
+   `tests/unit/test_check_env_gitignore.py` 回归测试（强制 `LC_CTYPE=C.UTF-8` 捕获缺陷 +
+   subprocess 60s 超时 + bash 可用性跳过）。复现证据：bash 3.2 + C.UTF-8 下旧版报
+   `unbound variable`（`f\xef`），修复版通过；`LC_CTYPE=C` 下两者均正常（早期"无语义
+   差异"误判来源：普通 shell 会话默认 C locale，而 pytest 子进程继承 C.UTF-8）。
+   本地验证：脚本 3 项 PASS + 全量单测 1758 passed + lint-imports 通过。
 
 ## 门禁说明
 

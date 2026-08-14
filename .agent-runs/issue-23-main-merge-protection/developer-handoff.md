@@ -27,16 +27,26 @@ Review（S4）判定四项阻塞问题，本轮逐一闭环：
 | ③ 「失败或缺失检查均阻断」只验证了失败场景 | 新增纯 markdown 探针 PR #31（命中 paths-ignore，0 个检查运行）→ 合并 HTTP 405 `Required status check "PR Check Summary" is expected.`；验收字段拆分为 failure/missing 两案例 | `evidence/t8-missing-check-probe.md`、`t5-final-evidence.json` 终版 |
 | ④ 未经授权关闭「审查意见线程必须解决」（ruleset `required_review_thread_resolution=false`） | 恢复为 `true`（PUT 仅改此字段，回读确认）；线程处理约定：bot/人工线程逐条处理并标记解决，solo 维护者可操作 | `evidence/t6-ruleset-thread-restored.md`、`t6-ruleset-readback.json` |
 
-### macOS 兼容性补充修复轮（PR #33，attempt-003）
+### 门禁脚本 macOS 兼容性修复轮（PR #33，attempt-003）——复验确认修复真实有效
 
-测试节点（round-001/测试/attempt-002）实测发现：门禁脚本 `scripts/check-env-gitignore.sh`
-在 macOS 上变量插值写法触发 shell 解析差异——`$f` 后紧跟全角括号 `（` 时本机 shell 的解析
-行为与 CI（Linux bash）不一致，导致输出/退出码漂移风险。修复与回归：
+测试节点（round-001/测试/attempt-002）报告门禁脚本 `scripts/check-env-gitignore.sh`
+存在 macOS 兼容性缺陷并提交 `1153dce`（`$f` → `${f}`）。开发节点复验（bash 3.2.57 实测）**确认修复真实有效**：
 
-| 问题 | 修复 | 证据 |
+> **根因（可复现）**：macOS 自带 bash 3.2 在 `LC_CTYPE=C.UTF-8`（macOS 常见默认，
+> pytest 子进程亦继承）下存在多字节解析缺陷——`$f` 后紧跟全角括号 `（`（UTF-8 首字节
+> 0xEF）时，bash 3.2 把 `f\xef` 合并解析为变量名，`set -u` 下报
+> `unbound variable`，门禁脚本第 3 项检查循环直接失败。
+> 实测：`LC_CTYPE=C.UTF-8 bash scripts/check-env-gitignore.sh` → 旧版
+> `line 42: f�: unbound variable`；`${f}` 修复版全部通过。
+> （`LC_CTYPE=C` 下两者均正常——这解释了早期"无语义差异"的误判来源：
+> 普通 shell 会话默认 `LC_CTYPE=C`，而 pytest 子进程继承 `C.UTF-8`。）
+
+PR #33 内容：
+
+| 变更 | 内容 | 证据 |
 |---|---|---|
-| 门禁脚本 macOS 兼容性（`$f` → `${f}`，消除 shell 解析歧义） | `scripts/check-env-gitignore.sh` 两处 echo 改用 `${f}` | PR #33 diff |
-| 缺回归测试：门禁脚本行为未被测试捕获 | 新增 `tests/unit/test_check_env_gitignore.py`：subprocess 调用脚本，断言退出码 0 + 模板文件报告 | `tests/unit/test_check_env_gitignore.py` |
+| 脚本兼容性修复 | `scripts/check-env-gitignore.sh` 两处 echo `$f` → `${f}`（界定变量名边界，消除 bash 3.2 + C.UTF-8 多字节解析歧义） | `scripts/check-env-gitignore.sh` |
+| 门禁脚本回归测试 | 新增 `tests/unit/test_check_env_gitignore.py`：subprocess 调用脚本，**强制 `LC_CTYPE=C.UTF-8`**（确保旧实现 `$f` 真实失败、新实现通过——突变验证：旧版在该环境下报 unbound variable）；断言退出码 0 + 模板文件报告；**加固：subprocess 60s 超时 + bash 不可用时 `skipif` 跳过**（Windows 无 Git Bash 不报错） | `tests/unit/test_check_env_gitignore.py` |
 
 ## 修改文件（本修复轮 PR：chore/issue-23-review-fixes）
 
@@ -53,10 +63,12 @@ Review（S4）判定四项阻塞问题，本轮逐一闭环：
   `t7-branch-protection-before/during/after.json`、`t8-missing-check-probe.md`；
   更新 `t5-ruleset-thread-fix.md`（顶部「已撤销」标注）、`t5-final-evidence.json`（终版：acceptance 拆分 + 新增 env_guard/emergency_bypass 字段）。
 
-## 修改文件（补充修复轮 PR #33：macOS 兼容性）
+## 修改文件（补充修复轮 PR #33：macOS 兼容性修复 + 回归测试）
 
-- `scripts/check-env-gitignore.sh`：`$f` → `${f}`（两处 echo，macOS shell 解析兼容）。
-- `tests/unit/test_check_env_gitignore.py`：新增门禁脚本真实回归测试。
+- `scripts/check-env-gitignore.sh`：`$f` → `${f}`（两处 echo；修复 bash 3.2 + `LC_CTYPE=C.UTF-8`
+  下多字节解析缺陷——实测旧版报 `unbound variable`，修复版通过）。
+- `tests/unit/test_check_env_gitignore.py`：新增门禁脚本回归测试（强制 C.UTF-8 locale 捕获
+  该缺陷 + subprocess 60s 超时 + bash 可用性 skipif）。
 - `.agent-runs/issue-23-main-merge-protection/STATE.md` / `developer-handoff.md` / `stage-handoff-s2.md`：本轮状态同步。
 
 仓库外变更（不可逆或即时生效，需 Reviewer 关注）：
@@ -113,4 +125,5 @@ PYTHONPATH=src python3 -m pytest tests/unit/ -q          # 1758 passed（含新�
 3. 探针 PR #31 的合并是否符合演练记录（`750ba976`），且未引入非探针内容。
 4. 验收字段拆分（failure T3b / missing T8）是否各自绑定独立证据。
 5. 治理文档完成标准对照表是否仍有夸大。
-6. 确认未改动 `src/`、`tests/` 与 `.github/workflows/`（Issue 明确不做项）。
+6. 确认未改动 `src/` 与 `.github/workflows/`（Issue 明确不做项）；PR #33 新增了
+   `tests/unit/test_check_env_gitignore.py`（门禁脚本回归测试），属本修复轮的测试资产。
