@@ -50,6 +50,8 @@ DEFAULT_RULESET_JSON = json.dumps(
         ],
     }
 )
+# compare API：status=ahead 表示 base（被绕过 SHA）是 head（补验 run head）的祖先
+DEFAULT_COMPARE_JSON = json.dumps({"status": "ahead"})
 # 与待更新 Issue 正文保持一致的对账标记
 DEFAULT_ISSUE_BODY = (
     "缺失样例证据：T8（探针 PR #31）\n"
@@ -76,6 +78,7 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         *"/commits/"*"/check-runs") echo "$FAKE_CHECKS_JSON" ;;
         *"/pulls/"*) echo "$FAKE_PR_JSON" ;;
         *"/rulesets/"*) echo "$FAKE_RULESET_JSON" ;;
+        *"/compare/"*) echo "$FAKE_COMPARE_JSON" ;;
         *"/issues/"*) python3 -c "import json,sys; print(json.dumps({'body': sys.stdin.read()}))" <<< "$FAKE_ISSUE_BODY" ;;
         *) echo "fake gh: 未预期的 URL: $url" >&2; exit 1 ;;
     esac
@@ -103,6 +106,7 @@ def _run_script(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         errors="replace",
         timeout=60,
         env=env,
+        check=False,  # 退出码由调用方断言（ruff PLW1510 要求显式声明）
     )
 
 
@@ -113,6 +117,7 @@ def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
     env["FAKE_PR_JSON"] = overrides.pop("FAKE_PR_JSON", DEFAULT_PR_JSON)
     env["FAKE_RULESET_JSON"] = overrides.pop("FAKE_RULESET_JSON", DEFAULT_RULESET_JSON)
+    env["FAKE_COMPARE_JSON"] = overrides.pop("FAKE_COMPARE_JSON", DEFAULT_COMPARE_JSON)
     env["FAKE_ISSUE_BODY"] = overrides.pop("FAKE_ISSUE_BODY", DEFAULT_ISSUE_BODY)
     env.update(overrides)
     return env

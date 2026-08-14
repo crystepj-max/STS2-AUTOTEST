@@ -105,8 +105,8 @@
 2. PR head ↔ 该 head 的 `PR Check Summary` 结论（必须 success）；
 3. Issue #23 正文 ↔ 实时规则（T8 缺失样例引用、`required_review_thread_resolution=true` 标记、ruleset 回读无绕过者）；
 4. 治理文档 Markdown 相对链接可解析；
-5. 绕过台账逐条核验：授权/原因链接、被绕过 SHA（本地对象库可解析）、恢复终态与证据文件、
-   补验 run success 且 head 一致、24 小时内完成、补验 head 祖先链包含被绕过合并。
+5. 绕过台账逐条核验：授权/原因链接、被绕过 SHA 可解析（远端 compare API）、恢复终态与证据文件、
+   补验 run success 且 head 一致、24 小时内完成、补验 head 祖先链包含被绕过合并（compare API，与本地克隆深度无关）。
 
 任一不满足 → 退出码 1。任一输出为 FAIL 的交接/复审结论不成立。
 

@@ -7,11 +7,12 @@
 #   3. Issue 正文 ↔ 实时规则（正文含 T8 缺失样例引用与线程解决要求标记；
 #      ruleset 回读 required_review_thread_resolution=true 且无绕过者）；
 #   4. 治理文档 Markdown 相对链接可解析；
-#   5. 绕过台账逐条核验：授权/原因链接、被绕过 SHA 存在、恢复终态与证据文件、
-#      补验 run success 且 head 一致、24 小时内完成、补验 head 祖先覆盖被绕过合并。
+#   5. 绕过台账逐条核验：授权/原因链接、被绕过 SHA 可解析（远端 compare API）、
+#      恢复终态与证据文件、补验 run success 且 head 一致、24 小时内完成、
+#      补验 head 祖先链包含被绕过合并（compare API，与本地克隆深度无关）。
 #
-# 依赖：gh（远端 API）、bash、python3（JSON 解析）、本地 git 对象。
-# 所有外部调用（gh/git）自带限时（AGENTS.md 硬规则）。
+# 依赖：gh（远端 API）、bash、python3（JSON 解析）。
+# 所有外部调用（gh）自带限时（AGENTS.md 硬规则）。
 #
 # 可选环境变量：CHECK_ISSUE23_PR（默认 33）、CHECK_ISSUE23_RULESET（默认 19962718）、
 #               CHECK_ISSUE23_EVIDENCE（证据 JSON 路径，测试可指定）、
@@ -187,9 +188,6 @@ for i, e in enumerate(ledger):
     )
     check(bool(e.get("authorization_note")), f"{tag} 授权说明已记录")
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
-    if e.get("bypassed_sha"):
-        git_ok = run(["git", "cat-file", "-e", e["bypassed_sha"] + "^{commit}"])
-        check(git_ok.returncode == 0, f"{tag} 被绕过 SHA 在仓库对象库中可解析")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")
     check(e.get("restored") is True, f"{tag} 恢复终态 restored=true")
     for ev in e.get("restoration_evidence", []):
@@ -224,8 +222,17 @@ for i, e in enumerate(ledger):
                 f"{tag} 台账声明补验 head 覆盖被绕过合并",
             )
             if e.get("bypassed_sha") and pv.get("head_sha"):
-                anc = run(["git", "merge-base", "--is-ancestor", e["bypassed_sha"], pv["head_sha"]])
-                check(anc.returncode == 0, f"{tag} 补验 head 祖先链包含被绕过合并（实测）")
+                # compare API 核验祖先（与本地克隆深度无关）：status=ahead/identical
+                # 表示 base（被绕过 SHA）是 head（补验 run head）的祖先；base 不存在 → 404
+                cmp = run(["gh", "api", f"repos/{repo}/compare/{e['bypassed_sha']}...{pv['head_sha']}"])
+                if cmp.returncode != 0:
+                    check(False, f"{tag} 被绕过 SHA 在远端不可解析（compare API 失败）")
+                else:
+                    status = json.loads(cmp.stdout).get("status", "")
+                    check(
+                        status in ("ahead", "identical"),
+                        f"{tag} 补验 head 祖先链包含被绕过合并（compare status={status}）",
+                    )
     else:
         check(False, f"{tag} 缺少补验 run_id")
 
