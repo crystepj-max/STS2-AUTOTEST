@@ -132,10 +132,11 @@ run_ctl() {
 $ps_body
 FAKE_PS
     chmod +x "$fake_bin/ps"
-    # 构造环境变量前缀：RUN_CTL_OPS_FILE / RUN_CTL_OPS_TIMEOUT 通过 export 传给子 shell
+    # 构造环境变量前缀：RUN_CTL_OPS_FILE / RUN_CTL_OPS_TIMEOUT / RUN_CTL_OPS_STALE 通过 export 传给子 shell
     local env_prefix="RUNNER_DIR=$dir"
     [[ -n "${RUN_CTL_OPS_FILE:-}" ]] && env_prefix="$env_prefix PROBE_OPS_FILE=$RUN_CTL_OPS_FILE"
     [[ -n "${RUN_CTL_OPS_TIMEOUT:-}" ]] && env_prefix="$env_prefix OPS_LOCK_TIMEOUT=$RUN_CTL_OPS_TIMEOUT"
+    [[ -n "${RUN_CTL_OPS_STALE:-}" ]] && env_prefix="$env_prefix OPS_LOCK_STALE_AFTER=$RUN_CTL_OPS_STALE"
     out="$(cd /tmp && env $env_prefix PATH="$fake_bin:/usr/bin:/bin" bash "$SCRIPT_DIR/../runner-ctl.sh" "$@" 2>&1)" || rc=$?
     rc="${rc:-0}"
     CTL_OUT="$out"

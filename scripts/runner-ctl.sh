@@ -119,11 +119,11 @@ log_operation() {
     local max_wait="${OPS_LOCK_TIMEOUT:-50}"   # 0.1s × N，默认 5 秒
     local stale_after="${OPS_LOCK_STALE_AFTER:-300}"  # 锁年龄超 300s 视为陈旧（前次中断残留）
     while ! mkdir "$lock" 2>/dev/null; do
-        # 陈旧锁回收：锁目录内有 holder 文件（PID+时间戳）；持有进程已死或锁超龄 → 回收
+        now_ts="$(date +%s)"
         if [[ -f "$lock/holder" ]]; then
+            # 有持有者标识：进程已死或锁超龄 → 回收
             holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
             holder_ts="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2)"
-            now_ts="$(date +%s)"
             if ! kill -0 "${holder_pid:-0}" 2>/dev/null; then
                 echo "WARNING: 回收陈旧 ops 锁（持有进程 ${holder_pid:-?} 已不存在）" >&2
                 rm -rf "$lock"
@@ -131,6 +131,14 @@ log_operation() {
             fi
             if [[ -n "$holder_ts" ]] && [[ "$(( now_ts - holder_ts ))" -gt "$stale_after" ]]; then
                 echo "WARNING: 回收陈旧 ops 锁（锁龄 ${holder_ts}，超过 ${stale_after}s）" >&2
+                rm -rf "$lock"
+                continue
+            fi
+        else
+            # 无 holder 文件（mkdir 后写 holder 前中断残留）：按锁目录 mtime 安全年龄回收
+            lock_age="$(( now_ts - $(stat -f %m "$lock" 2>/dev/null || echo "$now_ts") ))"
+            if [[ "$lock_age" -gt "$stale_after" ]]; then
+                echo "WARNING: 回收无持有者的陈旧 ops 锁（目录龄 ${lock_age}s，超过 ${stale_after}s）" >&2
                 rm -rf "$lock"
                 continue
             fi

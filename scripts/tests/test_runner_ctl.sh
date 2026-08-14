@@ -180,6 +180,27 @@ else
     fail "陈旧锁未被回收"
 fi
 
+# --- 用例 17（P2）：无 holder 文件的陈旧锁（mkdir 后写 holder 前中断）按年龄回收 ---
+test_begin "stop: 无 holder 陈旧锁按目录龄回收并写入标记"
+FAKE="$(new_fake_runner running)"
+OPS_DIR_N="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir-n.XXXXXX")"
+OPS_FILE_N="$OPS_DIR_N/ops.jsonl"
+printf '{"ts": "2026-08-14T00:00:00Z", "op": "manual-stop"}\n' > "$OPS_FILE_N"
+# 预置无 holder 的陈旧锁：目录 mtime 设为 10 分钟前（超过 OPS_LOCK_STALE_AFTER=300）
+mkdir "$OPS_DIR_N/.ops.lock"
+touch -t "$(date -v-10M +%Y%m%d%H%M.%S 2>/dev/null || date -d '10 minutes ago' +%Y%m%d%H%M.%S)" "$OPS_DIR_N/.ops.lock"
+LINE_BEFORE_N="$(wc -l < "$OPS_FILE_N" | tr -d ' ')"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE_N" RUN_CTL_OPS_TIMEOUT=30 \
+    RUN_CTL_OPS_STALE=300 run_ctl "$FAKE" stop
+assert_eq "$CTL_RC" "0" "无 holder 陈旧锁回收后 stop 正常执行"
+LINE_AFTER_N="$(wc -l < "$OPS_FILE_N" | tr -d ' ')"
+assert_eq "$LINE_AFTER_N" "$((LINE_BEFORE_N + 1))" "无 holder 陈旧锁回收后应新增一行标记"
+if [[ ! -d "$OPS_DIR_N/.ops.lock" ]]; then
+    pass "无 holder 陈旧锁已被回收"
+else
+    fail "无 holder 陈旧锁未被回收"
+fi
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1
