@@ -203,7 +203,7 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
     # exclude 不得匹配默认分支——含通配模式 refs/heads/* 等，按 ruleset ref pattern 语义匹配）
     target="$(json_field "$ruleset_json" 'str(d.get("target") == "branch").lower()')"
     covers_default="$("$GATE_PYTHON" -c "$(cat <<'PY'
-import json, re, sys
+import fnmatch, json, sys
 
 d = json.loads(sys.argv[1])
 
@@ -211,8 +211,8 @@ d = json.loads(sys.argv[1])
 def pat_matches_main(pat):
     if pat in ("~DEFAULT_BRANCH", "refs/heads/main", "main"):
         return True
-    # ruleset ref pattern：* 通配任意字符
-    return re.fullmatch(pat.replace("*", ".*"), "refs/heads/main") is not None
+    # ruleset ref pattern 语义：*、?、[] 通配（fnmatch 完整 glob 语义）
+    return fnmatch.fnmatchcase("refs/heads/main", pat)
 
 
 cond = d.get("conditions", {}).get("ref_name", {})
@@ -289,6 +289,7 @@ if [[ -f "$EVIDENCE_JSON" ]] && [[ -n "${bp_json:-}" ]] && [[ -n "${ruleset_json
     fi
 
     rs_record="$(json_field "$(cat "$EVIDENCE_JSON")" 'json.dumps({
+        "name": d.get("ruleset", {}).get("name"),
         "checks": sorted(d.get("ruleset", {}).get("required_status_checks", [])),
         "strict": d.get("ruleset", {}).get("strict"),
         "thread": d.get("ruleset", {}).get("required_review_thread_resolution"),
@@ -296,6 +297,7 @@ if [[ -f "$EVIDENCE_JSON" ]] && [[ -n "${bp_json:-}" ]] && [[ -n "${ruleset_json
         "can_bypass": d.get("ruleset", {}).get("current_user_can_bypass"),
     }, sort_keys=True)')"
     rs_live="$(json_field "$ruleset_json" 'json.dumps({
+        "name": d.get("name"),
         "checks": sorted(c.get("context") for c in next(
             r.get("parameters", {}).get("required_status_checks", []) for r in d.get("rules", [])
             if r.get("type") == "required_status_checks"
@@ -347,7 +349,7 @@ fi
 # 故 Python 代码经 $(cat <<'PY') 取出后以 -c 传入，不能靠 stdin 传递脚本。
 if [[ -f "$EVIDENCE_JSON" ]]; then
     ledger_code="$(cat <<'PY'
-import json, pathlib, subprocess, sys, datetime
+import json, pathlib, re, subprocess, sys, datetime
 
 evidence_json, evidence_dir, repo, timeout = sys.argv[1:5]
 timeout = float(timeout)
@@ -380,10 +382,13 @@ for i, e in enumerate(ledger):
         e.get("authorizer") == "crystepj-max",
         f"{tag} 授权人为仓库所有者（{e.get('authorizer', '')}）",
     )
-    check(
-        "crystepj-max/STS2-AUTOTEST/issues/" in e.get("reason_url", ""),
-        f"{tag} 原因链接指向 issue（{e.get('reason_url', '')}）",
-    )
+    # 原因链接须可回读：解析 issues/pull 数字并请求确认资源存在（仅子串匹配会放过不存在的 Issue）
+    m = re.search(r"/(?:issues|pull)/(\d+)/?$", e.get("reason_url", ""))
+    if not m:
+        check(False, f"{tag} 原因链接格式不正确（应为 issues/<数字> 或 pull/<数字>）：{e.get('reason_url', '')}")
+    else:
+        r = run(["gh", "api", f"repos/{repo}/issues/{m.group(1)}"])
+        check(r.returncode == 0, f"{tag} 原因链接资源可回读（issues/{m.group(1)}）")
     check(bool(e.get("authorization_note")), f"{tag} 授权说明已记录")
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")

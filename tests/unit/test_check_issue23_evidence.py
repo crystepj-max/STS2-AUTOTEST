@@ -55,6 +55,7 @@ DEFAULT_CHECKS_JSON = json.dumps(
 )
 DEFAULT_RULESET_JSON = json.dumps(
     {
+        "name": "Autotest protect",
         "enforcement": "active",
         "target": "branch",
         "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
@@ -123,6 +124,10 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         fi
         shift
     done
+    if [[ -n "${FAKE_GH_FAIL_FRAGMENT:-}" && "$url" == *"$FAKE_GH_FAIL_FRAGMENT"* ]]; then
+        echo "fake gh: 404 (forced by FAKE_GH_FAIL_FRAGMENT)" >&2
+        exit 1
+    fi
     case "$url" in
         *"/actions/runs/"*"/jobs"*) echo "$FAKE_JOBS_JSON" ;;
         *"/actions/runs/"*) echo "$FAKE_RUN_JSON" ;;
@@ -191,6 +196,7 @@ def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]
     env = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     env["FAKE_GH_PYTHON"] = overrides.pop("FAKE_GH_PYTHON", sys.executable)
+    env["FAKE_GH_FAIL_FRAGMENT"] = overrides.pop("FAKE_GH_FAIL_FRAGMENT", "")
     env["FAKE_RUN_JSON"] = overrides.pop("FAKE_RUN_JSON", DEFAULT_RUN_JSON)
     env["FAKE_JOBS_JSON"] = overrides.pop("FAKE_JOBS_JSON", DEFAULT_JOBS_JSON)
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
@@ -564,3 +570,53 @@ def test_gate_detects_ledger_conclusion_mismatch(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "台账补验结论" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_excluding_question_mark(tmp_path: Path) -> None:
+    """ruleset 的 exclude 用 ? 通配模式（refs/heads/ma?n）排除默认分支时对账门禁应失败。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["conditions"]["ref_name"]["exclude"] = ["refs/heads/ma?n"]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RULESET_JSON=json.dumps(ruleset_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "covers_default" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_unreadable_reason_url(tmp_path: Path) -> None:
+    """台账原因链接指向不存在的 Issue 时对账门禁应失败（没有可审计原因记录的绕过不算闭环）。"""
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    data["emergency_bypass"]["ledger"][0]["reason_url"] = (
+        "https://github.com/crystepj-max/STS2-AUTOTEST/issues/999999"
+    )
+    broken_json = tmp_path / "t5-reason-broken.json"
+    broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_GH_FAIL_FRAGMENT="issues/999999")
+    env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "原因链接" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_name_mismatch(tmp_path: Path) -> None:
+    """证据 JSON 的 ruleset.name 与实时名称不一致时对账门禁应失败。"""
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    data["ruleset"]["name"] = "WRONG RULESET"
+    broken_json = tmp_path / "t5-name-broken.json"
+    broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "ruleset" in proc.stdout + proc.stderr
