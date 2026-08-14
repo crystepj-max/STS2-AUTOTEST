@@ -46,6 +46,9 @@ if [[ -z "$GATE_PYTHON" ]]; then
 fi
 FAILED=0
 
+# 所有 git 调用须在仓库根目录执行（从仓库外以绝对路径调用时 CWD 可能是任意目录）
+cd "$REPO_ROOT"
+
 # 外部命令限时：python3 + psutil 封装（项目依赖，macOS/Linux/Windows 一致）。
 # 超时 → 终止整棵进程树（AGENTS.md 防僵尸/防遗留）并返回 142（128+SIGTERM 惯例）；
 # 正常结束 → 返回命令退出码。
