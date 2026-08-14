@@ -30,11 +30,11 @@ SVC_SCRIPT="$RUNNER_DIR/svc.sh"
 RUNNER_NAME_FILE="$RUNNER_DIR/.runner"
 
 echo "=== STS2-AUTOTEST Mac Runner Setup（真实安装为准）==="
-echo "安装目录: $RUNNER_DIR（架构 $RUNNER_ARCH）"
+echo "安装目录: ${RUNNER_DIR}（架构 ${RUNNER_ARCH}）"
 
 # 已配置安装（svc.sh 存在）→ 跳过下载/注册，幂等（不需要 gh）
 if [[ -f "$SVC_SCRIPT" ]]; then
-    echo "检测到已配置安装（$SVC_SCRIPT），跳过下载与注册。"
+    echo "检测到已配置安装（${SVC_SCRIPT}），跳过下载与注册。"
     RUNNER_NAME=""
     if [[ -f "$RUNNER_NAME_FILE" ]]; then
         RUNNER_NAME="$(grep -o '"agentName": *"[^"]*"' "$RUNNER_NAME_FILE" | sed 's/.*: *"//;s/"//')"
@@ -63,7 +63,7 @@ cd "$RUNNER_DIR"
 
 TARBALL="actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
 if [[ ! -f "$TARBALL" ]]; then
-    echo "下载 runner $RUNNER_VERSION（$RUNNER_ARCH）…"
+    echo "下载 runner ${RUNNER_VERSION}（${RUNNER_ARCH}）…"
     curl -o "$TARBALL" -L \
         "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-${RUNNER_ARCH}-${RUNNER_VERSION}.tar.gz"
     tar xzf "$TARBALL"

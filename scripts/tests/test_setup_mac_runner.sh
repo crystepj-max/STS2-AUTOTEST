@@ -116,7 +116,6 @@ FAKE_GH2
 cat > "$FAKE_BIN2/curl" <<'FAKE_CURL2'
 #!/usr/bin/env bash
 # 生成 fake tarball
-mkdir -p "$(dirname "$2")" 2>/dev/null || true
 printf 'fake-tar-content' > "$2"
 exit 0
 FAKE_CURL2
@@ -143,11 +142,6 @@ cat > "$FAKE_BIN2/launchctl" <<'FAKE_LAUNCHCTL'
 #!/usr/bin/env bash
 exit 0
 FAKE_LAUNCHCTL
-cat > "$FAKE_BIN2/mkdir" <<'FAKE_MKDIR'
-#!/usr/bin/env bash
-/usr/bin/mkdir "$@"
-exit 0
-FAKE_MKDIR
 chmod +x "$FAKE_BIN2"/*
 
 OUT2="$(cd /tmp && CONFIG_LOG="$FAKE_HOME2/config.log" HOME="$FAKE_HOME2" RUNNER_DIR="$FAKE_RUNNER2" RUNNER_VERSION="9.9.9" PATH="$FAKE_BIN2:/usr/bin:/bin" bash "$SETUP_SCRIPT" 2>&1)" || RC2=$?
