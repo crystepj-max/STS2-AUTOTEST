@@ -70,7 +70,11 @@ if os.name == "nt":
 
 
     def _kill_group(pgid, sig):  # type: ignore[no-redef]
-        os.kill(pgid, signal.CTRL_BREAK_EVENT)
+        if sig == "TASKKILL":
+            # 强制终止整棵进程树（Windows 内置 taskkill /F /T，无需 pywin32 Job Object）
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pgid)], capture_output=True)
+        else:
+            os.kill(pgid, signal.CTRL_BREAK_EVENT)
 
 
     def _group_alive(pgid):  # type: ignore[no-redef]
@@ -99,8 +103,12 @@ else:
 proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
 import time
 
-# Windows Python 无 SIGKILL：按平台选择信号（防止构造元组时 AttributeError 崩溃）
-GROUP_SIGNALS = [signal.SIGTERM] + ([signal.SIGKILL] if hasattr(signal, "SIGKILL") else [])
+# Windows Python 无 SIGKILL：POSIX 用 SIGTERM→SIGKILL 升级；
+# Windows 用 CTRL_BREAK_EVENT→taskkill /F /T 升级（TASKKILL 哨兵）
+if os.name == "nt":
+    GROUP_SIGNALS = [signal.SIGTERM, "TASKKILL"]
+else:
+    GROUP_SIGNALS = [signal.SIGTERM, signal.SIGKILL]
 
 try:
     rc = proc.wait(timeout=timeout)
@@ -452,11 +460,19 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
     except subprocess.TimeoutExpired:
         # 父进程已退出但后代被重新托管后 children() 为空——按进程组回收，
         # TERM → 宽限 → KILL 升级（防忽略 TERM 的后代持有管道）
-        group_signals = [signal.SIGTERM] + ([signal.SIGKILL] if hasattr(signal, "SIGKILL") else [])
+        if os.name == "nt":
+            group_signals = [signal.SIGTERM, "TASKKILL"]
+        else:
+            group_signals = [signal.SIGTERM, signal.SIGKILL]
         for sig in group_signals:
             try:
                 if os.name == "nt":
-                    os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+                    if sig == "TASKKILL":
+                        subprocess.run(
+                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True
+                        )
+                    else:
+                        os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
                 else:
                     os.killpg(proc.pid, sig)
             except OSError:
