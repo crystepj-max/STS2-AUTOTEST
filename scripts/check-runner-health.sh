@@ -112,11 +112,17 @@ code="$(curl -s --max-time 5 --noproxy '*' -o /dev/null -w '%{http_code}' https:
 code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -x "$PROXY_URL" https://api.github.com/zen 2>/dev/null || true)"
 [[ "$code" == "200" ]] && proxy_reachable=true
 
-# --- 判定（三路一致 + 网络可达才 HEALTHY）---
+# --- 判定（服务 + 真实进程 + 网络链路一致才 HEALTHY；GitHub 侧增强核验）---
+# GitHub 侧：能查到 offline → 判 UNHEALTHY（R3 反例：服务假启动/连接失效）。
+# 查不到（unknown）→ 不判死：gh 查询在 CI job 环境受 token 刷新与代理影响，
+# 失败不等于 runner 不可用；进程核验已覆盖「服务假启动」场景，CI 内 job 能领取
+# 本身即在线证据。unknown 仅在 stderr 提示，不进入 reasons。
 reasons=""
 [[ "$service_state" == "running" ]] || reasons="service_state=${service_state}"
 [[ "$process_present" == "true" ]] || reasons="${reasons:+$reasons; }process=missing(Runner.Listener)"
-[[ "$github_online" == "online" ]] || reasons="${reasons:+$reasons; }github=${github_online}"
+if [[ "$github_online" == "offline" ]]; then
+    reasons="${reasons:+$reasons; }github=offline"
+fi
 if [[ "$direct_reachable" == "false" && "$proxy_reachable" == "false" ]]; then
     reasons="${reasons:+$reasons; }network=unreachable(direct=${direct_reachable},proxy=${proxy_reachable})"
 fi

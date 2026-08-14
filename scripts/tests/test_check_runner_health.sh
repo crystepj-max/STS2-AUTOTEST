@@ -146,7 +146,22 @@ assert_eq "$RC" "1" "GitHub 侧 offline 时退出码应为 1"
 assert_contains "$OUT" "UNHEALTHY" "输出应包含 UNHEALTHY"
 assert_contains "$OUT" "github" "应给出 github 相关原因"
 
-# --- 用例 8（S1 反例）：svc.sh status 挂起 → 限时退出而非无期等待 ---
+# --- 用例 8（CI 实证修正）：gh 查询失败（unknown）不判死，服务+进程+网络正常仍 HEALTHY ---
+test_begin "health: gh 查询失败(unknown)降级不判死 → exit 0 HEALTHY"
+FAKE="$(new_fake_runner running)"
+BIN="$(new_health_bin 200)"
+cat > "$BIN/gh" <<'FAKE_GH_UNKNOWN'
+#!/usr/bin/env bash
+# gh 查询失败（如 token 刷新走代理超时）→ 无输出、非 0
+exit 1
+FAKE_GH_UNKNOWN
+chmod +x "$BIN/gh"
+RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" bash "$HEALTH_SCRIPT" 2>/dev/null)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "0" "gh 查询失败降级：服务+进程+网络正常应 HEALTHY(0)"
+assert_contains "$OUT" "HEALTHY" "输出应包含 HEALTHY"
+
+# --- 用例 9（S1 反例）：svc.sh status 挂起 → 限时退出而非无期等待 ---
 test_begin "health: svc.sh status 挂起 → 限时退出"
 FAKE="$(new_fake_runner running)"
 BIN="$(new_health_bin 200)"
