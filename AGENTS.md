@@ -72,6 +72,9 @@ python -m pytest tests/integration/ -q
 
 # 环境文件忽略门禁（issue-23：.env 不得入库，仅 .env.example 可被跟踪）
 bash scripts/check-env-gitignore.sh
+
+# issue-23 治理证据对账门禁（交接/复审前：证据 JSON、Issue 正文、PR/run、台账与真实状态一致性核验；需 gh CLI）
+bash scripts/check-issue23-evidence.sh
 ```
 
 验证基线（2026-07-17 实测）：`tests/unit/` 1552 个测试全部通过；`lint-imports` 契约通过。若当前环境无法执行某条命令，可接受用户、CI 或其他来源的外部证据，但必须明确写明。
