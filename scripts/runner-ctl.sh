@@ -227,8 +227,19 @@ log_operation() {
             return 1
         fi
     fi
-    printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$tmp"
-    mv -f "$tmp" "$PROBE_OPS_FILE"
+    if ! printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$tmp" 2>/dev/null; then
+        echo "WARNING: ops 日志追加失败（磁盘满？），本次维护标记未写入" >&2
+        rm -rf "$lock"
+        trap - RETURN EXIT
+        return 1
+    fi
+    # mv 替换加超时（I/O 卡顿时不无限阻塞）
+    if ! run_with_timeout "${OPS_CP_TIMEOUT:-10}" mv -f "$tmp" "$PROBE_OPS_FILE" 2>/dev/null; then
+        echo "WARNING: ops 日志替换超时，原日志保留" >&2
+        rm -rf "$lock"
+        trap - RETURN EXIT
+        return 1
+    fi
     rm -rf "$lock"
     trap - RETURN EXIT
     return 0

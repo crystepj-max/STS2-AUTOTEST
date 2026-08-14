@@ -49,11 +49,11 @@ trap cleanup_tmp EXIT
 
 # 递归终止进程树（含子进程，防止超时后残留孤儿）
 kill_tree() {
-    local pid="$1" child
+    local pid="$1" sig="${2:-TERM}" child
     for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-        kill_tree "$child"
+        kill_tree "$child" "$sig"
     done
-    kill "$pid" 2>/dev/null || true
+    kill "-$sig" "$pid" 2>/dev/null || true
 }
 
 # 带超时执行命令：成功时输出其 stdout；超时/失败返回非 0
@@ -65,12 +65,13 @@ run_with_timeout() {
     PROBE_TMP_FILES+=("$tmp")
     "$@" >"$tmp" 2>&1 &
     pid=$!
-    # 后台杀手：超时后递归终止整个进程树（主进程 + 子进程）
+    # 后台杀手：超时后 SIGTERM 递归终止进程树，宽限期后 SIGKILL 升级
+    # （拒绝 SIGTERM 的进程也被强制终止，保证探针按时输出）；
     # killer 重定向 stdout/stderr：否则其 sleep 期间持有调用方管道，命令替换会无谓等待
-    ( sleep "$timeout"; kill_tree "$pid" ) >/dev/null 2>&1 &
+    ( sleep "$timeout"; kill_tree "$pid" TERM; sleep 1; kill_tree "$pid" KILL ) >/dev/null 2>&1 &
     killer=$!
     if wait "$pid"; then rc=0; else rc=$?; fi
-    kill_tree "$killer"
+    kill_tree "$killer" KILL
     out="$(cat "$tmp")"
     if [[ "$rc" -eq 0 ]]; then printf '%s' "$out"; fi
     return "$rc"
@@ -122,14 +123,17 @@ transition="init"
 if [[ -f "$PROBE_STATE_FILE" ]]; then
     prev_state="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("service_state",""))' "$PROBE_STATE_FILE" 2>/dev/null || true)"
     prev_online="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("github_online",""))' "$PROBE_STATE_FILE" 2>/dev/null || true)"
-    if [[ "$prev_online" == "online" && "$github_online" == "offline" ]]; then
-        transition="disconnect"
-    elif [[ "$prev_online" == "offline" && "$github_online" == "online" ]]; then
-        transition="recover"
-    elif [[ "$prev_state" == "running" && "$service_state" == "stopped" ]]; then
+    # 服务启停优先于网络转换（P1）：stop/start 后 GitHub 侧状态 60-90s 才同步，
+    # 下次采样会同时看到 running→stopped 与 online→offline；若先判 disconnect，
+    # 维护操作会被误归网络事件。service 变化是本机确定性事件，优先判定。
+    if [[ "$prev_state" == "running" && "$service_state" == "stopped" ]]; then
         transition="service-stopped"
     elif [[ "$prev_state" == "stopped" && "$service_state" == "running" ]]; then
         transition="service-started"
+    elif [[ "$prev_online" == "online" && "$github_online" == "offline" ]]; then
+        transition="disconnect"
+    elif [[ "$prev_online" == "offline" && "$github_online" == "online" ]]; then
+        transition="recover"
     else
         transition="steady"
     fi
@@ -150,7 +154,8 @@ mv -f "$state_tmp" "$PROBE_STATE_FILE" 2>/dev/null || true
 # 最近 PROBE_OP_WINDOW 秒内的操作标记到 op 字段（区分人工维护 vs 意外中断）。
 # 显式 PROBE_OP 优先；否则读 ops 文件最新记录并在时间窗口内时采用。 ---
 if [[ -z "$PROBE_OP" && -f "$PROBE_OPS_FILE" ]]; then
-    OP_JSON="$(tail -1 "$PROBE_OPS_FILE" 2>/dev/null || true)"
+    # tail 读取带硬超时（ops 文件系统 I/O 卡顿时探针仍按时输出 JSON）
+    OP_JSON="$(run_with_timeout "$GH_TIMEOUT" tail -1 "$PROBE_OPS_FILE" 2>/dev/null || true)"
     if [[ -n "$OP_JSON" ]]; then
         OP_TS="$(printf '%s' "$OP_JSON" | python3 -c 'import json,sys
 try:
