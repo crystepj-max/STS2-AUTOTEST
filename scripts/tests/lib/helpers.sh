@@ -129,7 +129,12 @@ run_ctl() {
     fi
     cat > "$fake_bin/ps" <<FAKE_PS
 #!/usr/bin/env bash
-$ps_body
+# -eo args（进程核验）→ 输出 fake Listener；-o lstart（锁持有者身份校验）→ 透传真实 ps
+if [[ "\$*" == *"-eo"* || "\$*" == *"args"* ]]; then
+    $ps_body
+else
+    /bin/ps "\$@"
+fi
 FAKE_PS
     chmod +x "$fake_bin/ps"
     # 构造环境变量前缀：RUN_CTL_OPS_FILE / RUN_CTL_OPS_TIMEOUT / RUN_CTL_OPS_STALE 通过 export 传给子 shell

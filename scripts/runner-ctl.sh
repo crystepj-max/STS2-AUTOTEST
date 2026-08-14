@@ -127,7 +127,20 @@ log_operation() {
             # 活进程的锁永不按年龄回收（进程可能因 I/O 卡顿/休眠超时，
             # kill -0 仍成功——按年龄回收会删除有效锁，原持有者恢复后覆盖新记录）。
             holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
-            if ! kill -0 "${holder_pid:-0}" 2>/dev/null; then
+            holder_start="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2-)"   # 进程启动时间（epoch）
+            # PID + 启动时间双重校验：kill -0 只证明「有进程占着该 PID」；若 PID
+            # 被复用（旧持有者死后 PID 分配给无关进程），启动时间必然不同。
+            if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
+                if [[ -n "$holder_start" ]]; then
+                    live_start="$(ps -o lstart= -p "$holder_pid" 2>/dev/null | xargs -I{} date -j -f "%a %b %e %H:%M:%S %Y" "{}" +%s 2>/dev/null || echo '')"
+                    if [[ -n "$live_start" ]] && [[ "$live_start" != "$holder_start" ]]; then
+                        reclaim="持有进程 ${holder_pid} 的 PID 已被复用（启动时间不符）"
+                    elif [[ -z "$live_start" ]]; then
+                        # 身份无法验证（lstart 解析失败）→ 保守不回收（防误删活锁）
+                        :
+                    fi
+                fi
+            else
                 reclaim="持有进程 ${holder_pid:-?} 已不存在"
             fi
         else
@@ -184,8 +197,12 @@ log_operation() {
         fi
         sleep 0.1
     done
-    # 持有者标识：PID + 时间戳（供陈旧锁回收）
-    printf '%s %s\n' "$$" "$(date +%s)" > "$lock/holder"
+    # 持有者标识：PID + 进程启动时间（epoch，供 PID 复用校验）。原子写入：
+    # 临时文件 + mv，防半写（半写 holder 会让后续进程误读 PID 错误判定陈旧）。
+    holder_tmp="$lock/.holder.$$"
+    my_start="$(ps -o lstart= -p $$ 2>/dev/null | xargs -I{} date -j -f "%a %b %e %H:%M:%S %Y" "{}" +%s 2>/dev/null || echo '')"
+    printf '%s %s\n' "$$" "$my_start" > "$holder_tmp"
+    mv -f "$holder_tmp" "$lock/holder"
     # trap 清理：仅本进程持有期间退出时释放锁（防止中断残留）
     trap 'rm -rf "$lock"' RETURN EXIT
     if [[ -f "$PROBE_OPS_FILE" ]]; then

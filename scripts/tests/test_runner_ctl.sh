@@ -236,9 +236,11 @@ FAKE="$(new_fake_runner running)"
 OPS_DIR_L="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir-l.XXXXXX")"
 OPS_FILE_L="$OPS_DIR_L/ops.jsonl"
 printf '{"ts": "2026-08-14T00:00:00Z", "op": "manual-stop"}\n' > "$OPS_FILE_L"
-# 预置锁：holder 是当前 shell 的 PID（活进程）+ 10 分钟前的超龄时间戳
+# 预置锁：holder 是当前 shell 的 PID（活进程）+ 其真实进程启动时间
+# （PID+启动时间双重校验通过 → 视为活持有者，不回收）
 mkdir "$OPS_DIR_L/.ops.lock"
-printf '%s %s\n' "$$" "$(( $(date +%s) - 600 ))" > "$OPS_DIR_L/.ops.lock/holder"
+MY_START="$(ps -o lstart= -p $$ 2>/dev/null | xargs -I{} date -j -f "%a %b %e %H:%M:%S %Y" "{}" +%s 2>/dev/null || echo '')"
+printf '%s %s\n' "$$" "$MY_START" > "$OPS_DIR_L/.ops.lock/holder"
 LINE_BEFORE_L="$(wc -l < "$OPS_FILE_L" | tr -d ' ')"
 RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE_L" RUN_CTL_OPS_TIMEOUT=3 \
     RUN_CTL_OPS_STALE=300 run_ctl "$FAKE" stop
@@ -273,6 +275,30 @@ if [[ ! -d "$OPS_DIR_E/.ops.lock" ]]; then
     pass "空 pid claimant + 陈旧锁均已回收"
 else
     fail "空 pid claimant 未被回收（陈旧锁永久阻塞）"
+fi
+
+# --- 用例 21（P2）：holder PID 被无关进程占用（PID 复用）→ 判陈旧回收 ---
+test_begin "stop: holder PID 被无关进程占用（启动时间不符）→ 判陈旧并回收"
+FAKE="$(new_fake_runner running)"
+OPS_DIR_R="$(mktemp -d "${TMPDIR:-/tmp}/ops-dir-r.XXXXXX")"
+OPS_FILE_R="$OPS_DIR_R/ops.jsonl"
+printf '{"ts": "2026-08-14T00:00:00Z", "op": "manual-stop"}\n' > "$OPS_FILE_R"
+# 启动一个 sleep 进程（无关进程占用某 PID），holder 记录「该 PID + 错误启动时间」
+sleep 30 &
+SLEEP_PID=$!
+mkdir "$OPS_DIR_R/.ops.lock"
+printf '%s %s\n' "$SLEEP_PID" "1234567890" > "$OPS_DIR_R/.ops.lock/holder"   # 启动时间不符
+LINE_BEFORE_R="$(wc -l < "$OPS_FILE_R" | tr -d ' ')"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE_R" RUN_CTL_OPS_TIMEOUT=30 \
+    RUN_CTL_OPS_STALE=300 run_ctl "$FAKE" stop
+kill "$SLEEP_PID" 2>/dev/null || true
+assert_eq "$CTL_RC" "0" "PID 复用锁回收后 stop 正常执行"
+LINE_AFTER_R="$(wc -l < "$OPS_FILE_R" | tr -d ' ')"
+assert_eq "$LINE_AFTER_R" "$((LINE_BEFORE_R + 1))" "PID 复用锁应判陈旧并新增一行标记"
+if [[ ! -d "$OPS_DIR_R/.ops.lock" ]]; then
+    pass "PID 复用锁已回收"
+else
+    fail "PID 复用锁未被回收（应判陈旧）"
 fi
 
 echo
