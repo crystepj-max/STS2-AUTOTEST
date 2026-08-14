@@ -219,7 +219,7 @@ if pr_json="$(run_timeout gh api "repos/$REPO/pulls/$PR_NUMBER")"; then
                 wf_path="$(json_field "$run_meta" 'd.get("path", "")')"
                 wf_event="$(json_field "$run_meta" 'd.get("event", "")')"
                 if [[ "$wf_path" == ".github/workflows/ci-pr.yml" && "$wf_event" == "pull_request" ]]; then
-                    pass "PR #$PR_NUMBER head $head_sha 的 PR Check Summary=success（run $run_id，ci-pr.yml/pull_request）"
+                    pass "PR #$PR_NUMBER head $head_sha 的 PR Check Summary=success（run ${run_id}，ci-pr.yml/pull_request）"
                 else
                     fail "PR #$PR_NUMBER 的 PR Check Summary 非正式工作流（path=${wf_path}、event=${wf_event}）"
                 fi
@@ -413,7 +413,7 @@ if [[ -f "$EVIDENCE_JSON" ]]; then
     ledger_code="$(cat <<'PY'
 import json, os, pathlib, psutil, re, signal, subprocess, sys, time, datetime
 
-evidence_json, evidence_dir, repo, timeout = sys.argv[1:5]
+evidence_json, evidence_dir, evidence_rel, repo, timeout = sys.argv[1:6]
 timeout = float(timeout)
 data = json.load(open(evidence_json, encoding="utf-8"))
 ledger = data.get("emergency_bypass", {}).get("ledger", [])
@@ -534,7 +534,7 @@ for i, e in enumerate(ledger):
                     # 工作树未提交修改（事后补入 PR/SHA）不算不可变记录
                     tracked = run(["git", "ls-files", "--error-unmatch", str(af)])
                     check(tracked.returncode == 0, f"{tag} 授权记录文件 {auth_file} 已被 git 跟踪")
-                    blob = run(["git", "show", f"HEAD:{auth_file}"])
+                    blob = run(["git", "show", f"HEAD:{evidence_rel}/{auth_file}"])
                     if blob.returncode != 0:
                         check(False, f"{tag} 授权记录文件 {auth_file} 无法从已提交 blob 读取")
                     else:
@@ -734,7 +734,9 @@ PY
 )"
     # 台账核验本身不设总限时：内层每次 gh/git 调用已各自限时（run() 内 timeout），
     # 外层再套 run_timeout 会把「多次调用累计耗时」误判为超时（网络稍慢即误报）
-    ledger_out="$("$GATE_PYTHON" -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$REPO" "$CMD_TIMEOUT" 2>&1)"
+    # git show HEAD:<path> 需要仓库相对路径
+    evidence_rel="${EVIDENCE_DIR#"$REPO_ROOT"/}"
+    ledger_out="$("$GATE_PYTHON" -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$evidence_rel" "$REPO" "$CMD_TIMEOUT" 2>&1)"
     if [[ $? -eq 0 ]]; then
         pass "绕过台账核验全部通过"
     else
