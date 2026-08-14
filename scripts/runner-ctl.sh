@@ -192,7 +192,9 @@ log_operation() {
                 curr_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
                 if [[ -n "$orig_inode" ]] && [[ "$orig_inode" == "$curr_inode" ]]; then
                     echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
-                    rm -rf "$claimant" 2>/dev/null || true
+                    # claimant 随外层锁一起原子移除（rm -rf lock 含 claimant）：
+                    # 不在删除前单独释放 claimant，避免窗口期其他进程重新认领
+                    # 并误删本进程随后创建的新锁。
                     rm -rf "$lock"
                     continue
                 fi
