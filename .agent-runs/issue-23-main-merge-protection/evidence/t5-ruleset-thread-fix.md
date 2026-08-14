@@ -1,5 +1,10 @@
 # T5 修正：ruleset「Autotest protect」review 线程解决要求（2026-08-14）
 
+> **⚠️ 已撤销（2026-08-14 复审修复）**：本文件所述的 `required_review_thread_resolution: false`
+> 降级未经原需求授权，Review 复审（S4）判定为越界修改，已恢复为 `true`。
+> 恢复证据与线程处理约定见 [`t6-ruleset-thread-restored.md`](t6-ruleset-thread-restored.md)。
+> 本文件仅作历史记录保留。
+
 ## 背景
 
 T4 成功样例合并后，T5 收尾 PR（#28）在 `PR Check Summary` 通过的情况下仍被阻止合并：

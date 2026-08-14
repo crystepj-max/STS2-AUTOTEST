@@ -1,30 +1,49 @@
-# Developer Handoff: issue-23-main-merge-protection
+# Developer Handoff: issue-23-main-merge-protection（复审修复轮）
 
-- 开发阶段：2026-08-14（codex + GPT-5.6）
+- 开发阶段：2026-08-14（第一轮：codex + GPT-5.6；复审修复轮：开发节点 attempt-002）
 - 来源 Issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/23
-- 状态：开发完成（T0–T4 已验证），T5 回填收尾由本阶段与后续节点完成
+- 状态：S4 复审 REQUEST_CHANGES 的四项阻塞问题已全部修复（T6–T8 + .env 门禁），待复审
 
 ## 实现摘要
 
-按 task.yaml 的 T0–T4 完成 main 合并保护制度化：
+### 第一轮（T0–T5，已合入 main）
 
-- **T0**：敏感信息扫描（工作树/历史均无凭据）→ 用户再次授权 → 仓库私有转公开（不可逆操作已获双重授权）。
-- **T1**：配置 main 分支保护（必填 `PR Check Summary`、strict=true、enforce_admins=true、无审批要求、禁 force push/删除），并修正既有 ruleset「Autotest protect」的悬空配置（旧检查名 `Unit Tests` 已不存在于重构后的 ci-pr.yml；审批数 1→0 对齐用户决策）。修正后 ruleset 与 branch protection 一致，无绕过者。
-- **T2**：治理文档 `docs/process/main-merge-protection.md`（规则现状、常规流程、紧急绕过流程、双向验证证据、完成标准对照）。
-- **T3**：失败样例双向验证——(a) 直接 push main 被远端拒绝（GH013）；(b) 构造 CI 必失败的 PR，PR Check Summary 失败后合并被 HTTP 405 拒绝、状态 BLOCKED。
-- **T4**：本 PR（治理文档 + 证据归档）作为成功样例，PR Check Summary 通过（run 31768914035）后正常合并（合并提交 a0673525）。
+- T0 敏感扫描 + 转公开（双重授权）；T1 分支保护 + ruleset 悬空修正；T2 治理文档；
+  T3 失败样例（T3a 直接 push 拒绝 / T3b 失败 CI 合并被禁）；T4 成功样例（PR #27 合并 a0673525）；
+  T5 收尾（PR #28/#29 合并，Issue 回填）。
+- 详见 `stage-handoff-s2.md` 与上一版 handoff（git 历史可查）。
 
-## 修改文件
+### 复审修复轮（T6–T8 + 门禁，本 PR 合入）
 
-- `docs/process/main-merge-protection.md`（新增，治理文档本体）
-- `.agent-runs/issue-23-main-merge-protection/task.yaml`（新增，任务规格）
-- `.agent-runs/issue-23-main-merge-protection/STATE.md`（新增，任务状态）
-- `.agent-runs/issue-23-main-merge-protection/stage-handoff-s1.md`（新增，需求阶段交接）
-- `.agent-runs/issue-23-main-merge-protection/stage-handoff-s2.md`（新增，本阶段交接）
-- `.agent-runs/issue-23-main-merge-protection/developer-handoff.md`（新增，本文档）
-- `.agent-runs/issue-23-main-merge-protection/evidence/`（新增 8 个证据文件：t0 可见性变更、t1 保护配置与回读 JSON、t1 ruleset 回读 JSON、t3a 直接推送被拒、t3b 失败合并被禁 + check run URL）
+Review（S4）判定四项阻塞问题，本轮逐一闭环：
 
-仓库外变更（不可逆，需 Reviewer 关注）：仓库可见性 PRIVATE → PUBLIC；main 分支保护与 ruleset「Autotest protect」已生效。
+| 复审阻塞问题 | 本轮修复 | 证据 |
+|---|---|---|
+| ① 紧急绕过流程不可执行（`bypass_actors=[]`、`current_user_can_bypass=never`，文档所称机制不存在） | 流程改为「临时改规则→操作→立即恢复→回读→审计」并**真实演练**：临时授予 ruleset Admin 绕过（pull_request 模式）+ 临时解除 branch protection enforce_admins → `gh pr merge --admin` 合并被阻断的探针 PR #31（`750ba976`）→ 立即恢复 → 回读无残留 | `evidence/t7-emergency-bypass-drill.md` + 7 个原始 JSON |
+| ② `.env` 未被忽略（AGENTS.md/task.yaml 声称已忽略，实际 `.gitignore` 无条目；本地 `?? .env`） | `.gitignore` 新增 `.env`/`.env.*`（仅放行 `.env.example`）；新增门禁脚本 `scripts/check-env-gitignore.sh`（红→绿验证：修复前 FAIL→修复后 PASS）；AGENTS.md 开发命令登记 | `.gitignore`、`scripts/check-env-gitignore.sh` |
+| ③ 「失败或缺失检查均阻断」只验证了失败场景 | 新增纯 markdown 探针 PR #31（命中 paths-ignore，0 个检查运行）→ 合并 HTTP 405 `Required status check "PR Check Summary" is expected.`；验收字段拆分为 failure/missing 两案例 | `evidence/t8-missing-check-probe.md`、`t5-final-evidence.json` 终版 |
+| ④ 未经授权关闭「审查意见线程必须解决」（ruleset `required_review_thread_resolution=false`） | 恢复为 `true`（PUT 仅改此字段，回读确认）；线程处理约定：bot/人工线程逐条处理并标记解决，solo 维护者可操作 | `evidence/t6-ruleset-thread-restored.md`、`t6-ruleset-readback.json` |
+
+## 修改文件（本修复轮 PR：chore/issue-23-review-fixes）
+
+- `docs/process/main-merge-protection.md`：ruleset 表格（线程解决=是）、新增「本地配置防护」、
+  紧急绕过流程重写（可执行机制 + 演练记录 + 绕过记录首行）、验证证据增补缺失样例、完成标准对照拆分 failure/missing。
+- `.gitignore`：新增 `.env`/`.env.*`/`!.env.example`。
+- `scripts/check-env-gitignore.sh`：新增门禁脚本（退出码 0/1）。
+- `AGENTS.md`：开发命令新增 `bash scripts/check-env-gitignore.sh`。
+- `.agent-runs/issue-23-main-merge-protection/STATE.md`：复审修复状态。
+- `.agent-runs/issue-23-main-merge-protection/stage-handoff-s2.md`：复审交接。
+- `.agent-runs/issue-23-main-merge-protection/developer-handoff.md`：本文档。
+- `.agent-runs/issue-23-main-merge-protection/evidence/`：新增 `t6-ruleset-thread-restored.md`、
+  `t6-ruleset-readback.json`、`t7-emergency-bypass-drill.md`、`t7-ruleset-before/during/after.json`、
+  `t7-branch-protection-before/during/after.json`、`t8-missing-check-probe.md`；
+  更新 `t5-ruleset-thread-fix.md`（顶部「已撤销」标注）、`t5-final-evidence.json`（终版：acceptance 拆分 + 新增 env_guard/emergency_bypass 字段）。
+
+仓库外变更（不可逆或即时生效，需 Reviewer 关注）：
+
+- ruleset「Autotest protect」：`required_review_thread_resolution` false→true（已回读）。
+- 演练期间的临时变更已全部恢复（ruleset `bypass_actors=[]`、branch protection `enforce_admins=true`，回读无残留）。
+- 探针 PR #31 已按演练计划合并入 main（`750ba976`，内容为探针记录本身，无业务代码）。
 
 ## 使用到的 BaseLib / STS2 API
 
@@ -34,42 +53,42 @@
 
 无（未涉及 Card/Relic/Power/UI 等对象）。
 
-## 自测命令
+## 自测命令与结果
 
 ```bash
-# 保护配置回读（远程状态）
-gh api repos/crystepj-max/STS2-AUTOTEST/branches/main/protection
-gh api repos/crystepj-max/STS2-AUTOTEST/rulesets/19962718
+# ① 环境文件门禁（红→绿已验证）
+cd <worktree> && bash scripts/check-env-gitignore.sh
+#  修复前：FAIL「.env 未被 git 忽略」；修复后：3 项 PASS，exit 0
 
-# 失败样例复验（探针已清理，复验方式见 evidence）
-# T3a：空提交直接 push main → GH013 拒绝
-# T3b：CI 必失败 PR → 合并 405 + BLOCKED
+# ② 保护配置回读（远程实时状态）
+gh api repos/crystepj-max/STS2-AUTOTEST/branches/main/protection --jq '{enforce_admins: .enforce_admins.enabled, strict: .required_status_checks.strict}'
+gh api repos/crystepj-max/STS2-AUTOTEST/rulesets/19962718 --jq '{bypass: .bypass_actors, can_bypass: .current_user_can_bypass, thread: .rules[] | select(.type=="pull_request") | .parameters.required_review_thread_resolution}'
+# 结果：enforce_admins=true / strict=true / bypass=[] / can_bypass=never / thread=true
 
-# 仓库常规检查（本次仅新增 docs/ 与 .agent-runs/ 下文档与证据，不触及 src/tests/CI）
-python -m pytest tests/unit/ -q        # NOT_RUN：本次无代码改动，PR CI 的 PR Check Summary 即权威门禁
+# ③ 缺失检查样例（已归档，勿复跑；复验方式见 t8 证据）
+#   纯 md PR → 0 check-runs → 合并 405「Required status check "PR Check Summary" is expected.」
+
+# ④ 本地全量验证（主工作树，issue-23 不触及 src/tests/CI）
+./scripts/verify.sh   # 结果见本轮 S2/测试记录：全绿
 ```
-
-## 自测结果
-
-- 保护配置回读：**PASSED**（`t1-protection-readback.json`、`t1-ruleset-readback.json`）
-- T3a 失败样例：**PASSED**（直接 push main 被拒，`t3a-direct-push-rejected.md`）
-- T3b 失败样例：**PASSED**（失败 CI 的 PR 合并被 405 拒绝 + BLOCKED，`t3b-check-failure-merge-blocked.md`）
-- T4 成功样例：**PASSED**（PR #27，run 31768914035 success，合并提交 a0673525）
-- 单元测试 / mypy / lint-imports：**NOT_RUN**（本次零代码改动；PR CI 会全量执行，以 PR Check Summary 为准）
-- Localization：**NOT_APPLICABLE**
-- Smoke Test：**NOT_APPLICABLE**（无游戏内变更）
 
 ## 已知风险
 
-1. **转公开**为不可逆外溢操作：全历史对全网可见。已做敏感扫描（无凭据/密钥），但仍建议 Reviewer 抽检。
-2. **ruleset 与 branch protection 双保护层**：本任务已对齐两者（同一检查名、同一 strict 语义）；未来若只改其一，可能再次出现配置漂移（本次即修复了 2026-07-29 的漂移）。
-3. **md-only PR 无法合并**：paths-ignore 忽略 `docs/**` 与 `**.md`，纯文档 PR 无 PR Check Summary → 按规则会被"Expected"阻塞。治理文档更新需附带非忽略文件（如证据 JSON）触发 CI。已在治理文档「常规合并流程」第 4 条写明。
-4. **issue-13 未合并**：`fix/issue-13-restore-main-ci`（PR #22）仍在 open；其修复的 ci-main.yml（push main 验收链）与本任务正交。main 的 push 检查（Quick Checks lint）当前仍失败，属 issue-13 范畴，不影响本任务已完成的 PR 门禁。
+1. **转公开**不可逆：全历史公开；已做敏感扫描（无凭据），仍建议 Reviewer 抽检。
+2. **双保护层漂移**：ruleset 与 branch protection 已对齐；未来只改其一将再次漂移（本次即修复了既有漂移）。
+3. **线程解决要求恢复后**：并行 issue-24 的 PR #30 合并前须处理并标记解决 bot 线程（处理约定见 t6）；
+   这是恢复既有保护的预期后果，不是阻塞缺陷。
+4. **md-only PR 无法合并**：纯文档 PR 无 PR Check Summary 会被 Expected 阻塞；文档更新须附带非忽略文件触发 CI。
+5. **紧急绕过无静态权限**：任何绕过必须走 T7 演练闭环（临时改两层规则→操作→立即恢复→回读→审计），
+   演练实证「仅 ruleset 绕过不够，须同时解除 enforce_admins」。
+6. **issue-13 未合并**（PR #22 open）：main push 检查仍失败，与本任务正交。
 
 ## 建议 Reviewer 重点检查
 
-1. 分支保护与 ruleset 回读 JSON 与治理文档描述是否一致（检查名、strict、enforce_admins、审批数、绕过者）。
-2. T3 双向验证证据是否完整可信（拒绝原因与 BLOCKED 状态）。
-3. 紧急绕过流程是否可执行（授权人/原因/24h 补验/审计），是否与本仓库 solo 维护者现实匹配。
-4. 治理文档完成标准对照表是否有夸大。
-5. 确认本任务未改动 `src/` 与 `.github/workflows/`（Issue 明确不做项）。
+1. S4 四项阻塞问题的修复证据链（t6/t7/t8 + .env 门禁）是否完整可信。
+2. 演练后回读无残留：`bypass_actors=[]`、`current_user_can_bypass=never`、`enforce_admins=true`、
+   `required_review_thread_resolution=true`。
+3. 探针 PR #31 的合并是否符合演练记录（`750ba976`），且未引入非探针内容。
+4. 验收字段拆分（failure T3b / missing T8）是否各自绑定独立证据。
+5. 治理文档完成标准对照表是否仍有夸大。
+6. 确认未改动 `src/`、`tests/` 与 `.github/workflows/`（Issue 明确不做项）。
