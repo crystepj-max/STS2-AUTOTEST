@@ -417,6 +417,8 @@ for i, e in enumerate(ledger):
         check(False, f"{tag} 缺少 bypassed_pr（无法绑定被绕过 SHA）")
     check(e.get("restored") is True, f"{tag} 恢复终态 restored=true")
     check(bool(e.get("restoration_evidence")), f"{tag} 恢复证据列表非空")
+    saw_ruleset_snapshot = False
+    saw_bp_snapshot = False
     for ev in e.get("restoration_evidence", []):
         p = pathlib.Path(f"{evidence_dir}/{ev}")
         if not p.exists():
@@ -431,15 +433,20 @@ for i, e in enumerate(ledger):
             check(False, f"{tag} 恢复证据文件 {ev} 无法解析为 JSON")
             continue
         if "bypass_actors" in snap:
+            saw_ruleset_snapshot = True
             check(
                 snap.get("bypass_actors") == [] and snap.get("current_user_can_bypass") == "never",
                 f"{tag} 恢复证据 {ev} 无绕过者（ruleset 终态）",
             )
         if "enforce_admins" in snap:
+            saw_bp_snapshot = True
             # API 形态兼容：旧快照为布尔（true/false），现行 API 为 {"enabled": bool}
             ea = snap.get("enforce_admins")
             ea_ok = ea.get("enabled") is True if isinstance(ea, dict) else ea is True
             check(ea_ok, f"{tag} 恢复证据 {ev} enforce_admins=true（branch protection 终态）")
+    # 恢复证据集合必须包含并验证两类终态快照（任意可解析 JSON 偶然入列不算数）
+    check(saw_ruleset_snapshot, f"{tag} 恢复证据含 ruleset 绕过终态快照")
+    check(saw_bp_snapshot, f"{tag} 恢复证据含 branch protection enforce_admins 终态快照")
 
     pv = e.get("post_verification", {})
     run_id = pv.get("run_id")

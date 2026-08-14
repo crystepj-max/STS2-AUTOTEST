@@ -689,3 +689,25 @@ def test_gate_detects_reason_url_other_repo(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "原因链接" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_restoration_evidence_missing_snapshot_types(tmp_path: Path) -> None:
+    """恢复证据缺少两类终态快照（如只列空 JSON）时对账门禁应失败。"""
+    tmp_ev = tmp_path / "evidence"
+    tmp_ev.mkdir()
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    data["emergency_bypass"]["ledger"][0]["restoration_evidence"] = ["t7-empty.json"]
+    (tmp_ev / "t5-final-evidence.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (tmp_ev / "t7-empty.json").write_text("{}", encoding="utf-8")
+    (tmp_ev / "t7-post-verification.md").write_text("x", encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(tmp_ev / "t5-final-evidence.json")
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "终态快照" in proc.stdout + proc.stderr
