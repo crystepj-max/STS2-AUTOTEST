@@ -99,12 +99,26 @@ cmd_status() {
     return 3
 }
 
+# 维护操作标记：stop/start 成功后追加一行到 ops 文件（探针消费，用于四类归因中
+# 的「维护操作」类——区分人工停启与意外中断，issue-24 R2/T3）。
+# PROBE_OPS_FILE 可覆盖（默认 ~/.sts2-runner-probe/ops.jsonl）。
+PROBE_OPS_FILE="${PROBE_OPS_FILE:-$HOME/.sts2-runner-probe/ops.jsonl}"
+log_operation() {
+    local op="$1"
+    local ts
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    mkdir -p "$(dirname "$PROBE_OPS_FILE")" 2>/dev/null || true
+    printf '{"ts": "%s", "op": "%s"}\n' "$ts" "$op" >> "$PROBE_OPS_FILE"
+}
+
 cmd_stop() {
     run_svc stop
+    log_operation "manual-stop"
 }
 
 cmd_start() {
     run_svc start
+    log_operation "manual-start"
 }
 
 case "$CMD" in

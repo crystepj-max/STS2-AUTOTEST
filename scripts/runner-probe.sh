@@ -16,7 +16,11 @@
 #   PROXY_URL       代理地址（默认 http://127.0.0.1:7890，ClashX）
 #   PROBE_OUTPUT    追加写入的文件（默认空 = 仅 stdout）
 #   PROBE_GH_TIMEOUT gh 查询超时秒数（默认 8）
-#   PROBE_OP        维护操作标记（如 manual-stop/manual-start，写入 op 字段）
+#   PROBE_OP        维护操作标记（如 manual-stop/manual-start，写入 op 字段；
+#                   手动运行时可用；定时采集时由 PROBE_OPS_FILE 自动识别）
+#   PROBE_OPS_FILE  runner-ctl stop/start 写入的维护操作日志（默认
+#                   ~/.sts2-runner-probe/ops.jsonl；最近 PROBE_OP_WINDOW 秒内
+#                   的操作自动标记到 op 字段，区分人工维护 vs 意外中断）
 #   PROBE_STATE_FILE 上次采样状态文件（默认 ~/.sts2-runner-probe/.probe-state.json，
 #                   用于推导 disconnect/recover/service-stopped/service-started 事件）
 set -euo pipefail
@@ -27,6 +31,8 @@ PROXY_URL="${PROXY_URL:-http://127.0.0.1:7890}"
 PROBE_OUTPUT="${PROBE_OUTPUT:-}"
 GH_TIMEOUT="${PROBE_GH_TIMEOUT:-8}"
 PROBE_OP="${PROBE_OP:-}"
+PROBE_OPS_FILE="${PROBE_OPS_FILE:-$HOME/.sts2-runner-probe/ops.jsonl}"
+PROBE_OP_WINDOW="${PROBE_OP_WINDOW:-900}"
 PROBE_STATE_FILE="${PROBE_STATE_FILE:-$HOME/.sts2-runner-probe/.probe-state.json}"
 
 TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -139,6 +145,39 @@ path, state, online = sys.argv[1:]
 json.dump({"service_state": state, "github_online": online}, open(path, "w"))
 PY
 mv -f "$state_tmp" "$PROBE_STATE_FILE" 2>/dev/null || true
+
+# --- 维护操作识别（R2/T3）：runner-ctl stop/start 写入 ops.jsonl，
+# 最近 PROBE_OP_WINDOW 秒内的操作标记到 op 字段（区分人工维护 vs 意外中断）。
+# 显式 PROBE_OP 优先；否则读 ops 文件最新记录并在时间窗口内时采用。 ---
+if [[ -z "$PROBE_OP" && -f "$PROBE_OPS_FILE" ]]; then
+    OP_JSON="$(tail -1 "$PROBE_OPS_FILE" 2>/dev/null || true)"
+    if [[ -n "$OP_JSON" ]]; then
+        OP_TS="$(printf '%s' "$OP_JSON" | python3 -c 'import json,sys
+try:
+    d=json.loads(sys.stdin.read()); print(d.get("ts",""))
+except Exception:
+    print("")' 2>/dev/null || true)"
+        OP_NAME="$(printf '%s' "$OP_JSON" | python3 -c 'import json,sys
+try:
+    d=json.loads(sys.stdin.read()); print(d.get("op",""))
+except Exception:
+    print("")' 2>/dev/null || true)"
+        if [[ -n "$OP_TS" && -n "$OP_NAME" ]]; then
+            # 用 python3 统一解析（macOS date -j -f 不认 Z 后缀会把 UTC 当本地时间，
+            # 导致窗口判断错 8 小时）；datetime.fromisoformat 处理 Z 为 UTC。
+            NOW_EPOCH="$(date +%s)"
+            OP_EPOCH="$(python3 -c "import sys,datetime
+try:
+    t=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
+    print(int(t.timestamp()))
+except Exception:
+    print('')" "$OP_TS" 2>/dev/null || echo '')"
+            if [[ -n "$OP_EPOCH" ]] && [[ "$(( NOW_EPOCH - OP_EPOCH ))" -ge 0 ]] && [[ "$(( NOW_EPOCH - OP_EPOCH ))" -le "$PROBE_OP_WINDOW" ]]; then
+                PROBE_OP="$OP_NAME"
+            fi
+        fi
+    fi
+fi
 
 # --- 代理本地端口可达（/dev/tcp，非阻塞即时失败）---
 proxy_local_reachable=false

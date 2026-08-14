@@ -106,6 +106,40 @@ else
 fi
 assert_ne "$CTL_RC" "0" "svc.sh 挂起超时后不应报 running(0)"
 
+# --- 用例 13（R2/T3 延伸）：stop/start 自动持久化维护操作标记（探针归因用）---
+test_begin "stop: 自动写入维护操作标记（ops.jsonl）"
+FAKE="$(new_fake_runner running)"
+OPS_FILE="$(mktemp "${TMPDIR:-/tmp}/ops.XXXXXX")"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE" run_ctl "$FAKE" stop
+assert_eq "$CTL_RC" "0" "stop 应正常执行"
+if [[ -s "$OPS_FILE" ]]; then
+    OP_JSON="$(tail -1 "$OPS_FILE")"
+    if echo "$OP_JSON" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("op")=="manual-stop"; assert "ts" in d' 2>/dev/null; then
+        pass "ops.jsonl 含 manual-stop 标记与时间戳"
+    else
+        fail "ops.jsonl 内容不符合预期: $OP_JSON"
+    fi
+else
+    fail "stop 未写入 ops.jsonl（维护操作标记缺失）"
+fi
+
+# --- 用例 14（R2/T3 延伸）：start 自动写入维护操作标记 ---
+test_begin "start: 自动写入维护操作标记（ops.jsonl）"
+FAKE="$(new_fake_runner stopped)"
+OPS_FILE2="$(mktemp "${TMPDIR:-/tmp}/ops2.XXXXXX")"
+RUN_CTL_NO_PROCESS=0 RUN_CTL_OPS_FILE="$OPS_FILE2" run_ctl "$FAKE" start
+assert_eq "$CTL_RC" "0" "start 应正常执行"
+if [[ -s "$OPS_FILE2" ]]; then
+    OP_JSON="$(tail -1 "$OPS_FILE2")"
+    if echo "$OP_JSON" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("op")=="manual-start"; assert "ts" in d' 2>/dev/null; then
+        pass "ops.jsonl 含 manual-start 标记与时间戳"
+    else
+        fail "ops.jsonl 内容不符合预期: $OP_JSON"
+    fi
+else
+    fail "start 未写入 ops.jsonl（维护操作标记缺失）"
+fi
+
 echo
 echo "runner-ctl 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1

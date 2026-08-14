@@ -228,6 +228,23 @@ chmod +x "$FAKE_BIN_T2/gh"
 OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_STATE_FILE="$STATE_FILE" PATH="$FAKE_BIN_T2:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
 assert_eq "$(json_field "$OUT" transition)" "disconnect" "在线→断线应记为 disconnect"
 
+# --- 用例 9b（R2/T3 延伸）：ops.jsonl 近期维护操作 → op 字段反映（区分人工维护 vs 意外中断）---
+test_begin "probe: ops.jsonl 近期维护操作 → op 字段反映"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_OPS="$(new_probe_bin)"
+OPS_FILE="$(mktemp "${TMPDIR:-/tmp}/probe-ops.XXXXXX")"
+# 写一条 1 分钟前的 manual-stop 记录（时间窗口内）
+RECENT_TS="$(date -u -v-1M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '1 minute ago' +"%Y-%m-%dT%H:%M:%SZ")"
+printf '{"ts": "%s", "op": "manual-stop"}\n' "$RECENT_TS" > "$OPS_FILE"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE" PATH="$FAKE_BIN_OPS:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" op)" "manual-stop" "近期维护操作应反映在 op 字段"
+
+# 反例：2 小时前的记录超出时间窗口 → op 为空（不误报维护操作）
+OLD_TS="$(date -u -v-2H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '2 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+printf '{"ts": "%s", "op": "manual-stop"}\n' "$OLD_TS" > "$OPS_FILE"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE" PATH="$FAKE_BIN_OPS:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" op)" "" "超窗维护操作不应误报"
+
 # --- 用例 10（S2）：超时后无残留子进程 ---
 test_begin "probe: gh 挂起超时后无残留子进程"
 FAKE="$(new_fake_runner running)"

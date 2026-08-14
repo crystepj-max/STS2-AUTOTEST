@@ -111,14 +111,15 @@ FAKE_SVC
 
 # 运行 runner-ctl.sh，输出到 stdout，退出码返回
 # 用法：run_ctl <fake_dir> <args...>   ；stdout 存到变量 CTL_OUT，退出码存 CTL_RC
-# 隔离：默认注入 fake pgrep（Runner.Listener 存在，避免读到真实机器进程）；
-# RUN_CTL_NO_PROCESS=1 时注入"无进程"的 fake pgrep（R3 反例用）。
+# 可选：RUN_CTL_OPS_FILE=<path> 注入 PROBE_OPS_FILE（维护操作标记测试用）
+# 隔离：默认注入 fake ps（Runner.Listener 存在，避免读到真实机器进程）；
+# RUN_CTL_NO_PROCESS=1 时注入"无进程"的 fake ps（R3 反例用）。
 CTL_OUT=""
 CTL_RC=0
 run_ctl() {
     local dir="$1"
     shift
-    local out rc fake_bin pgrep_body
+    local out rc fake_bin ps_body
     fake_bin="$(mktemp -d "${TMPDIR:-/tmp}/ctl-bin.XXXXXX")"
     if [[ "${RUN_CTL_NO_PROCESS:-0}" == "1" ]]; then
         ps_body='exit 1'
@@ -131,7 +132,11 @@ run_ctl() {
 $ps_body
 FAKE_PS
     chmod +x "$fake_bin/ps"
-    out="$(cd /tmp && RUNNER_DIR="$dir" PATH="$fake_bin:/usr/bin:/bin" bash "$SCRIPT_DIR/../runner-ctl.sh" "$@" 2>&1)" || rc=$?
+    if [[ -n "${RUN_CTL_OPS_FILE:-}" ]]; then
+        out="$(cd /tmp && RUNNER_DIR="$dir" PROBE_OPS_FILE="$RUN_CTL_OPS_FILE" PATH="$fake_bin:/usr/bin:/bin" bash "$SCRIPT_DIR/../runner-ctl.sh" "$@" 2>&1)" || rc=$?
+    else
+        out="$(cd /tmp && RUNNER_DIR="$dir" PATH="$fake_bin:/usr/bin:/bin" bash "$SCRIPT_DIR/../runner-ctl.sh" "$@" 2>&1)" || rc=$?
+    fi
     rc="${rc:-0}"
     CTL_OUT="$out"
     CTL_RC="$rc"
