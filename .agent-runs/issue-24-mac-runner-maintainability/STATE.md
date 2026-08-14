@@ -1,10 +1,10 @@
 # STATE — issue-24-mac-runner-maintainability
 
-- 更新时间：2026-08-14（返工完成 + 远端 CI 全绿，待 Reviewer 重审）
-- 阶段：T1 取证已归档；T2/T3(脚本)/T4/T5 开发完成；
-  S4 审核 REQUEST_CHANGES → S2 返工完成（提交 e603b75 → 723089f 等 10 提交）；
-  远端 CI run 31792626355 SUCCESS（健康检查前置 + 45 脚本测试 + 单测 + 门禁全绿）。
-- 状态机位置：`DEV_ASSIGNED` →（返工完成 + CI 全绿，待 Reviewer 重审）→ `REVIEW`
+- 更新时间：2026-08-14（已合并 + T2/T3/T6 完成，T7 待 8/21）
+- 阶段：T1 取证已归档；T2/T3(脚本)/T4/T5 开发完成；S4 返工完成；
+  PR #30 已合并（f1c1ab3，2026-08-14）；T2 实证与 T6 演练完成；
+  T3 探针已部署采集（2026-08-21 满 7 天）；T7 归因待定时检视。
+- 状态机位置：`REVIEW` →（用户验收通过 + 合并授权 + 已合并）→ 待 T7 收口关闭
 
 ## 当前事实（均已落盘，不依赖会话记忆）
 
@@ -60,21 +60,19 @@
 返工后本地脚本测试 40 用例（probe 12 / ctl 12 / health 9 / setup 7）全过，
 等待全量重验与 Reviewer 重审。
 
-## 待办（授权/时间门禁，不在返工范围）
+## 授权项执行情况（2026-08-14 松哥已授权）
 
-1. **T2 实证**（需授权）：真实机器 `runner-ctl.sh stop` → 确认 GitHub 侧
-   不再领取 job；`start` → 确认进程更新且可接收。记录到 evidence/。
-2. **T3 部署**（需授权）：定时探针部署（cron/launchd，建议 10 分钟间隔），
-   JSONL 落盘 `~/.sts2-runner-probe/`，连续采集 ≥7 天（最快 2026-08-21）。
-3. **T6 演练**（需授权）：按 docs/runner-runbook.md 第 7 节做恢复演练，
-   记录到 evidence/drill-YYYYMMDD.md。
-4. **T7 收口**（依赖 T3 满 7 天）：四类归因 → 代理决策记录 → 回填 Issue
-   完成标准 → 关闭任务。
+1. **T2 实证：✅ 完成** → evidence/verification-t2-20260814.md
+   （stop → GitHub 侧 offline 不可接收；start → 新进程 + online 可接收）。
+2. **T3 部署：✅ 已部署** → evidence/deployment-t3-20260814.md
+   （launchd `com.sts2.autotest.runner-probe` 每 10 分钟，JSONL 落盘
+   `~/.sts2-runner-probe/`，2026-08-21 满 7 天）。
+3. **T6 演练：✅ 完成** → evidence/drill-20260814.md
+   （stop→offline→start→online→真实 CI 领取执行成功）。
+4. **T7 收口：⏳ 待 8/21**——定时任务已设（2026-08-21 09:17，持久化），
+   检视 T2/T3/T6/T7 结果后决策是否关闭 Issue。
 
 ## 下一步
 
-1. 全量验证（verify.sh）→ push PR #30 → 远端 CI（含脚本测试 step）绿灯。
-2. Reviewer 重审（gate：reviewer_approved）→ 通过后进入人工门禁
-   （用户验收 + 合并授权）。
-3. 人工确认授权项（T2 实证 / T3 部署 / T6 演练）后逐项执行。
-4. T3 满 7 天（2026-08-21 后）执行 T7 收口。
+1. T3 数据连续采集至 2026-08-21 满 7 天。
+2. 8/21 定时任务触发：四类归因 → 代理决策记录 → 回填 Issue #24 → 关闭任务。
