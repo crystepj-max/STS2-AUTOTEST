@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -34,7 +35,12 @@ DEFAULT_RUN_JSON = json.dumps(
     }
 )
 DEFAULT_PR_JSON = json.dumps(
-    {"head": {"sha": "3a732858af66051db3962a76be4ad7379f1f2c76"}}
+    {
+        "head": {"sha": "3a732858af66051db3962a76be4ad7379f1f2c76"},
+        # 台账被绕过 PR #31 的 merge 事实（台账核验会回读比对）
+        "merge_commit_sha": "750ba9768159c3e310bf906abf84a1207f292cbe",
+        "merged_at": "2026-08-14T05:50:11Z",
+    }
 )
 DEFAULT_CHECKS_JSON = json.dumps(
     {"check_runs": [{"name": "PR Check Summary", "conclusion": "success"}]}
@@ -108,7 +114,7 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         *"/rulesets/"*) echo "$FAKE_RULESET_JSON" ;;
         *"/branches/main/protection"*) echo "$FAKE_BP_JSON" ;;
         *"/compare/"*) echo "$FAKE_COMPARE_JSON" ;;
-        *"/issues/"*) python3 -c "import json,sys; print(json.dumps({'body': sys.stdin.read()}))" <<< "$FAKE_ISSUE_BODY" ;;
+        *"/issues/"*) "${FAKE_GH_PYTHON:-python3}" -c "import json,sys; print(json.dumps({'body': sys.stdin.read()}))" <<< "$FAKE_ISSUE_BODY" ;;
         *) echo "fake gh: 未预期的 URL: $url" >&2; exit 1 ;;
     esac
     """
@@ -167,6 +173,7 @@ def _run_script(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
 def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    env["FAKE_GH_PYTHON"] = overrides.pop("FAKE_GH_PYTHON", sys.executable)
     env["FAKE_RUN_JSON"] = overrides.pop("FAKE_RUN_JSON", DEFAULT_RUN_JSON)
     env["FAKE_JOBS_JSON"] = overrides.pop("FAKE_JOBS_JSON", DEFAULT_JOBS_JSON)
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
@@ -354,3 +361,31 @@ def test_gate_detects_post_verification_without_gate_job(tmp_path: Path) -> None
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "PR Check Summary" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_excluding_default_branch(tmp_path: Path) -> None:
+    """ruleset 的 exclude 排除了默认分支时对账门禁应失败（被排除的规则不算生效）。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["conditions"]["ref_name"]["exclude"] = ["~DEFAULT_BRANCH"]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RULESET_JSON=json.dumps(ruleset_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "covers_default" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ledger_pr_sha_mismatch(tmp_path: Path) -> None:
+    """台账被绕过 SHA 与所记 PR 的 merge_commit_sha 不一致时对账门禁应失败（任意祖先 SHA 不算数）。"""
+    pr_json = json.loads(DEFAULT_PR_JSON)
+    pr_json["merge_commit_sha"] = "0000000000000000000000000000000000000000"
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_PR_JSON=json.dumps(pr_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "merge_commit_sha" in proc.stdout + proc.stderr

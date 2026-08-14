@@ -163,10 +163,13 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
         and "PR Check Summary" in [c.get("context") for c in r.get("parameters", {}).get("required_status_checks", [])]
         for r in d.get("rules", [])
     )).lower()')"
-    # ruleset 必须实际覆盖默认分支（target=branch 且 conditions 包含 ~DEFAULT_BRANCH），
-    # 否则规则内容再对也只是覆盖了其他分支
+    # ruleset 必须实际覆盖默认分支（target=branch 且 include 含 ~DEFAULT_BRANCH、
+    # exclude 不得排除默认分支），否则规则内容再对也只是覆盖了其他分支
     target="$(json_field "$ruleset_json" 'd.get("target", "missing")')"
-    covers_default="$(json_field "$ruleset_json" 'str("~DEFAULT_BRANCH" in d.get("conditions", {}).get("ref_name", {}).get("include", [])).lower()')"
+    covers_default="$(json_field "$ruleset_json" 'str(
+        "~DEFAULT_BRANCH" in d.get("conditions", {}).get("ref_name", {}).get("include", [])
+        and "~DEFAULT_BRANCH" not in d.get("conditions", {}).get("ref_name", {}).get("exclude", [])
+    ).lower()')"
     if [[ "$enforcement" == "active" && "$target" == "branch" && "$covers_default" == "true" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" ]]; then
         pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、覆盖默认分支、必填 PR Check Summary、线程=${thread}、无绕过者"
     else
@@ -251,6 +254,25 @@ for i, e in enumerate(ledger):
     check(bool(e.get("authorization_note")), f"{tag} 授权说明已记录")
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")
+    # 被绕过 SHA 必须绑定台账中的 PR：回读 PR 的 merge_commit_sha / merged_at 与台账一致
+    # （任意祖先 SHA 都能通过 compare，但只有真实 merge commit 才算审计闭环）
+    pr_num = e.get("bypassed_pr")
+    if pr_num:
+        pr = run(["gh", "api", f"repos/{repo}/pulls/{pr_num}"])
+        if pr.returncode != 0:
+            check(False, f"{tag} 拉取被绕过 PR #{pr_num} 失败")
+        else:
+            pr_data = json.loads(pr.stdout)
+            check(
+                pr_data.get("merge_commit_sha") == e.get("bypassed_sha"),
+                f"{tag} 被绕过 SHA 与 PR #{pr_num} 的 merge_commit_sha 一致",
+            )
+            check(
+                pr_data.get("merged_at") == e.get("completed_at"),
+                f"{tag} 台账完成时间与 PR #{pr_num} 的 merged_at 一致",
+            )
+    else:
+        check(False, f"{tag} 缺少 bypassed_pr（无法绑定被绕过 SHA）")
     check(e.get("restored") is True, f"{tag} 恢复终态 restored=true")
     check(bool(e.get("restoration_evidence")), f"{tag} 恢复证据列表非空")
     for ev in e.get("restoration_evidence", []):
