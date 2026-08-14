@@ -1,9 +1,10 @@
 # STATE — issue-24-mac-runner-maintainability
 
-- 更新时间：2026-08-14（返工修正后，待重审）
+- 更新时间：2026-08-14（返工完成 + 远端 CI 全绿，待 Reviewer 重审）
 - 阶段：T1 取证已归档；T2/T3(脚本)/T4/T5 开发完成；
-  S4 审核 REQUEST_CHANGES → 已回 S2 完成返工修正（提交 e603b75 起，待重审）。
-- 状态机位置：`DEV_ASSIGNED` →（返工修正完成，待 Reviewer 重审）→ `REVIEW`
+  S4 审核 REQUEST_CHANGES → S2 返工完成（提交 e603b75 → 723089f 等 10 提交）；
+  远端 CI run 31792626355 SUCCESS（健康检查前置 + 45 脚本测试 + 单测 + 门禁全绿）。
+- 状态机位置：`DEV_ASSIGNED` →（返工完成 + CI 全绿，待 Reviewer 重审）→ `REVIEW`
 
 ## 当前事实（均已落盘，不依赖会话记忆）
 
