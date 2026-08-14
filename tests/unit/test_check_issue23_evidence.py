@@ -106,8 +106,9 @@ DEFAULT_BP_JSON = json.dumps(
 )
 # compare API：status=ahead 表示 base（被绕过 SHA）是 head（补验 run head）的祖先
 DEFAULT_COMPARE_JSON = json.dumps({"status": "ahead"})
-# 与待更新 Issue 正文保持一致的对账标记
+# 与待更新 Issue 正文保持一致的对账标记（含紧急绕过授权记录）
 DEFAULT_ISSUE_BODY = (
+    "紧急绕过授权记录：S4 复审演练要求（T7）\n"
     "缺失样例证据：T8（探针 PR #31）\n"
     "线程解决要求：required_review_thread_resolution=true"
 )
@@ -139,7 +140,7 @@ _FAKE_GH_TEMPLATE = textwrap.dedent(
         *"/rulesets/"*) echo "$FAKE_RULESET_JSON" ;;
         *"/branches/main/protection"*) echo "$FAKE_BP_JSON" ;;
         *"/compare/"*) echo "$FAKE_COMPARE_JSON" ;;
-        *"/issues/"*) "${FAKE_GH_PYTHON:-python3}" -c "import json,sys; print(json.dumps({'body': sys.stdin.read()}))" <<< "$FAKE_ISSUE_BODY" ;;
+        *"/issues/"*) "${FAKE_GH_PYTHON:-python3}" -c "import json,os,sys; print(json.dumps({'body': sys.stdin.read(), 'created_at': os.environ.get('FAKE_ISSUE_CREATED_AT', '2026-08-14T00:00:00Z')}))" <<< "$FAKE_ISSUE_BODY" ;;
         *) echo "fake gh: 未预期的 URL: $url" >&2; exit 1 ;;
     esac
     """
@@ -200,6 +201,7 @@ def _base_env(bin_dir: Path, tmp_path: Path, **overrides: str) -> dict[str, str]
     env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
     env["FAKE_GH_PYTHON"] = overrides.pop("FAKE_GH_PYTHON", sys.executable)
     env["FAKE_GH_FAIL_FRAGMENT"] = overrides.pop("FAKE_GH_FAIL_FRAGMENT", "")
+    env["FAKE_ISSUE_CREATED_AT"] = overrides.pop("FAKE_ISSUE_CREATED_AT", "2026-08-14T00:00:00Z")
     env["FAKE_RUN_JSON"] = overrides.pop("FAKE_RUN_JSON", DEFAULT_RUN_JSON)
     env["FAKE_JOBS_JSON"] = overrides.pop("FAKE_JOBS_JSON", DEFAULT_JOBS_JSON)
     env["FAKE_CHECKS_JSON"] = overrides.pop("FAKE_CHECKS_JSON", DEFAULT_CHECKS_JSON)
@@ -689,6 +691,38 @@ def test_gate_detects_reason_url_other_repo(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "原因链接" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_reason_url_missing_authorization(tmp_path: Path) -> None:
+    """原因链接资源正文缺少授权记录（紧急绕过）时对账门禁应失败。"""
+    env = _base_env(
+        _fake_gh(tmp_path),
+        tmp_path,
+        FAKE_ISSUE_BODY="无关 Issue：一些别的内容",
+    )
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "授权记录" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_authorization_after_operation(tmp_path: Path) -> None:
+    """授权记录时间晚于操作完成时间时对账门禁应失败（授权必须先于绕过）。"""
+    env = _base_env(
+        _fake_gh(tmp_path),
+        tmp_path,
+        FAKE_ISSUE_CREATED_AT="2026-08-14T06:00:00Z",  # 操作完成（05:50:11Z）之后
+    )
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "授权记录时间" in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(

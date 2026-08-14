@@ -57,13 +57,16 @@ popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
 proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
 import time
 
+# Windows Python 无 SIGKILL：按平台选择信号（防止构造元组时 AttributeError 崩溃）
+GROUP_SIGNALS = [signal.SIGTERM] + ([signal.SIGKILL] if hasattr(signal, "SIGKILL") else [])
+
 try:
     rc = proc.wait(timeout=timeout)
 except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
     # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 TERM → 宽限 → KILL
     # 升级（防忽略 TERM 的后代持有管道），进程树清理兜底
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for sig in GROUP_SIGNALS:
         try:
             os.killpg(proc.pid, sig)
         except (AttributeError, ProcessLookupError, OSError):
@@ -94,7 +97,7 @@ def _kill_group() -> None:
         os.killpg(proc.pid, 0)
     except (AttributeError, ProcessLookupError, OSError):
         return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for sig in GROUP_SIGNALS:
         try:
             os.killpg(proc.pid, sig)
         except (AttributeError, ProcessLookupError, OSError):

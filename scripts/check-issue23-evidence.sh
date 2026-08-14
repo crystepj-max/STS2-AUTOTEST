@@ -66,13 +66,16 @@ popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
 proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
 import time
 
+# Windows Python 无 SIGKILL：按平台选择信号（防止构造元组时 AttributeError 崩溃）
+GROUP_SIGNALS = [signal.SIGTERM] + ([signal.SIGKILL] if hasattr(signal, "SIGKILL") else [])
+
 try:
     rc = proc.wait(timeout=timeout)
 except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
     # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 TERM → 宽限 → KILL
     # 升级（防忽略 TERM 的后代持有管道），进程树清理兜底
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for sig in GROUP_SIGNALS:
         try:
             os.killpg(proc.pid, sig)
         except (AttributeError, ProcessLookupError, OSError):
@@ -103,7 +106,7 @@ def _kill_group() -> None:
         os.killpg(proc.pid, 0)
     except (AttributeError, ProcessLookupError, OSError):
         return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for sig in GROUP_SIGNALS:
         try:
             os.killpg(proc.pid, sig)
         except (AttributeError, ProcessLookupError, OSError):
@@ -349,7 +352,7 @@ fi
 # 故 Python 代码经 $(cat <<'PY') 取出后以 -c 传入，不能靠 stdin 传递脚本。
 if [[ -f "$EVIDENCE_JSON" ]]; then
     ledger_code="$(cat <<'PY'
-import json, pathlib, re, subprocess, sys, datetime
+import json, pathlib, psutil, re, subprocess, sys, datetime
 
 evidence_json, evidence_dir, repo, timeout = sys.argv[1:5]
 timeout = float(timeout)
@@ -366,9 +369,35 @@ def check(ok: bool, msg: str) -> None:
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    # 显式 UTF-8 解码：gh API 输出可能含中文标题/正文，Windows 默认代码页解码会抛错
-    return subprocess.run(
-        cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout
+    """执行外部调用并整树超时回收（psutil 树清理，防遗留后代进程）。
+
+    显式 UTF-8 解码：gh API 输出可能含中文标题/正文，Windows 默认代码页解码会抛错。
+    """
+    proc = psutil.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+        finally:
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except (psutil.NoSuchProcess, subprocess.TimeoutExpired):
+                pass
+        raise
+    return subprocess.CompletedProcess(
+        cmd,
+        proc.returncode,
+        out.decode("utf-8", errors="replace"),
+        err.decode("utf-8", errors="replace"),
     )
 
 
@@ -392,7 +421,20 @@ for i, e in enumerate(ledger):
         check(False, f"{tag} 原因链接格式不正确（应为 issues/<数字> 或 pull/<数字>）：{e.get('reason_url', '')}")
     else:
         r = run(["gh", "api", f"repos/{repo}/issues/{m.group(1)}"])
-        check(r.returncode == 0, f"{tag} 原因链接资源可回读（issues/{m.group(1)}）")
+        if r.returncode != 0:
+            check(False, f"{tag} 原因链接资源可回读（issues/{m.group(1)}）")
+        else:
+            issue_data = json.loads(r.stdout)
+            # 资源正文须含授权记录（紧急绕过条款），且记录时间早于操作——仅 HTTP 成功
+            # 会放过任意无关的既存 Issue
+            check(
+                "紧急绕过" in issue_data.get("body", ""),
+                f"{tag} 原因链接资源正文含授权记录（紧急绕过）",
+            )
+            check(
+                issue_data.get("created_at", "") <= e.get("completed_at", ""),
+                f"{tag} 授权记录时间早于操作（created_at={issue_data.get('created_at')}）",
+            )
     check(bool(e.get("authorization_note")), f"{tag} 授权说明已记录")
     check(bool(e.get("bypassed_sha")), f"{tag} 被绕过 SHA 已记录（{e.get('bypassed_sha', '')}）")
     check(bool(e.get("completed_at")), f"{tag} 操作完成时间已记录（{e.get('completed_at', '')}）")
@@ -444,6 +486,26 @@ for i, e in enumerate(ledger):
             ea = snap.get("enforce_admins")
             ea_ok = ea.get("enabled") is True if isinstance(ea, dict) else ea is True
             check(ea_ok, f"{tag} 恢复证据 {ev} enforce_admins=true（branch protection 终态）")
+        if "bypass_actors" in snap or "enforce_admins" in snap:
+            # 快照须绑定到本次绕过操作之后：git 提交时间可验证地晚于操作完成时间，
+            # 防止把演练前已处于安全状态的旧快照（如 t1 回读）当作恢复证据
+            gt = run(["git", "log", "-1", "--format=%cI", "--", str(p)])
+            if gt.returncode != 0 or not gt.stdout.strip():
+                check(False, f"{tag} 恢复证据 {ev} 无法核验提交时间（须晚于操作完成时间）")
+            else:
+                try:
+                    committed = datetime.datetime.fromisoformat(
+                        gt.stdout.strip().replace("Z", "+00:00")
+                    ).astimezone(datetime.timezone.utc)
+                    operated = datetime.datetime.fromisoformat(
+                        e["completed_at"].replace("Z", "+00:00")
+                    ).astimezone(datetime.timezone.utc)
+                    check(
+                        committed >= operated,
+                        f"{tag} 恢复证据 {ev} 提交时间（{gt.stdout.strip()}）晚于操作完成时间",
+                    )
+                except ValueError as err:
+                    check(False, f"{tag} 恢复证据 {ev} 提交时间解析失败：{err}")
     # 恢复证据集合必须包含并验证两类终态快照（任意可解析 JSON 偶然入列不算数）
     check(saw_ruleset_snapshot, f"{tag} 恢复证据含 ruleset 绕过终态快照")
     check(saw_bp_snapshot, f"{tag} 恢复证据含 branch protection enforce_admins 终态快照")
