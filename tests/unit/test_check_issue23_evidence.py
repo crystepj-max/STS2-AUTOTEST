@@ -53,6 +53,8 @@ DEFAULT_RULESET_JSON = json.dumps(
         "bypass_actors": [],
         "current_user_can_bypass": "never",
         "rules": [
+            {"type": "deletion", "parameters": None},
+            {"type": "non_fast_forward", "parameters": None},
             {
                 "type": "pull_request",
                 "parameters": {"required_review_thread_resolution": True},
@@ -81,6 +83,8 @@ DEFAULT_BP_JSON = json.dumps(
             "strict": True,
             "contexts": ["PR Check Summary"],
         },
+        "allow_deletions": {"enabled": False},
+        "allow_force_pushes": {"enabled": False},
     }
 )
 # compare API：status=ahead 表示 base（被绕过 SHA）是 head（补验 run head）的祖先
@@ -389,3 +393,33 @@ def test_gate_detects_ledger_pr_sha_mismatch(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "merge_commit_sha" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_missing_deletion_rule(tmp_path: Path) -> None:
+    """ruleset 移除 deletion 规则时对账门禁应失败（允许删除 main 的配置与文档声明不符）。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["rules"] = [
+        r for r in ruleset_json["rules"] if r["type"] != "deletion"
+    ]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RULESET_JSON=json.dumps(ruleset_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "deletion_rule" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_bp_force_push_allowed(tmp_path: Path) -> None:
+    """branch protection 允许 force push 时对账门禁应失败。"""
+    bp_json = json.loads(DEFAULT_BP_JSON)
+    bp_json["allow_force_pushes"]["enabled"] = True
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_BP_JSON=json.dumps(bp_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "no_force_push" in proc.stdout + proc.stderr
