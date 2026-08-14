@@ -154,12 +154,27 @@ cd "$REPO_ROOT"
 
 echo "===== 环境文件忽略规则检查 ====="
 
-# 0. 禁止放行 .env 的否定规则（嵌套路径如 !secrets/.env 或通配隐藏 !secrets/[.]env
-#    会重新暴露本地凭据；唯一允许的否定规则是 !.env.example）
-#    先剥离括号表达式（[.] 等通配可隐藏字面 .env）再按 gitignore 语义识别
-neg_rules="$(grep -E '^!' "$REPO_ROOT/.gitignore" | sed -E 's/\[[^]]*\]//g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+# 0. 禁止放行 .env 的否定规则（嵌套路径如 !secrets/.env 或通配隐藏 !secrets/[.]env、
+#    子目录 .gitignore 里的 !.env 都会重新暴露本地凭据；唯一允许的是 !.env.example）
+#    扫描所有被跟踪的 .gitignore；先剥离括号表达式再按 gitignore 语义识别
+neg_rules=""
+gi_files="$(run_timeout git ls-files | grep '\.gitignore$' || true)"
+for gi in $gi_files; do
+    r="$(grep -E '^!' "$REPO_ROOT/$gi" | sed -E 's/\[[^]]*\]//g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+    if [[ -n "$r" ]]; then
+        neg_rules="${neg_rules}${gi}: $(echo "$r" | tr '\n' ' ')"
+    fi
+done
 if [[ -n "$neg_rules" ]]; then
-    echo "FAIL: 存在放行 .env 的否定规则（只允许 !.env.example）：$(echo "$neg_rules" | tr '\n' ' ')"
+    echo "FAIL: 存在放行 .env 的否定规则（只允许 !.env.example）：$neg_rules"
+    FAILED=1
+fi
+
+# 0b. 语义核验：未跟踪文件列表不得出现环境文件（否定规则重新暴露会使其出现在
+#     git status 中，即使文件尚未提交）
+untracked_env="$(run_timeout git status --porcelain --untracked-files=all | awk '{print $2}' | grep -E '(^|/)\.env($|\.)' | grep -v '^\.env\.example$' || true)"
+if [[ -n "$untracked_env" ]]; then
+    echo "FAIL: 存在未被忽略的环境文件：$(echo "$untracked_env" | tr '\n' ' ')"
     FAILED=1
 fi
 

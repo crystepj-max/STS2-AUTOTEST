@@ -962,6 +962,33 @@ def test_gate_detects_gitignore_negation_bracket_evasion(tmp_path: Path) -> None
     shutil.which("bash") is None,
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
+def test_gate_detects_subdir_gitignore_negation(tmp_path: Path) -> None:
+    """子目录 .gitignore 的否定规则放行 .env 时对账门禁应失败（嵌套凭据重新暴露）。"""
+    subdir = REPO_ROOT / "secrets"
+    gitignore = REPO_ROOT / ".gitignore"
+    original_gi = gitignore.read_text(encoding="utf-8")
+    try:
+        subdir.mkdir(exist_ok=True)
+        sub_gi = subdir / ".gitignore"
+        sub_gi.write_text("!.env\n", encoding="utf-8")
+        # 实际存在的嵌套 env 文件：未跟踪列表语义检查应命中
+        nested = subdir / ".env"
+        nested.write_text("local-secret=1\n", encoding="utf-8")
+        env = _base_env(_fake_gh(tmp_path), tmp_path)
+        proc = _run_script(env)
+        assert proc.returncode != 0
+        assert "未被忽略的环境文件" in proc.stdout + proc.stderr
+    finally:
+        nested.unlink(missing_ok=True)
+        sub_gi.unlink(missing_ok=True)
+        subdir.rmdir()
+        gitignore.write_text(original_gi, encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
 def test_gate_detects_restoration_evidence_missing_snapshot_types(tmp_path: Path) -> None:
     """恢复证据缺少两类终态快照（如只列空 JSON）时对账门禁应失败。"""
     tmp_ev = tmp_path / "evidence"

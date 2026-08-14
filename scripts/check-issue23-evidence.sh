@@ -197,16 +197,30 @@ else
     else
         # 语义验证 ①：禁止放行 .env 的否定规则（嵌套路径如 !secrets/.env 会重新
         # 暴露本地凭据；唯一允许的否定规则是 !.env.example）
-        # 先剥离括号表达式（[.] 等通配可隐藏字面 .env）再按 gitignore 语义识别
-        neg_rules="$(grep -E '^!' "$REPO_ROOT/.gitignore" | sed -E 's/\[[^]]*\]//g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+        # 先剥离括号表达式（[.] 等通配可隐藏字面 .env）再按 gitignore 语义识别；
+        # 扫描所有被跟踪的 .gitignore（子目录同样可能放行 .env）
+        neg_rules=""
+        gi_files="$(run_timeout git ls-files | grep '\.gitignore$' || true)"
+        for gi in $gi_files; do
+            r="$(grep -E '^!' "$REPO_ROOT/$gi" | sed -E 's/\[[^]]*\]//g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+            if [[ -n "$r" ]]; then
+                neg_rules="${neg_rules}${gi}: $(echo "$r" | tr '\n' ' ')"
+            fi
+        done
         if [[ -n "$neg_rules" ]]; then
-            fail "存在放行 .env 的否定规则（只允许 !.env.example）：$(echo "$neg_rules" | tr '\n' ' ')"
+            fail "存在放行 .env 的否定规则（只允许 !.env.example）：$neg_rules"
         else
             # 语义验证 ②：.env 必须实际被忽略（两侧协同追加 !.env 等声明比较发现不了）
             run_timeout git check-ignore -q .env
             rc=$?
             if [[ $rc -eq 0 ]]; then
-                pass ".gitignore env 条目与证据 JSON 一致且 .env 实际被忽略：$(echo "$expected" | tr '\n' ' ')"
+                # 语义验证 ③：未跟踪文件列表不得出现环境文件（重新暴露会出现在 status 中）
+                untracked_env="$(run_timeout git status --porcelain --untracked-files=all | awk '{print $2}' | grep -E '(^|/)\.env($|\.)' | grep -v '^\.env\.example$' || true)"
+                if [[ -n "$untracked_env" ]]; then
+                    fail "存在未被忽略的环境文件：$(echo "$untracked_env" | tr '\n' ' ')"
+                else
+                    pass ".gitignore env 条目与证据 JSON 一致且 .env 实际被忽略：$(echo "$expected" | tr '\n' ' ')"
+                fi
             else
                 fail ".env 未被实际忽略（git check-ignore 退出码 ${rc}）"
             fi
