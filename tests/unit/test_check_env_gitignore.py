@@ -71,7 +71,9 @@ def test_env_gitignore_gate_accepts_repository_configuration() -> None:
                 pass
             try:
                 proc.wait(timeout=5)
-            except psutil.NoSuchProcess:
+            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                # 回收等待超时（进程未在 5s 内退出）也吞掉——回收尽力而为，
+                # 诊断失败 pytest.fail 必须照常执行，不允许清理异常掩盖根因
                 pass
         pytest.fail(
             f"门禁脚本超过 {GATE_TIMEOUT_SECONDS}s 未结束（可能 git 调用阻塞）"
