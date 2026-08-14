@@ -49,13 +49,20 @@ def test_env_gitignore_gate_accepts_repository_configuration() -> None:
         stdout_bytes, stderr_bytes = proc.communicate(timeout=GATE_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         # 终止整棵子进程树：timeout 只杀 bash，其后代 git 仍可能持有管道，
-        # 须一并清理避免超时清理路径继续等待与遗留进程（AGENTS.md 防僵尸约束）
+        # 须一并清理避免超时清理路径继续等待与遗留进程（AGENTS.md 防僵尸约束）。
         # 注意：psutil.Popen.communicate 委托 subprocess，抛的是
-        # subprocess.TimeoutExpired（实测确认），不是 psutil.TimeoutExpired
-        for child in proc.children(recursive=True):
-            child.kill()
-        proc.kill()
-        proc.wait(timeout=5)
+        # subprocess.TimeoutExpired（实测确认），不是 psutil.TimeoutExpired。
+        # 逐进程容错：后代可能在 children() 快照后自行退出，kill 抛
+        # NoSuchProcess 时忽略；finally 保证父进程终止与回收必定执行。
+        try:
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+        finally:
+            proc.kill()
+            proc.wait(timeout=5)
         pytest.fail(
             f"门禁脚本超过 {GATE_TIMEOUT_SECONDS}s 未结束（可能 git 调用阻塞）"
         )
