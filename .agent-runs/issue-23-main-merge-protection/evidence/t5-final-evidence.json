@@ -1,19 +1,41 @@
 {
   "task_id": "issue-23-main-merge-protection",
   "updated_at": "2026-08-14",
-  "phase": "T5 收尾（T0-T4 已完成）",
+  "phase": "T6-T8 复审修复后终版（T0-T5 已完成；S4 REQUEST_CHANGES 四项已全部闭环）",
   "repo_visibility": "PUBLIC",
   "branch_protection": {
-    "required_status_checks": ["PR Check Summary"],
+    "required_status_checks": [
+      "PR Check Summary"
+    ],
     "strict": true,
     "enforce_admins": true,
     "required_approving_review_count": 0
   },
   "ruleset": {
     "name": "Autotest protect",
-    "required_status_checks": ["PR Check Summary"],
+    "required_status_checks": [
+      "PR Check Summary"
+    ],
+    "strict": true,
+    "required_review_thread_resolution": true,
     "bypass_actors": [],
     "current_user_can_bypass": "never"
+  },
+  "env_guard": {
+    "gitignore": [
+      "/env",
+      "/env.*",
+      "!/env.example"
+    ],
+    "check_script": "scripts/check-env-gitignore.sh",
+    "tracked_env_files": [
+      ".env.example"
+    ]
+  },
+  "emergency_bypass": {
+    "mechanism": "临时改规则→操作→立即恢复→回读→审计（T7 演练实证，非静态授权）",
+    "drill_evidence": "t7-emergency-bypass-drill.md",
+    "drill_merge_commit": "750ba9768159c3e310bf906abf84a1207f292cbe"
   },
   "verification": {
     "t3a_direct_push_rejected": true,
@@ -21,14 +43,20 @@
     "t3b_failed_run": 31768184810,
     "t4_success_pr": 27,
     "t4_success_run": 31768914035,
-    "t4_merge_commit": "a0673525aa32fe3845efdbea47c3b023dd442856"
+    "t4_merge_commit": "a0673525aa32fe3845efdbea47c3b023dd442856",
+    "t6_thread_resolution_restored": true,
+    "t7_emergency_bypass_drill": true,
+    "t8_missing_check_probe_pr": 31,
+    "t8_missing_check_merge_blocked": true
   },
   "acceptance": {
-    "fail_or_missing_check_blocks_merge": true,
+    "failed_check_blocks_merge": true,
+    "missing_check_blocks_merge": true,
     "strict_final_commit": true,
     "direct_main_push_blocked": true,
     "success_pr_mergeable": true,
-    "emergency_bypass_defined": true,
+    "emergency_bypass_executable_and_audited": true,
+    "env_not_tracked_and_checked": true,
     "docs_committed": true
   }
 }

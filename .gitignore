@@ -58,6 +58,13 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+
+# 本地环境配置（密钥与本地配置只放 .env，模板 .env.example 入库；
+# 门禁脚本：scripts/check-env-gitignore.sh）
+.env
+.env.*
+!.env.example
+
 .pytest_cache/
 .mypy_cache/
 .import_linter_cache/
