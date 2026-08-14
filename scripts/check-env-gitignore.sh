@@ -77,7 +77,8 @@ cd "$REPO_ROOT"
 
 echo "===== 环境文件忽略规则检查 ====="
 
-# 1. .env 必须被忽略（git check-ignore 退出码：0=命中忽略，1=未命中，142=超时/错误）
+# 1. .env 必须被忽略（git check-ignore 退出码：0=命中忽略，1=未命中；
+#    其他非零码=仓库损坏/I/O 等执行错误，一律判失败，只有 1 才是「未忽略」）
 run_timeout git check-ignore -q .env
 rc=$?
 if [[ $rc -eq 0 ]]; then
@@ -85,12 +86,16 @@ if [[ $rc -eq 0 ]]; then
 elif [[ $rc -eq 142 ]]; then
     echo "FAIL: 无法确认 .env 是否被忽略（git 超时，已终止）"
     FAILED=1
-else
+elif [[ $rc -eq 1 ]]; then
     echo "FAIL: .env 未被 git 忽略（.gitignore 缺少 .env 条目）"
+    FAILED=1
+else
+    echo "FAIL: 无法确认 .env 是否被忽略（git 退出码 ${rc}）"
     FAILED=1
 fi
 
-# 2. .env 不得被跟踪（git ls-files --error-unmatch 退出码：0=已跟踪，1=未跟踪，142=超时/错误）
+# 2. .env 不得被跟踪（git ls-files --error-unmatch 退出码：0=已跟踪，1=未跟踪；
+#    128 等=仓库损坏/I/O 执行错误，不得视为「未跟踪」）
 run_timeout git ls-files --error-unmatch .env >/dev/null 2>&1
 rc=$?
 if [[ $rc -eq 0 ]]; then
@@ -99,16 +104,22 @@ if [[ $rc -eq 0 ]]; then
 elif [[ $rc -eq 142 ]]; then
     echo "FAIL: 无法确认 .env 是否被跟踪（git 超时，已终止）"
     FAILED=1
-else
+elif [[ $rc -eq 1 ]]; then
     echo "PASS: .env 未被 git 跟踪"
+else
+    echo "FAIL: 无法确认 .env 是否被跟踪（git 退出码 ${rc}）"
+    FAILED=1
 fi
 
-# 3. 已跟踪的环境文件只允许 .env.example（先单独取列表，超时/错误直接判失败，
-#    不让 grep/管道掩盖 git 的执行错误）
+# 3. 已跟踪的环境文件只允许 .env.example（先单独取列表，超时/执行错误直接判失败，
+#    不让 grep/管道掩盖 git 的错误）
 ls_output="$(run_timeout git ls-files)"
 ls_rc=$?
 if [[ $ls_rc -eq 142 ]]; then
     echo "FAIL: 无法读取 git 跟踪文件列表（git 超时，已终止）"
+    FAILED=1
+elif [[ $ls_rc -ne 0 ]]; then
+    echo "FAIL: 无法读取 git 跟踪文件列表（git 退出码 ${ls_rc}）"
     FAILED=1
 fi
 TRACKED_ENV_FILES="$(printf '%s\n' "$ls_output" | grep -E '(^|/)\.env($|\.)|^\.env' || true)"

@@ -96,6 +96,60 @@ def test_env_gitignore_gate_accepts_repository_configuration() -> None:
     shutil.which("bash") is None,
     reason="门禁脚本依赖 bash，当前环境无 bash（如未安装 Git Bash 的 Windows），跳过",
 )
+def test_git_error_not_treated_as_untracked(tmp_path: Path) -> None:
+    """git 返回 128（仓库损坏/I/O 等执行错误）时不得判定为「未跟踪」并输出 PASS。
+
+    背景（bot 复审发现）：`git ls-files --error-unmatch .env` 的宽泛 else 曾把
+    128 等错误码当成「未跟踪」放行。只允许明确的退出码 1 表示未跟踪。
+    """
+    repo_root = Path(__file__).parents[2]
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text("#!/usr/bin/env bash\nexit 128\n")
+    fake_git.chmod(0o755)
+
+    env = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
+    env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+
+    proc = psutil.Popen(
+        ["bash", "scripts/check-env-gitignore.sh"],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=GATE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+        finally:
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                pass
+        pytest.fail("门禁脚本超过 60s 未结束")
+
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    assert proc.returncode != 0, "git 执行错误（128）时门禁脚本应失败：" + stdout + stderr
+    assert "PASS: .env 未被 git 跟踪" not in stdout, "执行错误不得判定为未跟踪：" + stdout
+    assert "退出码 128" in stdout, "应输出退出码诊断：" + stdout
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="门禁脚本依赖 bash，当前环境无 bash（如未安装 Git Bash 的 Windows），跳过",
+)
 def test_script_self_limits_when_git_stuck(tmp_path: Path) -> None:
     """git 卡死时脚本须自行限时失败退出，且不遗留进程（不依赖测试外层的整段超时）。
 

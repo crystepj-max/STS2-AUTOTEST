@@ -16,6 +16,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import psutil
 import pytest
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -117,17 +118,42 @@ def _fake_gh(tmp_path: Path) -> Path:
 
 
 def _run_script(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    # 脚本输出为 UTF-8 中文字节，显式按 UTF-8 解码（errors=replace 兜底非 UTF-8 字节）
-    return subprocess.run(
+    """运行对账脚本（60s 超时，超时后终止整棵进程树，与门禁测试清理模式一致）。"""
+    proc = psutil.Popen(
         ["bash", SCRIPT],
         cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=60,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         env=env,
-        check=False,  # 退出码由调用方断言（ruff PLW1510 要求显式声明）
+    )
+    try:
+        stdout_bytes, stderr_bytes = proc.communicate(timeout=60)
+    except subprocess.TimeoutExpired:
+        try:
+            children = proc.children(recursive=True)
+        except psutil.NoSuchProcess:
+            children = []
+        for child in children:
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        try:
+            proc.kill()
+        except psutil.NoSuchProcess:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired, subprocess.TimeoutExpired):
+            pass
+        pytest.fail("对账脚本超过 60s 未结束（可能外部调用阻塞）")
+
+    # 脚本输出为 UTF-8 中文字节，显式按 UTF-8 解码（errors=replace 兜底非 UTF-8 字节）
+    return subprocess.CompletedProcess(
+        args=["bash", SCRIPT],
+        returncode=proc.returncode,
+        stdout=stdout_bytes.decode("utf-8", errors="replace"),
+        stderr=stderr_bytes.decode("utf-8", errors="replace"),
     )
 
 
