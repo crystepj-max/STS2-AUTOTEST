@@ -174,10 +174,17 @@ if [[ ! -f "$EVIDENCE_JSON" ]]; then
 else
     expected="$(json_field "$(cat "$EVIDENCE_JSON")" '"\n".join(d["env_guard"]["gitignore"])' | sort)"
     actual="$(grep -E '^[!/]?\.env' "$REPO_ROOT/.gitignore" | sort)"
-    if [[ "$expected" == "$actual" ]]; then
-        pass ".gitignore env 条目与证据 JSON 一致：$(echo "$expected" | tr '\n' ' ')"
-    else
+    if [[ "$expected" != "$actual" ]]; then
         fail ".gitignore 与证据 JSON 不一致：JSON=[$(echo "$expected" | tr '\n' ' ')] 实际=[$(echo "$actual" | tr '\n' ' ')]"
+    else
+        # 语义验证：.env 必须实际被忽略（两侧协同追加 !.env 等声明比较发现不了）
+        run_timeout git check-ignore -q .env
+        rc=$?
+        if [[ $rc -eq 0 ]]; then
+            pass ".gitignore env 条目与证据 JSON 一致且 .env 实际被忽略：$(echo "$expected" | tr '\n' ' ')"
+        else
+            fail ".env 未被实际忽略（git check-ignore 退出码 ${rc}）"
+        fi
     fi
 fi
 
@@ -608,10 +615,19 @@ for i, e in enumerate(ledger):
             continue
         check(True, f"{tag} 恢复证据文件存在（{ev}）")
         # 内容核验（存在性不够）：ruleset 回读须无绕过者；branch protection 回读须
-        # enforce_admins=true——恢复证据自相矛盾（如误用 during 快照）必须失败
+        # enforce_admins=true——恢复证据自相矛盾（如误用 during 快照）必须失败。
+        # 内容须从已提交 blob 读取（工作树未提交修改不算不可变证据）
+        dirty = run(["git", "diff", "--quiet", "--", f"{evidence_rel}/{ev}"])
+        if dirty.returncode != 0:
+            check(False, f"{tag} 恢复证据 {ev} 相对 HEAD 有未提交修改")
+            continue
+        blob = run(["git", "show", f"HEAD:{evidence_rel}/{ev}"])
+        if blob.returncode != 0:
+            check(False, f"{tag} 恢复证据 {ev} 无法从已提交 blob 读取")
+            continue
         try:
-            snap = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            snap = json.loads(blob.stdout)
+        except ValueError:
             check(False, f"{tag} 恢复证据文件 {ev} 无法解析为 JSON")
             continue
         if "bypass_actors" in snap:

@@ -699,7 +699,8 @@ def test_gate_detects_restoration_evidence_content(tmp_path: Path) -> None:
     env["CHECK_ISSUE23_EVIDENCE"] = str(tmp_ev / "t5-final-evidence.json")
     proc = _run_script(env)
     assert proc.returncode != 0
-    assert "无绕过者" in proc.stdout + proc.stderr or "enforce_admins=true" in proc.stdout + proc.stderr
+    # 快照内容须从已提交 blob 校验——未提交/无法从 HEAD 读取的内容不被认可
+    assert "已提交 blob" in proc.stdout + proc.stderr or "未提交修改" in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(
@@ -885,6 +886,51 @@ def test_gate_detects_force_tracked_env_file(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "跟踪的环境文件" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_dirty_restoration_snapshot(tmp_path: Path) -> None:
+    """已提交快照被未提交地改成「已恢复」形态时对账门禁应失败（工作树修改不算不可变证据）。"""
+    snapshot = REPO_ROOT / EVIDENCE_JSON.parent / "t7-ruleset-after.json"
+    original = snapshot.read_text(encoding="utf-8")
+    try:
+        snapshot.write_text(
+            json.dumps({"bypass_actors": [], "current_user_can_bypass": "never"}),
+            encoding="utf-8",
+        )
+        env = _base_env(_fake_gh(tmp_path), tmp_path)
+        proc = _run_script(env)
+        assert proc.returncode != 0
+        assert "未提交修改" in proc.stdout + proc.stderr
+    finally:
+        snapshot.write_text(original, encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_gitignore_negation_semantics(tmp_path: Path) -> None:
+    """.gitignore 与证据 JSON 协同追加 !.env 时对账门禁应失败（.env 实际未被忽略，声明比较发现不了）。"""
+    gitignore = REPO_ROOT / ".gitignore"
+    original = gitignore.read_text(encoding="utf-8")
+    try:
+        gitignore.write_text(original + "\n!.env\n", encoding="utf-8")
+        # 证据 JSON 同步追加 !.env（两侧协同，声明一致）
+        data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+        data["env_guard"]["gitignore"] = [".env", ".env.*", "!.env.example", "!.env"]
+        broken_json = tmp_path / "t5-negation.json"
+        broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        env = _base_env(_fake_gh(tmp_path), tmp_path)
+        env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+        proc = _run_script(env)
+        assert proc.returncode != 0
+        assert "未被实际忽略" in proc.stdout + proc.stderr
+    finally:
+        gitignore.write_text(original, encoding="utf-8")
 
 
 @pytest.mark.skipif(
