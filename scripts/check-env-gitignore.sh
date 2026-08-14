@@ -42,6 +42,8 @@ fi
 
 run_timeout() {
     "$GATE_PYTHON" - "$GATE_CMD_TIMEOUT" "$@" <<'PY'
+import os, signal
+
 try:
     import psutil, subprocess, sys
 except ModuleNotFoundError:
@@ -49,12 +51,19 @@ except ModuleNotFoundError:
     sys.exit(1)
 
 timeout = float(sys.argv[1])
-proc = psutil.Popen(sys.argv[2:])
+# 独立进程组（POSIX）：超时或父进程先退出时可按组回收；Windows 无进程组概念，
+# 退化为 psutil 进程树清理（超时路径），父进程先退出的后代持有管道场景不做强保证
+popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
+proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
 try:
     rc = proc.wait(timeout=timeout)
 except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
-    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后终止整棵进程树防遗留
+    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 + 进程树终止防遗留
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (AttributeError, ProcessLookupError, OSError):
+        pass
     try:
         for child in proc.children(recursive=True):
             try:
@@ -72,6 +81,14 @@ except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
             pass
     print(f"TIMEOUT: 命令 {' '.join(sys.argv[2:])} 超过 {timeout:.0f}s 未完成，已终止整棵进程树", file=sys.stderr)
     sys.exit(142)
+# 父进程已退出但进程组仍有成员（后台子进程持有输出管道会阻塞外层命令替换）：
+# 回收整组，避免 $(...) 无限等待（POSIX；killpg 探测组是否仍存在）
+try:
+    os.killpg(proc.pid, 0)
+except (AttributeError, ProcessLookupError, OSError):
+    pass
+else:
+    os.killpg(proc.pid, signal.SIGTERM)
 sys.exit(rc)
 PY
 }

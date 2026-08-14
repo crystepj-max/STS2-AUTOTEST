@@ -51,6 +51,8 @@ FAILED=0
 # 正常结束 → 返回命令退出码。
 run_timeout() {
     "$GATE_PYTHON" - "$CMD_TIMEOUT" "$@" <<'PY'
+import os, signal
+
 try:
     import psutil, subprocess, sys
 except ModuleNotFoundError:
@@ -58,12 +60,19 @@ except ModuleNotFoundError:
     sys.exit(1)
 
 timeout = float(sys.argv[1])
-proc = psutil.Popen(sys.argv[2:])
+# 独立进程组（POSIX）：超时或父进程先退出时可按组回收；Windows 无进程组概念，
+# 退化为 psutil 进程树清理（超时路径），父进程先退出的后代持有管道场景不做强保证
+popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
+proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
 try:
     rc = proc.wait(timeout=timeout)
 except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     # psutil.Popen.wait 抛 psutil.TimeoutExpired（与 subprocess.TimeoutExpired 为
-    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后终止整棵进程树防遗留
+    # 兄弟类，均继承 TimeoutError）——两者都要捕获；超时后按组 + 进程树终止防遗留
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (AttributeError, ProcessLookupError, OSError):
+        pass
     try:
         for child in proc.children(recursive=True):
             try:
@@ -81,6 +90,14 @@ except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
             pass
     print(f"TIMEOUT: 命令 {' '.join(sys.argv[2:])} 超过 {timeout:.0f}s 未完成，已终止整棵进程树", file=sys.stderr)
     sys.exit(142)
+# 父进程已退出但进程组仍有成员（后台子进程持有输出管道会阻塞外层命令替换）：
+# 回收整组，避免 $(...) 无限等待（POSIX；killpg 探测组是否仍存在）
+try:
+    os.killpg(proc.pid, 0)
+except (AttributeError, ProcessLookupError, OSError):
+    pass
+else:
+    os.killpg(proc.pid, signal.SIGTERM)
 sys.exit(rc)
 PY
 }
@@ -156,10 +173,12 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
     enforcement="$(json_field "$ruleset_json" 'd.get("enforcement", "missing")')"
     thread="$(json_field "$ruleset_json" 'str([r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_review_thread_resolution")).lower()')"
     bypass_ok="$(json_field "$ruleset_json" 'str(d.get("bypass_actors", []) == [] and d.get("current_user_can_bypass") == "never").lower()')"
-    # ruleset 的必填检查是独立 rule 类型 required_status_checks（strict 策略 + context 列表）
+    # ruleset 的必填检查是独立 rule 类型 required_status_checks（strict 策略 + context 列表；
+    # 须绑定 GitHub Actions App（integration_id 15368），防止同名检查由错误来源满足）
     rsc_ok="$(json_field "$ruleset_json" 'str(any(
         r.get("type") == "required_status_checks"
         and r.get("parameters", {}).get("strict_required_status_checks_policy") is True
+        and all(c.get("integration_id") == 15368 for c in r.get("parameters", {}).get("required_status_checks", []))
         and "PR Check Summary" in [c.get("context") for c in r.get("parameters", {}).get("required_status_checks", [])]
         for r in d.get("rules", [])
     )).lower()')"
@@ -194,12 +213,19 @@ fi
 if bp_json="$(run_timeout gh api "repos/$REPO/branches/main/protection")"; then
     enforce_admins="$(json_field "$bp_json" 'str(d.get("enforce_admins", {}).get("enabled")).lower()')"
     strict="$(json_field "$bp_json" 'str(d.get("required_status_checks", {}).get("strict")).lower()')"
-    rsc_ok="$(json_field "$bp_json" 'str("PR Check Summary" in d.get("required_status_checks", {}).get("contexts", [])).lower()')"
+    rsc_ok="$(json_field "$bp_json" 'str(
+        "PR Check Summary" in d.get("required_status_checks", {}).get("contexts", [])
+        and any(
+            c.get("context") == "PR Check Summary" and c.get("app_id") == 15368
+            for c in d.get("required_status_checks", {}).get("checks", [])
+        )
+    ).lower()')"
     # 禁止删除 / 禁止 force push（治理文档声明，须与 ruleset 的 deletion/non_fast_forward 规则配套）
     no_del="$(json_field "$bp_json" 'str(not d.get("allow_deletions", {}).get("enabled", False)).lower()')"
     no_ff="$(json_field "$bp_json" 'str(not d.get("allow_force_pushes", {}).get("enabled", False)).lower()')"
-    # 审批要求必须未启用（治理文档：solo 维护者无法自审）
-    approvals_zero="$(json_field "$bp_json" 'str(not d.get("required_pull_request_reviews", {}).get("required_approving_review_count", 0)).lower()')"
+    # 审批要求必须未启用（治理文档：solo 维护者无法自审）。
+    # 注意：未启用审批时 GitHub 返回 required_pull_request_reviews=null，须先或 {} 再取字段
+    approvals_zero="$(json_field "$bp_json" 'str(not (d.get("required_pull_request_reviews") or {}).get("required_approving_review_count", 0)).lower()')"
     if [[ "$enforce_admins" == "true" && "$strict" == "true" && "$rsc_ok" == "true" && "$no_del" == "true" && "$no_ff" == "true" && "$approvals_zero" == "true" ]]; then
         pass "branch protection 实时回读：enforce_admins=${enforce_admins}、strict=${strict}、必填 PR Check Summary、禁删除/禁 force push、无审批要求"
     else
@@ -207,6 +233,59 @@ if bp_json="$(run_timeout gh api "repos/$REPO/branches/main/protection")"; then
     fi
 else
     fail "拉取 branch protection 失败"
+fi
+
+# --- 3b. 证据 JSON 的 branch_protection/ruleset 记录 ↔ 实时回读对账 ---
+# （同 env_guard.gitignore 的双向对账模式：正式证据不得与真实治理状态矛盾）
+if [[ -f "$EVIDENCE_JSON" ]] && [[ -n "${bp_json:-}" ]] && [[ -n "${ruleset_json:-}" ]]; then
+    bp_record="$(json_field "$(cat "$EVIDENCE_JSON")" 'json.dumps({
+        "checks": sorted(d.get("branch_protection", {}).get("required_status_checks", [])),
+        "strict": d.get("branch_protection", {}).get("strict"),
+        "enforce_admins": d.get("branch_protection", {}).get("enforce_admins"),
+        "approvals": d.get("branch_protection", {}).get("required_approving_review_count"),
+    }, sort_keys=True)')"
+    bp_live="$(json_field "$bp_json" 'json.dumps({
+        "checks": sorted(d.get("required_status_checks", {}).get("contexts", [])),
+        "strict": d.get("required_status_checks", {}).get("strict"),
+        "enforce_admins": d.get("enforce_admins", {}).get("enabled"),
+        "approvals": (d.get("required_pull_request_reviews") or {}).get("required_approving_review_count", 0),
+    }, sort_keys=True)')"
+    if [[ "$bp_record" == "$bp_live" ]]; then
+        pass "证据 JSON branch_protection 与实时回读一致"
+    else
+        fail "证据 JSON branch_protection 与实时回读不一致：JSON=[${bp_record}] 实时=[${bp_live}]"
+    fi
+
+    rs_record="$(json_field "$(cat "$EVIDENCE_JSON")" 'json.dumps({
+        "checks": sorted(d.get("ruleset", {}).get("required_status_checks", [])),
+        "strict": d.get("ruleset", {}).get("strict"),
+        "thread": d.get("ruleset", {}).get("required_review_thread_resolution"),
+        "bypass": d.get("ruleset", {}).get("bypass_actors"),
+        "can_bypass": d.get("ruleset", {}).get("current_user_can_bypass"),
+    }, sort_keys=True)')"
+    rs_live="$(json_field "$ruleset_json" 'json.dumps({
+        "checks": sorted(c.get("context") for c in next(
+            r.get("parameters", {}).get("required_status_checks", []) for r in d.get("rules", [])
+            if r.get("type") == "required_status_checks"
+        )),
+        "strict": next(
+            r.get("parameters", {}).get("strict_required_status_checks_policy") for r in d.get("rules", [])
+            if r.get("type") == "required_status_checks"
+        ),
+        "thread": next(
+            r.get("parameters", {}).get("required_review_thread_resolution") for r in d.get("rules", [])
+            if r.get("type") == "pull_request"
+        ),
+        "bypass": d.get("bypass_actors"),
+        "can_bypass": d.get("current_user_can_bypass"),
+    }, sort_keys=True)')"
+    if [[ "$rs_record" == "$rs_live" ]]; then
+        pass "证据 JSON ruleset 与实时回读一致"
+    else
+        fail "证据 JSON ruleset 与实时回读不一致：JSON=[${rs_record}] 实时=[${rs_live}]"
+    fi
+else
+    fail "证据 JSON 缺失或规则回读未完成，无法对账 branch_protection/ruleset 记录"
 fi
 
 # --- 4. 治理文档 Markdown 相对链接 ---

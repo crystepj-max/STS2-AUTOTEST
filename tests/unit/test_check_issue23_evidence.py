@@ -85,6 +85,7 @@ DEFAULT_BP_JSON = json.dumps(
         "required_status_checks": {
             "strict": True,
             "contexts": ["PR Check Summary"],
+            "checks": [{"context": "PR Check Summary", "app_id": 15368}],
         },
         "required_pull_request_reviews": {"required_approving_review_count": 0},
         "allow_deletions": {"enabled": False},
@@ -477,3 +478,36 @@ def test_gate_detects_ruleset_excluding_literal_main_ref(tmp_path: Path) -> None
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "covers_default" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_check_not_bound_to_actions_app(tmp_path: Path) -> None:
+    """必填检查未绑定 GitHub Actions App（app_id 被改）时对账门禁应失败。"""
+    bp_json = json.loads(DEFAULT_BP_JSON)
+    bp_json["required_status_checks"]["checks"] = [
+        {"context": "PR Check Summary", "app_id": 99999}
+    ]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_BP_JSON=json.dumps(bp_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "required_check" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_evidence_json_state_mismatch(tmp_path: Path) -> None:
+    """证据 JSON 的 branch_protection 记录与实时回读不一致时对账门禁应失败。"""
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    data["branch_protection"]["enforce_admins"] = False
+    broken_json = tmp_path / "t5-state-broken.json"
+    broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "branch_protection" in proc.stdout + proc.stderr
