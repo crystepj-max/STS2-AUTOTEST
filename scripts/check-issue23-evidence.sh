@@ -168,15 +168,22 @@ if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
     target="$(json_field "$ruleset_json" 'd.get("target", "missing")')"
     covers_default="$(json_field "$ruleset_json" 'str(
         "~DEFAULT_BRANCH" in d.get("conditions", {}).get("ref_name", {}).get("include", [])
-        and "~DEFAULT_BRANCH" not in d.get("conditions", {}).get("ref_name", {}).get("exclude", [])
+        and not any(
+            pat in d.get("conditions", {}).get("ref_name", {}).get("exclude", [])
+            for pat in ("~DEFAULT_BRANCH", "refs/heads/main")
+        )
     ).lower()')"
     # 禁止删除分支 / 非快进推送（治理文档声明；与 branch protection 的 allow_* 配套核验）
     del_rule_ok="$(json_field "$ruleset_json" 'str(any(r.get("type") == "deletion" for r in d.get("rules", []))).lower()')"
     nff_rule_ok="$(json_field "$ruleset_json" 'str(any(r.get("type") == "non_fast_forward" for r in d.get("rules", []))).lower()')"
-    if [[ "$enforcement" == "active" && "$target" == "branch" && "$covers_default" == "true" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" && "$del_rule_ok" == "true" && "$nff_rule_ok" == "true" ]]; then
-        pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、覆盖默认分支、必填 PR Check Summary、线程=${thread}、无绕过者、禁删除/禁非快进"
+    # 审批数必须为 0（治理文档：solo 维护者无法自审，PR 形态 + 必填检查已构成门禁）
+    approvals_zero="$(json_field "$ruleset_json" 'str(
+        [r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_approving_review_count") == 0
+    ).lower()')"
+    if [[ "$enforcement" == "active" && "$target" == "branch" && "$covers_default" == "true" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" && "$del_rule_ok" == "true" && "$nff_rule_ok" == "true" && "$approvals_zero" == "true" ]]; then
+        pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、覆盖默认分支、必填 PR Check Summary、线程=${thread}、无绕过者、禁删除/禁非快进、审批 0"
     else
-        fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、target=${target}、covers_default=${covers_default}、required_check_ok=${rsc_ok}、thread=${thread}、bypass_actors_ok=${bypass_ok}、deletion_rule=${del_rule_ok}、non_fast_forward_rule=${nff_rule_ok}"
+        fail "ruleset $RULESET_ID 实时回读异常：enforcement=${enforcement}、target=${target}、covers_default=${covers_default}、required_check_ok=${rsc_ok}、thread=${thread}、bypass_actors_ok=${bypass_ok}、deletion_rule=${del_rule_ok}、non_fast_forward_rule=${nff_rule_ok}、approvals_zero=${approvals_zero}"
     fi
 else
     fail "拉取 ruleset $RULESET_ID 失败"
@@ -191,10 +198,12 @@ if bp_json="$(run_timeout gh api "repos/$REPO/branches/main/protection")"; then
     # 禁止删除 / 禁止 force push（治理文档声明，须与 ruleset 的 deletion/non_fast_forward 规则配套）
     no_del="$(json_field "$bp_json" 'str(not d.get("allow_deletions", {}).get("enabled", False)).lower()')"
     no_ff="$(json_field "$bp_json" 'str(not d.get("allow_force_pushes", {}).get("enabled", False)).lower()')"
-    if [[ "$enforce_admins" == "true" && "$strict" == "true" && "$rsc_ok" == "true" && "$no_del" == "true" && "$no_ff" == "true" ]]; then
-        pass "branch protection 实时回读：enforce_admins=${enforce_admins}、strict=${strict}、必填 PR Check Summary、禁删除/禁 force push"
+    # 审批要求必须未启用（治理文档：solo 维护者无法自审）
+    approvals_zero="$(json_field "$bp_json" 'str(not d.get("required_pull_request_reviews", {}).get("required_approving_review_count", 0)).lower()')"
+    if [[ "$enforce_admins" == "true" && "$strict" == "true" && "$rsc_ok" == "true" && "$no_del" == "true" && "$no_ff" == "true" && "$approvals_zero" == "true" ]]; then
+        pass "branch protection 实时回读：enforce_admins=${enforce_admins}、strict=${strict}、必填 PR Check Summary、禁删除/禁 force push、无审批要求"
     else
-        fail "branch protection 实时回读异常：enforce_admins=${enforce_admins}、strict=${strict}、required_check_ok=${rsc_ok}、no_deletions=${no_del}、no_force_push=${no_ff}"
+        fail "branch protection 实时回读异常：enforce_admins=${enforce_admins}、strict=${strict}、required_check_ok=${rsc_ok}、no_deletions=${no_del}、no_force_push=${no_ff}、approvals_zero=${approvals_zero}"
     fi
 else
     fail "拉取 branch protection 失败"
@@ -255,7 +264,11 @@ if not ledger:
 
 for i, e in enumerate(ledger):
     tag = f"台账[{i}]"
-    check(bool(e.get("authorizer")), f"{tag} 授权人已记录（{e.get('authorizer', '')}）")
+    # 授权人仅限仓库所有者 crystepj-max（治理文档「执行步骤（授权人：仅限仓库所有者）」）
+    check(
+        e.get("authorizer") == "crystepj-max",
+        f"{tag} 授权人为仓库所有者（{e.get('authorizer', '')}）",
+    )
     check(
         "crystepj-max/STS2-AUTOTEST/issues/" in e.get("reason_url", ""),
         f"{tag} 原因链接指向 issue（{e.get('reason_url', '')}）",

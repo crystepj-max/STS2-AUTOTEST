@@ -57,7 +57,10 @@ DEFAULT_RULESET_JSON = json.dumps(
             {"type": "non_fast_forward", "parameters": None},
             {
                 "type": "pull_request",
-                "parameters": {"required_review_thread_resolution": True},
+                "parameters": {
+                    "required_review_thread_resolution": True,
+                    "required_approving_review_count": 0,
+                },
             },
             {
                 "type": "required_status_checks",
@@ -83,6 +86,7 @@ DEFAULT_BP_JSON = json.dumps(
             "strict": True,
             "contexts": ["PR Check Summary"],
         },
+        "required_pull_request_reviews": {"required_approving_review_count": 0},
         "allow_deletions": {"enabled": False},
         "allow_force_pushes": {"enabled": False},
     }
@@ -423,3 +427,53 @@ def test_gate_detects_bp_force_push_allowed(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode != 0
     assert "no_force_push" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_approvals_required(tmp_path: Path) -> None:
+    """ruleset 要求审批数 1 时对账门禁应失败（solo 维护者无法自审，审批要求会卡死合并）。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["rules"] = [
+        {**r, "parameters": {**(r.get("parameters") or {}), "required_approving_review_count": 1}}
+        if r["type"] == "pull_request"
+        else r
+        for r in ruleset_json["rules"]
+    ]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RULESET_JSON=json.dumps(ruleset_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "approvals_zero" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_unauthorized_authorizer(tmp_path: Path) -> None:
+    """台账授权人非仓库所有者时对账门禁应失败（未经授权的绕过记录不算审计闭环）。"""
+    data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
+    data["emergency_bypass"]["ledger"][0]["authorizer"] = "unauthorized-user"
+    broken_json = tmp_path / "t5-unauthorized.json"
+    broken_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    env["CHECK_ISSUE23_EVIDENCE"] = str(broken_json)
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "授权人" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_detects_ruleset_excluding_literal_main_ref(tmp_path: Path) -> None:
+    """ruleset 的 exclude 用字面 ref refs/heads/main 排除默认分支时对账门禁应失败。"""
+    ruleset_json = json.loads(DEFAULT_RULESET_JSON)
+    ruleset_json["conditions"]["ref_name"]["exclude"] = ["refs/heads/main"]
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_RULESET_JSON=json.dumps(ruleset_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "covers_default" in proc.stdout + proc.stderr
