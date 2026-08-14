@@ -21,7 +21,7 @@
 | T1 | 分支保护 + ruleset 修正 | ✅ | `evidence/t1-protection-readback.json`、`t1-ruleset-readback.json` |
 | T2 | 治理文档 | ✅ | `docs/process/main-merge-protection.md` |
 | T3 | 失败样例（push 被拒 + 失败 CI 合并被禁） | ✅ | `evidence/t3a-*`、`t3b-*` |
-| T4 | 成功样例（本 PR 合并） | 进行中 | 本 PR 合并记录 |
+| T4 | 成功样例（本 PR 合并） | ✅ | PR #27，run 31768914035，合并 a0673525 |
 | T5 | Issue 回填 + 收尾 | 待办 | — |
 
 ## Review 重点

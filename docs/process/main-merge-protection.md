@@ -76,8 +76,11 @@
 
 ### 成功样例
 
-- 本 PR（治理文档 + 证据归档）通过 `PR Check Summary` 后正常合并 → 证明「满足规则的 PR 可以正常合并」。
-  - 合并提交与成功 run 链接见本 PR 合并记录。
+- 治理文档 PR 通过 `PR Check Summary` 后正常合并 → 证明「满足规则的 PR 可以正常合并」：
+  - PR: https://github.com/crystepj-max/STS2-AUTOTEST/pull/27
+  - 成功 run: https://github.com/crystepj-max/STS2-AUTOTEST/actions/runs/31768914035
+  - 合并提交: `a0673525aa32fe3845efdbea47c3b023dd442856`（2026-08-14）
+  - 证据：[`t4-success-sample.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t4-success-sample.md)
 
 ## 与 Issue 完成标准对照
 

@@ -1,0 +1,34 @@
+{
+  "task_id": "issue-23-main-merge-protection",
+  "updated_at": "2026-08-14",
+  "phase": "T5 收尾（T0-T4 已完成）",
+  "repo_visibility": "PUBLIC",
+  "branch_protection": {
+    "required_status_checks": ["PR Check Summary"],
+    "strict": true,
+    "enforce_admins": true,
+    "required_approving_review_count": 0
+  },
+  "ruleset": {
+    "name": "Autotest protect",
+    "required_status_checks": ["PR Check Summary"],
+    "bypass_actors": [],
+    "current_user_can_bypass": "never"
+  },
+  "verification": {
+    "t3a_direct_push_rejected": true,
+    "t3b_failed_ci_merge_blocked": true,
+    "t3b_failed_run": 31768184810,
+    "t4_success_pr": 27,
+    "t4_success_run": 31768914035,
+    "t4_merge_commit": "a0673525aa32fe3845efdbea47c3b023dd442856"
+  },
+  "acceptance": {
+    "fail_or_missing_check_blocks_merge": true,
+    "strict_final_commit": true,
+    "direct_main_push_blocked": true,
+    "success_pr_mergeable": true,
+    "emergency_bypass_defined": true,
+    "docs_committed": true
+  }
+}

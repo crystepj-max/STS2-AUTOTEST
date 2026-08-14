@@ -12,7 +12,7 @@
 - **T1**：配置 main 分支保护（必填 `PR Check Summary`、strict=true、enforce_admins=true、无审批要求、禁 force push/删除），并修正既有 ruleset「Autotest protect」的悬空配置（旧检查名 `Unit Tests` 已不存在于重构后的 ci-pr.yml；审批数 1→0 对齐用户决策）。修正后 ruleset 与 branch protection 一致，无绕过者。
 - **T2**：治理文档 `docs/process/main-merge-protection.md`（规则现状、常规流程、紧急绕过流程、双向验证证据、完成标准对照）。
 - **T3**：失败样例双向验证——(a) 直接 push main 被远端拒绝（GH013）；(b) 构造 CI 必失败的 PR，PR Check Summary 失败后合并被 HTTP 405 拒绝、状态 BLOCKED。
-- **T4**：本 PR（治理文档 + 证据归档）作为成功样例，通过 PR Check Summary 后正常合并（进行中）。
+- **T4**：本 PR（治理文档 + 证据归档）作为成功样例，PR Check Summary 通过（run 31768914035）后正常合并（合并提交 a0673525）。
 
 ## 修改文件
 
@@ -54,7 +54,7 @@ python -m pytest tests/unit/ -q        # NOT_RUN：本次无代码改动，PR CI
 - 保护配置回读：**PASSED**（`t1-protection-readback.json`、`t1-ruleset-readback.json`）
 - T3a 失败样例：**PASSED**（直接 push main 被拒，`t3a-direct-push-rejected.md`）
 - T3b 失败样例：**PASSED**（失败 CI 的 PR 合并被 405 拒绝 + BLOCKED，`t3b-check-failure-merge-blocked.md`）
-- T4 成功样例：**进行中**（本 PR 的 PR Check Summary 通过后合并）
+- T4 成功样例：**PASSED**（PR #27，run 31768914035 success，合并提交 a0673525）
 - 单元测试 / mypy / lint-imports：**NOT_RUN**（本次零代码改动；PR CI 会全量执行，以 PR Check Summary 为准）
 - Localization：**NOT_APPLICABLE**
 - Smoke Test：**NOT_APPLICABLE**（无游戏内变更）
