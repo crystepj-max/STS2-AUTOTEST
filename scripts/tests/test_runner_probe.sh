@@ -43,6 +43,18 @@ echo
 exit 0
 FAKE_CURL
     chmod +x "$dir/curl"
+    # fake DNS（探针独立联网探针用）：getent/nslookup 返回成功
+    cat > "$dir/getent" <<'FAKE_GETENT_COMMON'
+#!/usr/bin/env bash
+echo "203.0.113.77"
+exit 0
+FAKE_GETENT_COMMON
+    cat > "$dir/nslookup" <<'FAKE_NSLOOKUP_COMMON'
+#!/usr/bin/env bash
+echo "Server: 127.0.0.1"
+exit 0
+FAKE_NSLOOKUP_COMMON
+    chmod +x "$dir/getent" "$dir/nslookup"
     echo "$dir"
 }
 
@@ -113,7 +125,7 @@ test_begin "probe: 必需字段齐全"
 FAKE="$(new_fake_runner running)"
 FAKE_BIN_F="$(new_probe_bin)"
 OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$FAKE_BIN_F:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
-for KEY in ts service_state runner_pids github_online proxy_local_reachable direct_github_reachable proxy_github_reachable exit_ip_direct exit_ip_proxy; do
+for KEY in ts service_state runner_pids github_online proxy_local_reachable direct_github_reachable proxy_github_reachable exit_ip_direct exit_ip_proxy internet_reachable dns_resolvable; do
     if json_has_key "$OUT" "$KEY"; then
         pass "字段 $KEY 存在"
     else
@@ -286,6 +298,47 @@ echo '{"service_state":"running","github_online":"online"}' > "$STATE_FILE_S"
 OUT="$(cd /tmp && RUNNER_DIR="$FAKE_STOP" PROBE_OPS_FILE="$OPS_FILE_S" PROBE_STATE_FILE="$STATE_FILE_S" PATH="$FAKE_BIN_NOGH:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
 assert_eq "$(json_field "$OUT" transition)" "service-stopped" "服务停止应记为 service-stopped"
 assert_eq "$(json_field "$OUT" op)" "manual-stop" "manual-stop 与 service-stopped 匹配应关联"
+
+# --- 用例 9d（P2 四类归因）：GitHub 不可达时，独立联网探针区分本机网络 vs 上游故障 ---
+test_begin "probe: GitHub 不可达时独立联网探针仍能区分网络状态"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_NET="$(mktemp -d "${TMPDIR:-/tmp}/probe-net.XXXXXX")"
+# fake curl：对 GitHub 返回 000（不可达），对 ipify（独立端点）返回 200 + IP
+cat > "$FAKE_BIN_NET/curl" <<'FAKE_CURL_NET'
+#!/usr/bin/env bash
+if [[ "$*" == *"api.github.com"* ]]; then
+    printf '%s' "000"; echo
+    exit 0
+fi
+if [[ "$*" == *"ipify.org"* ]]; then
+    # 探针用 -w %{http_code} 检查状态码，输出 200；IP 内容由 exit_ip 单独探测
+    printf '%s' "200"; echo
+    exit 0
+fi
+printf '%s' "200"; echo
+exit 0
+FAKE_CURL_NET
+chmod +x "$FAKE_BIN_NET/curl"
+# fake DNS：getent/nslookup 返回成功（DNS 可解析）
+cat > "$FAKE_BIN_NET/getent" <<'FAKE_GETENT'
+#!/usr/bin/env bash
+echo "203.0.113.77"
+exit 0
+FAKE_GETENT
+cat > "$FAKE_BIN_NET/nslookup" <<'FAKE_NSLOOKUP'
+#!/usr/bin/env bash
+echo "Server: 127.0.0.1"
+exit 0
+FAKE_NSLOOKUP
+chmod +x "$FAKE_BIN_NET/getent" "$FAKE_BIN_NET/nslookup"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$FAKE_BIN_NET:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+# GitHub 两条路径失败（000），但独立联网探针成功 → 可判定「本机网络正常，GitHub 上游问题」
+assert_eq "$(json_field "$OUT" direct_github_reachable)" "False" "GitHub 直连不可达"
+if json_has_key "$OUT" internet_reachable; then
+    assert_eq "$(json_field "$OUT" internet_reachable)" "True" "独立联网探针应可达（区分本机网络正常）"
+else
+    fail "缺少 internet_reachable 字段（四类归因需要独立联网探针）"
+fi
 
 # --- 用例 10（S2）：超时后无残留子进程 ---
 test_begin "probe: gh 挂起超时后无残留子进程"

@@ -216,10 +216,24 @@ if [[ "$code" == "200" ]]; then
     exit_ip_proxy="$(curl -s --max-time 5 -x "$PROXY_URL" https://api.ipify.org 2>/dev/null || true)"
 fi
 
+# --- 独立联网探针（P2 四类归因）：与 GitHub 无关的端点 + DNS 解析 ---
+# GitHub 两条路径同时失败时，用非 GitHub 端点区分「本机网络故障」与
+# 「GitHub 上游故障」：联网探针可达 → 本机网络正常，问题在 GitHub 上游；
+# 联网探针也不可达 → 本机/出口网络故障。DNS 解析失败可进一步定位。
+internet_reachable=false
+dns_resolvable=false
+code="$(curl -s --max-time 5 --noproxy '*' -o /dev/null -w '%{http_code}' https://api.ipify.org 2>/dev/null || true)"
+if [[ "$code" == "200" ]]; then
+    internet_reachable=true
+fi
+if getent hosts api.ipify.org >/dev/null 2>&1 || nslookup api.ipify.org >/dev/null 2>&1; then
+    dns_resolvable=true
+fi
+
 # --- 输出 JSONL ---
-line="$(python3 - "$TS" "$service_state" "$runner_pids" "$github_online" "$github_busy" "$transition" "$PROBE_OP" "$proxy_local_reachable" "$direct_github_reachable" "$proxy_github_reachable" "$exit_ip_direct" "$exit_ip_proxy" <<'PY'
+line="$(python3 - "$TS" "$service_state" "$runner_pids" "$github_online" "$github_busy" "$transition" "$PROBE_OP" "$proxy_local_reachable" "$direct_github_reachable" "$proxy_github_reachable" "$exit_ip_direct" "$exit_ip_proxy" "$internet_reachable" "$dns_resolvable" <<'PY'
 import json, sys
-ts, state, pids, gh, busy, trans, op, proxy_local, direct, proxy_gh, ip_direct, ip_proxy = sys.argv[1:]
+ts, state, pids, gh, busy, trans, op, proxy_local, direct, proxy_gh, ip_direct, ip_proxy, internet, dns = sys.argv[1:]
 # busy 为 "true"/"false" 字符串 → JSON 布尔；unknown 保持 null
 busy_json = {"true": True, "false": False}.get(busy)
 print(json.dumps({
@@ -235,6 +249,8 @@ print(json.dumps({
     "proxy_github_reachable": proxy_gh == "true",
     "exit_ip_direct": ip_direct,
     "exit_ip_proxy": ip_proxy,
+    "internet_reachable": internet == "true",
+    "dns_resolvable": dns == "true",
 }))
 PY
 )"
