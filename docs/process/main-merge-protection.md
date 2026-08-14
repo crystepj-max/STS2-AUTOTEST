@@ -36,6 +36,7 @@
 | 变更必须通过 PR | 启用（禁止直接写入 main） |
 | 必填状态检查 | `PR Check Summary`（strict，要求分支最新） |
 | PR 审批数 | 0 |
+| review 线程解决要求 | 否（bot 自动建议线程不阻塞合并，见 [`t5-ruleset-thread-fix.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t5-ruleset-thread-fix.md)） |
 | 删除分支 / 非快进推送 | 禁止 |
 | 绕过者（bypass actors） | 无，`current_user_can_bypass: never` |
 
