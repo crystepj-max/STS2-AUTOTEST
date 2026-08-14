@@ -374,7 +374,7 @@ fi
 # 故 Python 代码经 $(cat <<'PY') 取出后以 -c 传入，不能靠 stdin 传递脚本。
 if [[ -f "$EVIDENCE_JSON" ]]; then
     ledger_code="$(cat <<'PY'
-import json, os, pathlib, psutil, re, signal, subprocess, sys, datetime
+import json, os, pathlib, psutil, re, signal, subprocess, sys, time, datetime
 
 evidence_json, evidence_dir, repo, timeout = sys.argv[1:5]
 timeout = float(timeout)
@@ -400,11 +400,16 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        # 父进程已退出但后代被重新托管后 children() 为空——按进程组回收（POSIX）
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except (AttributeError, ProcessLookupError, OSError):
-            pass
+        # 父进程已退出但后代被重新托管后 children() 为空——按进程组回收（POSIX），
+        # TERM → 宽限 → KILL 升级（防忽略 TERM 的后代持有管道）
+        group_signals = [signal.SIGTERM] + ([signal.SIGKILL] if hasattr(signal, "SIGKILL") else [])
+        for sig in group_signals:
+            try:
+                os.killpg(proc.pid, sig)
+            except (AttributeError, ProcessLookupError, OSError):
+                break  # 组已不存在
+            if sig == signal.SIGTERM:
+                time.sleep(0.5)
         try:
             for child in proc.children(recursive=True):
                 try:
@@ -480,8 +485,10 @@ for i, e in enumerate(ledger):
                     check(False, f"{tag} 授权评论 {auth_cid} 不存在")
                 else:
                     auth_comment = json.loads(cmt.stdout)
+                    # 精确匹配 URL 末尾的 Issue 编号（子串匹配会误判 issues/230 含 issues/23）
+                    issue_m = re.search(r"/issues/(\d+)/?$", auth_comment.get("issue_url", ""))
                     check(
-                        f"issues/{m.group(1)}" in auth_comment.get("issue_url", ""),
+                        issue_m is not None and issue_m.group(1) == m.group(1),
                         f"{tag} 授权评论 {auth_cid} 属于原因链接资源（issue #{m.group(1)}）",
                     )
                     check(

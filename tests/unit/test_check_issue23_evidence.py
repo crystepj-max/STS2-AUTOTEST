@@ -802,6 +802,20 @@ def test_gate_detects_authorization_comment_wrong_author(tmp_path: Path) -> None
     shutil.which("bash") is None,
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
+def test_gate_detects_authorization_comment_wrong_issue(tmp_path: Path) -> None:
+    """授权评论属于其他 Issue（URL 末尾编号不匹配）时对账门禁应失败（子串会误判 #230）。"""
+    comment_json = json.loads(DEFAULT_COMMENT_JSON)
+    comment_json["issue_url"] = "https://api.github.com/repos/crystepj-max/STS2-AUTOTEST/issues/230"
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENT_JSON=json.dumps(comment_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "属于原因链接资源" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
 def test_gate_detects_force_tracked_env_file(tmp_path: Path) -> None:
     """实际跟踪的环境文件与证据 JSON tracked_env_files 不一致（如 git add -f）时对账门禁应失败。"""
     data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
