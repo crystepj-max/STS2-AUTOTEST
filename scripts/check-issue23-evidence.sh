@@ -516,6 +516,9 @@ for i, e in enumerate(ledger):
                 if not af.exists():
                     check(False, f"{tag} 授权记录文件存在（{auth_file}）")
                 else:
+                    # 文件必须已被 git 跟踪（内容经提交不可变；未提交的工作树文件不算）
+                    tracked = run(["git", "ls-files", "--error-unmatch", str(af)])
+                    check(tracked.returncode == 0, f"{tag} 授权记录文件 {auth_file} 已被 git 跟踪")
                     af_body = af.read_text(encoding="utf-8", errors="replace")
                     check(
                         f"PR #{e.get('bypassed_pr')}" in af_body
