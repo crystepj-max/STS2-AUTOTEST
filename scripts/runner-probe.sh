@@ -102,7 +102,9 @@ if command -v gh &>/dev/null; then
     else
         jq_expr=".runners[] | [.status, (.busy|tostring)] | @tsv"
     fi
-    gh_row="$(run_with_timeout "$GH_TIMEOUT" gh api "repos/$REPO/actions/runners" --paginate --jq "$jq_expr" 2>/dev/null | head -1 || true)"
+    # gh 默认继承 HTTP_PROXY 环境变量；代理抖动时查询必失败。
+    # 显式清空代理变量强制 gh 直连（直连由 --noproxy 实证可达，R1 同源）。
+    gh_row="$(run_with_timeout "$GH_TIMEOUT" env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy gh api "repos/$REPO/actions/runners" --paginate --jq "$jq_expr" 2>/dev/null | head -1 || true)"
     if [[ -n "$gh_row" ]]; then
         github_online="$(printf '%s' "$gh_row" | cut -f1)"
         github_busy="$(printf '%s' "$gh_row" | cut -f2)"

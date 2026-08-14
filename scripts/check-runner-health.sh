@@ -91,10 +91,15 @@ if command -v gh &>/dev/null; then
     else
         jq_expr=".runners[] | .status"
     fi
-    gh_status="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" gh api "repos/$REPO/actions/runners" --paginate --jq "$jq_expr" 2>/dev/null | head -1 || true)"
+    # gh 默认继承 HTTP_PROXY 环境变量（CI job 环境注入 7890）；代理抖动时查询必失败。
+    # 直连（curl --noproxy 已实证可达）更可靠：显式清空代理变量强制 gh 直连。
+    gh_status="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy gh api "repos/$REPO/actions/runners" --paginate --jq "$jq_expr" 2>/tmp/health-gh.err | head -1 || true)"
     if [[ -n "$gh_status" ]]; then
         github_online="$gh_status"
+    else
+        echo "diag: gh 查询失败 → $(head -2 /tmp/health-gh.err 2>/dev/null | tr '\n' ' ')" >&2
     fi
+    rm -f /tmp/health-gh.err
 fi
 
 # --- 网络链路（超时 5s，失败 → false）---
