@@ -140,11 +140,18 @@ log_operation() {
             fi
         fi
         if [[ -n "$reclaim" ]]; then
-            # 无破坏原子认领：在锁目录内创建唯一 claimant 文件（mkdir 原子）。
-            # 只有认领成功者有权回收；认领后校验锁 inode 未变（holder 校验对
-            # 无 holder 场景失效，inode 对两种场景都可靠）。
-            # 避免 mv 移走他人新锁的窗口（A 检查后 B 换锁 → A 认领失败放弃）。
-            claimant="$lock/.claim.$$"
+            # 无破坏原子认领：所有竞争者共享单一认领名 .claim（mkdir 原子互斥）。
+            # 只有一个进程能成功创建 → 唯一回收者；认领后校验锁 inode 未变
+            # （A 认领后 B 换新锁 → A inode 校验失败放弃认领，不动 B 的新锁）。
+            # 认领名固定（不含 PID）：两进程同时认领时 mkdir 保证仅一方成功。
+            claimant="$lock/.claim"
+            # 清理残留认领（认领者在 rm -rf 前中断）：超龄 .claim 可回收
+            if [[ -d "$claimant" ]]; then
+                claim_age="$(( now_ts - $(stat -f %m "$claimant" 2>/dev/null || echo "$now_ts") ))"
+                if [[ "$claim_age" -gt "$stale_after" ]]; then
+                    rmdir "$claimant" 2>/dev/null || true
+                fi
+            fi
             if mkdir "$claimant" 2>/dev/null; then
                 orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
                 # 认领成功：重读 inode 确认锁仍是刚检查的实例（未变才回收）
