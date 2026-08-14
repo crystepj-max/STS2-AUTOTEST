@@ -12,8 +12,8 @@ pytest 子进程亦继承）下存在多字节解析缺陷——`$f` 后紧跟�
 """
 
 import os
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
