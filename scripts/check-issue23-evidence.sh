@@ -200,13 +200,12 @@ else
         # 先剥离括号表达式（[.] 等通配可隐藏字面 .env）再按 gitignore 语义识别；
         # 扫描所有被跟踪的 .gitignore（子目录同样可能放行 .env）
         neg_rules=""
-        gi_files="$(run_timeout git ls-files | grep '\.gitignore$' || true)"
-        for gi in $gi_files; do
-            r="$(grep -E '^!' "$REPO_ROOT/$gi" | sed -E 's/\[[^]]*\]//g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+        while IFS= read -r -d '' gi; do
+            r="$(grep -E '^!' "$REPO_ROOT/$gi" | sed -E 's/\[([^]]*)\]/\1/g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
             if [[ -n "$r" ]]; then
                 neg_rules="${neg_rules}${gi}: $(echo "$r" | tr '\n' ' ')"
             fi
-        done
+        done < <(run_timeout git ls-files -z | grep -z '\.gitignore$' || true)
         if [[ -n "$neg_rules" ]]; then
             fail "存在放行 .env 的否定规则（只允许 !.env.example）：$neg_rules"
         else
@@ -214,8 +213,19 @@ else
             run_timeout git check-ignore -q .env
             rc=$?
             if [[ $rc -eq 0 ]]; then
-                # 语义验证 ③：未跟踪文件列表不得出现环境文件（重新暴露会出现在 status 中）
-                untracked_env="$(run_timeout git status --porcelain --untracked-files=all | awk '{print $2}' | grep -E '(^|/)\.env($|\.)' | grep -v '^\.env\.example$' || true)"
+                # 语义验证 ③：未跟踪文件列表不得出现环境文件（重新暴露会出现在 status 中；
+                # -z NUL 分隔解析，空格路径不拆、不引号化）
+                untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
+import sys
+out = []
+for entry in sys.stdin.buffer.read().split(b"\0"):
+    if len(entry) >= 4 and entry[:2] == b"??":
+        path = entry[3:].decode("utf-8", "replace")
+        base = path.rsplit("/", 1)[-1]
+        if base == ".env" or base.startswith(".env."):
+            out.append(path)
+print("\n".join(out))
+' | grep -v '^\.env\.example$' || true)"
                 if [[ -n "$untracked_env" ]]; then
                     fail "存在未被忽略的环境文件：$(echo "$untracked_env" | tr '\n' ' ')"
                 else
