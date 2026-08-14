@@ -51,11 +51,42 @@ except ModuleNotFoundError:
     sys.exit(1)
 
 timeout = float(sys.argv[1])
-# 独立进程组（POSIX）：超时或父进程先退出时可按组回收；Windows 无进程组概念，
-# 退化为 psutil 进程树清理（超时路径），父进程先退出的后代持有管道场景不做强保证
-popen_kwargs = {"start_new_session": True} if os.name == "posix" else {}
-proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
+# 独立进程组：POSIX 用 start_new_session + killpg；Windows 用 CREATE_NEW_PROCESS_GROUP
+# + CTRL_BREAK_EVENT（可送达整组、不可被控制台程序轻易忽略）回收后代
+if os.name == "nt":
+    popen_kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+
+
+    def _kill_group(pgid, sig):  # type: ignore[no-redef]
+        os.kill(pgid, signal.CTRL_BREAK_EVENT)
+
+
+    def _group_alive(pgid):  # type: ignore[no-redef]
+        try:
+            os.kill(pgid, signal.CTRL_BREAK_EVENT)
+            return True
+        except OSError:
+            return False
+
+else:
+    popen_kwargs = {"start_new_session": True}
+
+
+    def _kill_group(pgid, sig):  # type: ignore[no-redef]
+        os.killpg(pgid, sig)
+
+
+    def _group_alive(pgid):  # type: ignore[no-redef]
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except (ProcessLookupError, OSError):
+            return False
+
+
 import time
+
+proc = psutil.Popen(sys.argv[2:], **popen_kwargs)
 
 # Windows Python 无 SIGKILL：按平台选择信号（防止构造元组时 AttributeError 崩溃）
 GROUP_SIGNALS = [signal.SIGTERM] + ([signal.SIGKILL] if hasattr(signal, "SIGKILL") else [])
@@ -68,8 +99,8 @@ except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     # 升级（防忽略 TERM 的后代持有管道），进程树清理兜底
     for sig in GROUP_SIGNALS:
         try:
-            os.killpg(proc.pid, sig)
-        except (AttributeError, ProcessLookupError, OSError):
+            _kill_group(proc.pid, sig)
+        except OSError:
             break  # 组已不存在
         if sig == signal.SIGTERM:
             time.sleep(0.5)
@@ -91,22 +122,15 @@ except (psutil.TimeoutExpired, subprocess.TimeoutExpired):
     print(f"TIMEOUT: 命令 {' '.join(sys.argv[2:])} 超过 {timeout:.0f}s 未完成，已终止整棵进程树", file=sys.stderr)
     sys.exit(142)
 # 父进程已退出但进程组仍有成员（后台子进程持有输出管道会阻塞外层命令替换）：
-# TERM → 宽限 → KILL 升级回收整组，避免 $(...) 无限等待（POSIX；killpg 探测组）
-def _kill_group() -> None:
-    try:
-        os.killpg(proc.pid, 0)
-    except (AttributeError, ProcessLookupError, OSError):
-        return
+# TERM → 宽限 → KILL 升级回收整组，避免 $(...) 无限等待（平台对应的组探测）
+if _group_alive(proc.pid):
     for sig in GROUP_SIGNALS:
         try:
-            os.killpg(proc.pid, sig)
-        except (AttributeError, ProcessLookupError, OSError):
-            return  # 组已不存在
+            _kill_group(proc.pid, sig)
+        except OSError:
+            break  # 组已不存在
         if sig == signal.SIGTERM:
             time.sleep(0.5)
-
-
-_kill_group()
 sys.exit(rc)
 PY
 }

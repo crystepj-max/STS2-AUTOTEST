@@ -802,6 +802,20 @@ def test_gate_detects_authorization_comment_wrong_author(tmp_path: Path) -> None
     shutil.which("bash") is None,
     reason="对账脚本依赖 bash，当前环境无 bash，跳过",
 )
+def test_gate_detects_authorization_comment_edited_after(tmp_path: Path) -> None:
+    """授权评论在操作后被编辑（updated_at 晚于操作）时对账门禁应失败（事后编辑不算事前授权）。"""
+    comment_json = json.loads(DEFAULT_COMMENT_JSON)
+    comment_json["updated_at"] = "2026-08-14T08:00:00Z"  # 晚于操作 05:50:11Z
+    env = _base_env(_fake_gh(tmp_path), tmp_path, FAKE_COMMENT_JSON=json.dumps(comment_json))
+    proc = _run_script(env)
+    assert proc.returncode != 0
+    assert "未经事后编辑" in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
 def test_gate_detects_authorization_comment_wrong_issue(tmp_path: Path) -> None:
     """授权评论属于其他 Issue（URL 末尾编号不匹配）时对账门禁应失败（子串会误判 #230）。"""
     comment_json = json.loads(DEFAULT_COMMENT_JSON)
