@@ -256,11 +256,17 @@ chmod +x svc.sh config.sh
 exit 0
 FAKE_TAR4
 chmod +x "$FAKE_BIN4"/*
+# CI 环境会注入 RUNNER_NAME（GitHub Actions runner 环境变量）——本用例必须显式清空，
+# 否则脚本继承 CI 的 RUNNER_NAME 不会走「未提供机器身份」拒绝分支
 OUT4="$(cd /tmp && CONFIG_LOG="$FAKE_HOME4/config.log" HOME="$FAKE_HOME4" RUNNER_DIR="$FAKE_RUNNER4" \
-    RUNNER_VERSION="9.9.9" PATH="$FAKE_BIN4:/usr/bin:/bin" bash "$SETUP_SCRIPT" 2>&1)" || RC4=$?
+    RUNNER_VERSION="9.9.9" RUNNER_NAME="" PATH="$FAKE_BIN4:/usr/bin:/bin" bash "$SETUP_SCRIPT" 2>&1)" || RC4=$?
 RC4="${RC4:-0}"
 assert_ne "$RC4" "0" "未显式提供机器身份时新安装应拒绝（非 0 退出）"
-assert_contains "$OUT4" "RUNNER_NAME" "应提示必须显式提供机器身份（RUNNER_NAME）"
+if [[ "$OUT4" == *"RUNNER_NAME"* ]]; then
+    pass "应提示必须显式提供机器身份（RUNNER_NAME）"
+else
+    fail "应提示必须显式提供机器身份（RUNNER_NAME）——实际输出: $(echo "$OUT4" | head -3 | tr '\n' ' | ')"
+fi
 
 # --- 用例 9（R4）：显式提供 RUNNER_NAME 后正常安装 ---
 test_begin "显式 RUNNER_NAME：新安装正常完成"
