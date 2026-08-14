@@ -1,8 +1,10 @@
 # Developer Handoff: issue-23-main-merge-protection（复审修复轮）
 
-- 开发阶段：2026-08-14（第一轮：codex + GPT-5.6；复审修复轮：开发节点 attempt-002）
+- 开发阶段：2026-08-14（第一轮：codex + GPT-5.6；复审修复轮：开发节点 attempt-002；
+  macOS 兼容性补充修复轮：开发节点 attempt-003，PR #33）
 - 来源 Issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/23
-- 状态：S4 复审 REQUEST_CHANGES 的四项阻塞问题已全部修复（T6–T8 + .env 门禁），待复审
+- 状态：S4 复审 REQUEST_CHANGES 的四项阻塞问题已全部修复（T6–T8 + .env 门禁），
+  复审修复 PR #32 已合并入 main（`7d36d25`）；macOS 兼容性补充修复 PR #33（Draft）待复审
 
 ## 实现摘要
 
@@ -24,6 +26,17 @@ Review（S4）判定四项阻塞问题，本轮逐一闭环：
 | ③ 「失败或缺失检查均阻断」只验证了失败场景 | 新增纯 markdown 探针 PR #31（命中 paths-ignore，0 个检查运行）→ 合并 HTTP 405 `Required status check "PR Check Summary" is expected.`；验收字段拆分为 failure/missing 两案例 | `evidence/t8-missing-check-probe.md`、`t5-final-evidence.json` 终版 |
 | ④ 未经授权关闭「审查意见线程必须解决」（ruleset `required_review_thread_resolution=false`） | 恢复为 `true`（PUT 仅改此字段，回读确认）；线程处理约定：bot/人工线程逐条处理并标记解决，solo 维护者可操作 | `evidence/t6-ruleset-thread-restored.md`、`t6-ruleset-readback.json` |
 
+### macOS 兼容性补充修复轮（PR #33，attempt-003）
+
+测试节点（round-001/测试/attempt-002）实测发现：门禁脚本 `scripts/check-env-gitignore.sh`
+在 macOS 上变量插值写法触发 shell 解析差异——`$f` 后紧跟全角括号 `（` 时本机 shell 的解析
+行为与 CI（Linux bash）不一致，导致输出/退出码漂移风险。修复与回归：
+
+| 问题 | 修复 | 证据 |
+|---|---|---|
+| 门禁脚本 macOS 兼容性（`$f` → `${f}`，消除 shell 解析歧义） | `scripts/check-env-gitignore.sh` 两处 echo 改用 `${f}` | PR #33 diff |
+| 缺回归测试：门禁脚本行为未被测试捕获 | 新增 `tests/unit/test_check_env_gitignore.py`：subprocess 调用脚本，断言退出码 0 + 模板文件报告 | `tests/unit/test_check_env_gitignore.py` |
+
 ## 修改文件（本修复轮 PR：chore/issue-23-review-fixes）
 
 - `docs/process/main-merge-protection.md`：ruleset 表格（线程解决=是）、新增「本地配置防护」、
@@ -38,6 +51,12 @@ Review（S4）判定四项阻塞问题，本轮逐一闭环：
   `t6-ruleset-readback.json`、`t7-emergency-bypass-drill.md`、`t7-ruleset-before/during/after.json`、
   `t7-branch-protection-before/during/after.json`、`t8-missing-check-probe.md`；
   更新 `t5-ruleset-thread-fix.md`（顶部「已撤销」标注）、`t5-final-evidence.json`（终版：acceptance 拆分 + 新增 env_guard/emergency_bypass 字段）。
+
+## 修改文件（补充修复轮 PR #33：macOS 兼容性）
+
+- `scripts/check-env-gitignore.sh`：`$f` → `${f}`（两处 echo，macOS shell 解析兼容）。
+- `tests/unit/test_check_env_gitignore.py`：新增门禁脚本真实回归测试。
+- `.agent-runs/issue-23-main-merge-protection/STATE.md` / `developer-handoff.md` / `stage-handoff-s2.md`：本轮状态同步。
 
 仓库外变更（不可逆或即时生效，需 Reviewer 关注）：
 
@@ -68,8 +87,10 @@ gh api repos/crystepj-max/STS2-AUTOTEST/rulesets/19962718 --jq '{bypass: .bypass
 # ③ 缺失检查样例（已归档，勿复跑；复验方式见 t8 证据）
 #   纯 md PR → 0 check-runs → 合并 405「Required status check "PR Check Summary" is expected.」
 
-# ④ 本地全量验证（主工作树，issue-23 不触及 src/tests/CI）
-./scripts/verify.sh   # 结果见本轮 S2/测试记录：全绿
+# ④ 本地全量验证（issue-23 worktree：门禁脚本 + 全量单测 + lint-imports）
+bash scripts/check-env-gitignore.sh                      # 3 项 PASS，exit 0
+PYTHONPATH=src python3 -m pytest tests/unit/ -q          # 1758 passed（含新增 test_check_env_gitignore.py）
+<venv>/bin/lint-imports                                  # 架构边界通过
 ```
 
 ## 已知风险

@@ -1,8 +1,10 @@
 # STATE — issue-23-main-merge-protection
 
-- 更新时间：2026-08-14（复审修复轮次完成：T6–T8 闭环，S4 四项阻塞问题已全部修复）
-- 阶段：开发修复完成（T6 线程恢复 / T7 紧急演练 / T8 缺失样例 / .env 门禁 全部闭环），进入复审
-- 状态机位置：`DEV_REVIEW` → `DEV_ASSIGNED`（S4 REQUEST_CHANGES 回退）→ 修复完成 → 待复审
+- 更新时间：2026-08-14（复审修复轮已合入 + macOS 兼容性补充修复 PR #33 待复审）
+- 阶段：复审修复 PR #32 已合并入 main（7d36d25）；测试节点发现门禁脚本 macOS 兼容性缺陷，
+  补充修复已推送并建 Draft PR #33，待 CI 与复审
+- 状态机位置：`DEV_REVIEW` → `DEV_ASSIGNED`（S4 REQUEST_CHANGES 回退）→ 修复完成（PR #32 合入）
+  → macOS 兼容性补充修复（PR #33）→ 待复审
 
 ## 当前事实（均已落盘，不依赖会话记忆）
 
@@ -24,6 +26,11 @@
 - 治理文档 `docs/process/main-merge-protection.md` 已同步上述全部变化。
 - 双向验证回顾：T3a 直接 push 拒绝（GH013）；T3b 失败 CI PR（#26）合并 405 + BLOCKED；
   T4 成功样例 PR #27 合并（a0673525）。
+- **复审修复 PR #32 已合并入 main（`7d36d25`）**：T6–T8 与 .env 门禁主体随 PR #32 合入，CI PASS。
+- **macOS 兼容性补充修复（PR #33，Draft）**：测试节点（round-001/测试/attempt-002）实测发现
+  门禁脚本 `scripts/check-env-gitignore.sh` 在 macOS 上变量插值写法触发 shell 解析差异
+  （`$f` → `${f}`），并新增回归单测 `tests/unit/test_check_env_gitignore.py`；
+  补充修复提交 `1153dce` 已推送，PR #33 待 CI。
 
 ## 本轮（复审修复）变更清单
 
@@ -34,6 +41,7 @@
 | T8 | 缺失检查探针 PR #31 阻断样例（0 check-runs + 405） | `evidence/t8-missing-check-probe.md` |
 | — | `.gitignore` 忽略 `.env` + `scripts/check-env-gitignore.sh` 门禁 | `.gitignore`、`scripts/check-env-gitignore.sh` |
 | — | 治理文档 / AGENTS.md / STATE / handoff 同步 | `docs/process/main-merge-protection.md` 等 |
+| R5 | 门禁脚本 macOS 兼容性修复（`$f`→`${f}`）+ 回归单测（PR #33） | `scripts/check-env-gitignore.sh`、`tests/unit/test_check_env_gitignore.py` |
 
 ## 风险与注意
 
@@ -44,10 +52,10 @@
   文档更新须附带非忽略文件（本次修复 PR 附带 .gitignore/脚本/JSON 证据触发 CI）。
 - 紧急绕过不保留静态权限：任何绕过动作必须走 T7 演练的完整闭环并留审计记录。
 - issue-13（PR #22）未合并，main push 检查仍失败，与本任务正交，不阻塞本任务门禁。
-- 本任务未改动 `src/`、`tests/` 与 `.github/workflows/`。
+- 本任务未改动 `src/`、`tests/` 与 `.github/workflows/`（PR #33 仅新增 tests/unit/ 单测文件与脚本改动）。
 
 ## 下一步
 
-1. 修复 PR（chore/issue-23-review-fixes）通过 PR Check Summary 后合并入 main。
-2. Review 节点复审：核对 S4 四项阻塞问题（紧急绕过可执行、.env 忽略、缺失样例证据、线程规则恢复）的修复证据。
+1. PR #33（macOS 兼容性补充修复）通过 PR Check Summary 后合并入 main。
+2. Review 节点复审：核对 S4 四项阻塞问题（紧急绕过可执行、.env 忽略、缺失样例证据、线程规则恢复）的修复证据 + PR #33 兼容性修复。
 3. 复审通过后关闭 Issue #23。
