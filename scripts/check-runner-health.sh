@@ -66,8 +66,18 @@ fi
 
 # --- 真实进程（Runner.Listener，issue-24 R3）---
 process_present=false
-if pgrep -f "Runner.Listener" >/dev/null 2>&1; then
-    process_present=true
+if command -v pgrep &>/dev/null; then
+    if pgrep -f "Runner.Listener" >/dev/null 2>&1; then
+        process_present=true
+    fi
+else
+    # pgrep 缺失时无法核验进程：按 R3 一致性要求报 UNHEALTHY（github 侧由 gh 兜底）
+    process_present=false
+fi
+# 诊断（仅失败时输出，不污染正常路径）
+if [[ "$process_present" == "false" ]]; then
+    echo "diag: pgrep='$(command -v pgrep 2>/dev/null || echo MISSING)'" >&2
+    echo "diag: pgrep -f 'Runner.Listener' → $(pgrep -f 'Runner.Listener' 2>&1 | head -3 | tr '\n' ' ')" >&2
 fi
 
 # --- GitHub 侧状态（gh api runners，失败 → unknown，issue-24 R3）---
@@ -89,9 +99,11 @@ if command -v gh &>/dev/null; then
 fi
 
 # --- 网络链路（超时 5s，失败 → false）---
+# 直连必须显式绕过环境代理（--noproxy '*'）：CI job 环境注入 HTTP_PROXY 时，
+# 不加 --noproxy 的「直连」实际会走代理，与代理路径无法区分（issue-24 R1 同源）
 direct_reachable=false
 proxy_reachable=false
-code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://api.github.com/zen 2>/dev/null || true)"
+code="$(curl -s --max-time 5 --noproxy '*' -o /dev/null -w '%{http_code}' https://api.github.com/zen 2>/dev/null || true)"
 [[ "$code" == "200" ]] && direct_reachable=true
 code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -x "$PROXY_URL" https://api.github.com/zen 2>/dev/null || true)"
 [[ "$code" == "200" ]] && proxy_reachable=true
