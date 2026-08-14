@@ -1,0 +1,97 @@
+task_id: issue-23-main-merge-protection
+title: 强制 main 合并前通过最终自动验收（分支保护制度化）
+repo: STS2-AUTOTEST
+base_branch: main
+working_branch: chore/issue-23-merge-protection-docs  # 仅治理文档需要分支；仓库设置为即时生效
+source_issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/23
+type: governance
+priority: P0
+size: S
+
+# 分诊结论（2026-08-14，需求阶段取证）
+# 1. Issue 描述属实：main 当前无任何分支保护——
+#    `gh api repos/crystepj-max/STS2-AUTOTEST/branches/main/protection` 返回 403
+#    「Upgrade to GitHub Pro or make this repository public to enable this feature.」
+# 2. 硬约束：本仓库为个人账号私有库（owner.type=User, private=true），免费档位
+#    对私有库不开放分支保护与 rulesets（两者 API 均 403，已实测）。
+#    → Issue 目标「为 main 启用合并保护」在保持私有+免费的前提下无法原生实现。
+# 3. 既有基础属实：`PR Check Summary` 为 ci-pr.yml 的 summary job（.github/workflows/ci-pr.yml:147），
+#    needs: [lint, mypy, lint-imports, unit-test, cli-integration]，`if: always()`，
+#    是单一稳定的必填 status check context 名。
+triage:
+  labels: [enhancement, sized-s]
+  key_findings:
+    - id: K1
+      fact: "私有库免费账号无原生分支保护/rulesets（API 403 实测）"
+      implication: "必须二选一前置：转公开 或 升级 Pro；否则只能 CI 兜底（弱门禁）"
+    - id: K2
+      fact: "required status check context 名 = 'PR Check Summary'（job 显示名）"
+      implication: "配置分支保护时 context 字符串必须与 job name 完全一致"
+    - id: K3
+      fact: "PR #12 已把日常验收收敛为单一结果（Run 31754859148 success）"
+      implication: "具备将 PR Check Summary 设为必填检查的基础（Issue 所述，实施时复核）"
+
+decisions:
+  enforcement_path: 先转公开再启用原生分支保护（用户 2026-08-14 在需求阶段确认）
+  admin_enforcement: 建议 enforce_admins=true（管理员同样受约束）——默认建议，待人工门禁确认
+  emergency_bypass: 建议文档约定（授权人 + 原因记录 + 事后 24h 内补验证据）——默认建议，待人工门禁确认
+  require_pr_approvals: 建议 0（solo 维护者无法自审；强制 PR 形态 + 必填检查已构成门禁）——待门禁确认
+  size_confirmed: S（单一切片：仓库设置 + 一篇治理文档 + 双向验证，≤1 天）
+
+scope:
+  in:
+    - 仓库转公开的前置安全检查与可见性变更
+    - main 分支保护配置（必填 PR Check Summary、要求分支最新、enforce_admins）
+    - 治理文档：规则生效状态 + 紧急绕过流程 + 验证证据
+    - 失败样例与成功样例双向验证
+    - 回填 Issue 完成标准
+  out:  # 对应 Issue「明确不做」
+    - 不修改质量检查本身（ci-pr.yml 各 job 逻辑不动）
+    - 不把管理员临时操作当作常规流程
+    - 不改动现有用户验收与真实游戏验收要求
+
+tickets:  # to-tickets：依赖顺序执行
+  - id: T0
+    title: 转公开前置——敏感信息扫描 + 可见性变更
+    depends_on: []
+    notes: >
+      转公开前确认仓库无凭据入库（.env 已 gitignore，抽检历史与现文件）；
+      可见性变更（`gh repo edit --visibility public`）为不可逆外溢操作，
+      实施阶段执行前须再次取得用户明确授权。附带收益：公开仓库托管 runner 免费，
+      可缓解 issue-13 记录的托管 runner 计费失败问题。
+  - id: T1
+    title: 配置 main 分支保护
+    depends_on: [T0]
+    notes: >
+      required status check context = "PR Check Summary"，strict=true（要求分支最新，
+      即 Issue 所述「等价的最终提交验证规则」）；required_pull_request_reviews 按门禁结论
+      设置；enforce_admins 按门禁结论设置。用 gh api 配置并回读验证。
+  - id: T2
+    title: 治理文档 docs/process/main-merge-protection.md
+    depends_on: [T1]
+    notes: >
+      内容：规则生效状态（配置回读证据）、紧急绕过流程（授权人/原因记录/24h 补验要求）、
+      验证证据链接。文档改动走 PR 合入——该 PR 同时作为 T4 成功样例素材。
+  - id: T3
+    title: 失败样例验证
+    depends_on: [T1]
+    notes: >
+      (a) 直接向 main 推送空提交 → 应被远端拒绝（不留痕迹，安全）；
+      (b) 构造 PR Check Summary 失败/未运行的 PR → 合并入口应被禁。
+      截图/命令输出归档 evidence/。
+  - id: T4
+    title: 成功样例验证
+    depends_on: [T1, T2]
+    notes: "T2 文档 PR 通过 PR Check Summary 后正常合并，记录合并提交与成功 run 链接。"
+  - id: T5
+    title: 回填 Issue + 收尾
+    depends_on: [T3, T4]
+    notes: "勾选 Issue 完成标准并附证据链接；更新 STATE.md；写 stage-handoff-s2。"
+
+acceptance:  # 对齐 Issue 完成标准
+  - 失败或缺失 PR Check Summary 的 PR 无法合并
+  - 成功结果必须对应准备合并的最终提交（strict=true）
+  - 日常直接写入 main 被禁止
+  - 成功 PR 在满足人工授权后可以正常合并
+  - 紧急绕过有明确权限、原因记录和事后补验要求
+  - 规则生效状态和验证证据写入正式文档
