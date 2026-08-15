@@ -227,7 +227,7 @@ else
                     pdir="."
                 fi
                 gi_dir="$(dirname "$gi2")"
-                for cand in .env .env.prod; do
+                for cand in .env .env.local .env.prod .env.staging; do
                     if [[ "$gi_dir" == "." ]]; then
                         probe_path="${pdir}/${cand}"
                     else
@@ -480,7 +480,7 @@ fi
 
 # --- 4. 治理文档 Markdown 相对链接 ---
 broken_links="$("$GATE_PYTHON" - "$GOV_DOC" <<'PY'
-import re, sys, pathlib
+import re, sys, pathlib, urllib.parse
 doc = pathlib.Path(sys.argv[1])
 base = doc.parent
 text = doc.read_text(encoding="utf-8")
@@ -489,7 +489,9 @@ for m in re.finditer(r"\]\(([^)]+)\)", text):
     link = m.group(1)
     if "://" in link or link.startswith(("#", "mailto:")):
         continue
-    if not (base / link).resolve().exists():
+    # 剥离 fragment（#…）与 query（?…）并 URL 解码后再做存在性检查
+    target = urllib.parse.unquote(link.split("#", 1)[0].split("?", 1)[0])
+    if not (base / target).resolve().exists():
         broken.append(link)
 print("\n".join(broken))
 PY

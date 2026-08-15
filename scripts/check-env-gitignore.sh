@@ -188,7 +188,7 @@ while IFS= read -r -d '' gi2; do
             pdir="."
         fi
         gi_dir="$(dirname "$gi2")"
-        for cand in .env .env.prod; do
+        for cand in .env .env.local .env.prod .env.staging; do
             if [[ "$gi_dir" == "." ]]; then
                 probe_path="${pdir}/${cand}"
             else
