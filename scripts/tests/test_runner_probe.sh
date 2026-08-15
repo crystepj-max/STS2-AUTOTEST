@@ -260,10 +260,10 @@ printf '{"ts": "%s", "op": "manual-stop"}\n' "$OLD_TS" > "$OPS_FILE"
 OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE" PROBE_STATE_FILE="$STATE_FILE_B" PATH="$FAKE_BIN_OPS:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
 assert_eq "$(json_field "$OUT" op)" "" "超窗维护操作不应误报"
 
-# 反例 2：时间窗口内但 transition 不匹配（manual-start + service-stopped）→ 不关联
+# 反例 2：时间窗口内 manual-start 是独立维护事件（transition=steady 也记录）
 printf '{"ts": "%s", "op": "manual-start"}\n' "$RECENT_TS" > "$OPS_FILE"
 OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE" PROBE_STATE_FILE="$STATE_FILE_B" PATH="$FAKE_BIN_OPS:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
-assert_eq "$(json_field "$OUT" op)" "" "manual-start 与 service-stopped 不匹配不应关联"
+assert_eq "$(json_field "$OUT" op)" "manual-start" "manual-start 是独立维护事件（steady 也记录）"
 
 # --- 用例 9c（P1 反例）：ops 标记须与 transition 匹配——manual-start 后发生
 # disconnect（意外断线）不得误标为维护操作 ---

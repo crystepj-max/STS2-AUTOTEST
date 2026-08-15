@@ -54,6 +54,7 @@ run_with_timeout() {
     killer=$!
     if wait "$pid"; then rc=0; else rc=$?; fi
     kill_tree "$killer" KILL
+    wait "$killer" 2>/dev/null || true   # 等看门狗退出，防作业终止诊断混入 stderr
     return "$rc"
 }
 
@@ -145,13 +146,16 @@ log_operation() {
         # 陈旧判定前先绑定锁实例（inode）：判定与认领始终针对同一实例。
         # 若 A 判定后 B 换新锁，A 的 orig_inode 仍是旧锁 → 认领时校验失败放弃，
         # 不会误删 B 的新锁（TOCTOU）。
-        orig_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
+        # stat 带硬超时（锁文件系统 I/O 卡顿时不无限阻塞，超时视为无法绑定跳过回收）
+        orig_inode="$(run_with_timeout "${OPS_CP_TIMEOUT:-10}" stat -f %i "$lock" 2>/dev/null || echo '')"
         if [[ -f "$lock/holder" ]]; then
             # 有持有者标识：仅回收「持有进程已死」的锁。
             # 活进程的锁永不按年龄回收（进程可能因 I/O 卡顿/休眠超时，
             # kill -0 仍成功——按年龄回收会删除有效锁，原持有者恢复后覆盖新记录）。
-            holder_pid="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f1)"
-            holder_start="$(cat "$lock/holder" 2>/dev/null | cut -d' ' -f2-)"   # 进程启动时间（epoch）
+            # holder 读取带硬超时（锁文件系统 I/O 卡顿时不无限阻塞）
+            holder_raw="$(run_with_timeout "${OPS_CP_TIMEOUT:-10}" cat "$lock/holder" 2>/dev/null || true)"
+            holder_pid="$(printf '%s' "$holder_raw" | cut -d' ' -f1)"
+            holder_start="$(printf '%s' "$holder_raw" | cut -d' ' -f2-)"   # 进程启动时间（epoch）
             # PID + 启动时间双重校验：kill -0 只证明「有进程占着该 PID」；若 PID
             # 被复用（旧持有者死后 PID 分配给无关进程），启动时间必然不同。
             if [[ -n "$holder_pid" ]] && kill -0 "$holder_pid" 2>/dev/null; then
@@ -209,7 +213,7 @@ log_operation() {
                 claim_start="$(ps -o lstart= -p $$ 2>/dev/null | xargs -I{} date -j -f "%a %b %e %H:%M:%S %Y" "{}" +%s 2>/dev/null || echo '')"
                 printf '%s %s\n' "$$" "$claim_start" > "$claimant/pid"
                 # 认领成功：重读 inode 确认仍是绑定的陈旧实例（未变才回收）
-                curr_inode="$(stat -f %i "$lock" 2>/dev/null || echo '')"
+                curr_inode="$(run_with_timeout "${OPS_CP_TIMEOUT:-10}" stat -f %i "$lock" 2>/dev/null || echo '')"
                 if [[ -n "$orig_inode" ]] && [[ "$orig_inode" == "$curr_inode" ]]; then
                     echo "WARNING: 回收陈旧 ops 锁（$reclaim）" >&2
                     # claimant 随外层锁一起原子移除（rm -rf lock 含 claimant）：

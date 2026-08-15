@@ -86,6 +86,7 @@ run_with_timeout() {
     killer=$!
     if wait "$pid"; then rc=0; else rc=$?; fi
     kill_tree "$killer" KILL
+    wait "$killer" 2>/dev/null || true   # 等看门狗退出，防作业终止诊断混入 stderr
     out="$(cat "$tmp")"
     if [[ "$rc" -eq 0 ]]; then printf '%s' "$out"; fi
     return "$rc"
@@ -171,14 +172,20 @@ mv -f "$state_tmp" "$PROBE_STATE_FILE" 2>/dev/null || true
 if [[ -z "$PROBE_OP" && -f "$PROBE_OPS_FILE" ]]; then
     # 游标文件（与 ops 同目录）：记录已消费行数
     OPS_CURSOR="${PROBE_OPS_FILE}.cursor"
-    cursor="$(cat "$OPS_CURSOR" 2>/dev/null || echo 0)"
+    # 游标读取带硬超时（I/O 卡顿时探针仍按时输出 JSON）；失败视为 0 不消费
+    cursor="$(run_with_timeout "$GH_TIMEOUT" cat "$OPS_CURSOR" 2>/dev/null || echo 0)"
     # 同快照读取：一次读入全部内容并按行数推进游标——避免 tail 读取与 wc -l
     # 之间新操作写入导致游标跳过未读行（P2 游标一致性）。
     # cat 带硬超时（ops 文件系统 I/O 卡顿时探针仍按时输出 JSON）
     OPS_SNAPSHOT="$(run_with_timeout "$GH_TIMEOUT" cat "$PROBE_OPS_FILE" 2>/dev/null || true)"
-    OPS_LINES="$(printf '%s\n' "$OPS_SNAPSHOT" | wc -l | tr -d ' ')"
-    # 从快照提取自游标之后的新操作（行号 > cursor）
-    OPS_TAIL="$(printf '%s\n' "$OPS_SNAPSHOT" | tail -n +"$((cursor + 1))" 2>/dev/null || true)"
+    # 空快照计数为 0（printf '%s' 不生成换行，避免空串合成 1 行导致游标跳读）
+    if [[ -n "$OPS_SNAPSHOT" ]]; then
+        OPS_LINES="$(printf '%s' "$OPS_SNAPSHOT" | wc -l | tr -d ' ')"
+        OPS_TAIL="$(printf '%s\n' "$OPS_SNAPSHOT" | tail -n +"$((cursor + 1))" 2>/dev/null || true)"
+    else
+        OPS_LINES="0"
+        OPS_TAIL=""
+    fi
     if [[ -n "$OPS_TAIL" ]]; then
         # 解析新增操作（时间窗口内 + 与 transition 匹配的才填入 op）
         NEW_OPS="$(printf '%s' "$OPS_TAIL" | python3 -c 'import json,sys,datetime
@@ -195,23 +202,31 @@ for l in lines:
         pass
 for ts,op in ops:
     print(f"{ts} {op}")' 2>/dev/null || true)"
-        # 时间窗口内且与当前 transition 匹配的操作
-        NOW_EPOCH="$(date +%s)"
-        while IFS= read -r op_line; do
-            [[ -z "$op_line" ]] && continue
-            OP_TS_EPOCH="${op_line%% *}"
-            OP_NAME="${op_line##* }"
-            if [[ "$(( NOW_EPOCH - OP_TS_EPOCH ))" -ge 0 ]] && [[ "$(( NOW_EPOCH - OP_TS_EPOCH ))" -le "$PROBE_OP_WINDOW" ]]; then
-                case "$OP_NAME:$transition" in
-                    manual-stop:service-stopped|manual-start:service-started)
-                        PROBE_OP="$OP_NAME"
-                        ;;
-                esac
-            fi
-        done <<< "$NEW_OPS"
+        # 采样间隔内的维护操作是独立事件：时间窗口内的操作直接记录（不再要求
+        # 与 transition 匹配——stop→start 在两次采样间完成时 transition=steady，
+        # 但操作日志是明确的维护证据，应独立记录而非丢弃）。
+        # 例外：transition=disconnect/recover（网络事件）时不标维护——
+        # 断线/恢复是意外网络事件，非人工维护（防止误归因）。
+        if [[ "$transition" != "disconnect" && "$transition" != "recover" ]]; then
+            NOW_EPOCH="$(date +%s)"
+            while IFS= read -r op_line; do
+                [[ -z "$op_line" ]] && continue
+                OP_TS_EPOCH="${op_line%% *}"
+                OP_NAME="${op_line##* }"
+                if [[ "$(( NOW_EPOCH - OP_TS_EPOCH ))" -ge 0 ]] && [[ "$(( NOW_EPOCH - OP_TS_EPOCH ))" -le "$PROBE_OP_WINDOW" ]]; then
+                    PROBE_OP="$OP_NAME"   # 最近一次窗口内操作（独立事件记录）
+                fi
+            done <<< "$NEW_OPS"
+        fi
     fi
-    # 更新游标（用同快照的行数——已消费位置与实际读取绑定，不跳过新写入）
-    printf '%s\n' "${OPS_LINES:-0}" > "$OPS_CURSOR" 2>/dev/null || true
+    # 更新游标（用同快照的行数——已消费位置与实际读取绑定，不跳过新写入）。
+    # 原子写入：临时文件 + mv（防截断/半写残留导致重复消费或非法游标）
+    cursor_tmp="$(mktemp "$(dirname "$OPS_CURSOR")/.cursor.XXXXXX" 2>/dev/null || mktemp "${TMPDIR:-/tmp}/cursor.XXXXXX")"
+    if [[ -n "$cursor_tmp" ]]; then
+        printf '%s\n' "${OPS_LINES:-0}" > "$cursor_tmp" 2>/dev/null
+        mv -f "$cursor_tmp" "$OPS_CURSOR" 2>/dev/null || true
+        PROBE_TMP_FILES+=("$cursor_tmp")
+    fi
 fi
 
 # --- 代理本地端口可达（/dev/tcp，非阻塞即时失败）---
