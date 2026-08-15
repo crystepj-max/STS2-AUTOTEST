@@ -252,12 +252,9 @@ else
             if [[ $rc -eq 0 ]]; then
                 # 语义验证 ④：未跟踪文件列表不得出现环境文件（重新暴露会出现在 status 中；
                 # -z NUL 分隔解析，空格路径不拆、不引号化；git status 失败须显式失败）
-                status_out="$(run_timeout git status --porcelain -z --untracked-files=all)"
-                status_rc=$?
-                if [[ $status_rc -ne 0 ]]; then
-                    fail "git status 失败（退出码 ${status_rc}），无法核验未跟踪环境文件"
-                else
-                    untracked_env="$(printf '%s' "$status_out" | "$GATE_PYTHON" -c '
+                # 注意：bash 命令替换会吞掉 NUL 字节（-z 输出条目被拼接），
+                # 必须直接管道给 python 解析；git 退出码经 PIPESTATUS 捕获
+                untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
 import sys
 out = []
 for entry in sys.stdin.buffer.read().split(b"\0"):
@@ -268,11 +265,13 @@ for entry in sys.stdin.buffer.read().split(b"\0"):
             out.append(path)
 print("\n".join(out))
 ' | grep -v '^\.env\.example$' || true)"
-                    if [[ -n "$untracked_env" ]]; then
-                        fail "存在未被忽略的环境文件：$(echo "$untracked_env" | tr '\n' ' ')"
-                    else
-                        pass ".gitignore env 条目与证据 JSON 一致且 .env 实际被忽略：$(echo "$expected" | tr '\n' ' ')"
-                    fi
+                status_rc=${PIPESTATUS[0]}
+                if [[ $status_rc -ne 0 ]]; then
+                    fail "git status 失败（退出码 ${status_rc}），无法核验未跟踪环境文件"
+                elif [[ -n "$untracked_env" ]]; then
+                    fail "存在未被忽略的环境文件：$(echo "$untracked_env" | tr '\n' ' ')"
+                else
+                    pass ".gitignore env 条目与证据 JSON 一致且 .env 实际被忽略：$(echo "$expected" | tr '\n' ' ')"
                 fi
             else
                 fail ".env 未被实际忽略（git check-ignore 退出码 ${rc}）"
