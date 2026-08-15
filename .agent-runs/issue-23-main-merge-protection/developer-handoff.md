@@ -6,8 +6,8 @@
 - 来源 Issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/23
 - 状态：S4 复审 REQUEST_CHANGES 的两轮阻塞问题已全部修复（T6–T8 + .env 门禁 +
   补验闭环 + 脚本自备限时 + 证据统一 + 自动对账门禁），复审修复 PR #32 已合并入 main
-  （`7d36d25`）；PR #33 修复完成（PR Check Summary success，run 31857388399，
-  head 42e4881，bot 审查线程全部解决）待复审
+  （`7d36d25`）；PR #33 修复完成（PR Check Summary success，run 31858518996，
+  head 89fd871，bot 审查线程全部解决）待复审
 
 ## 实现摘要
 
