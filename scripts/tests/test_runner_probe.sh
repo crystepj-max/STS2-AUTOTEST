@@ -43,6 +43,18 @@ echo
 exit 0
 FAKE_CURL
     chmod +x "$dir/curl"
+    # fake DNS（探针独立联网探针用）：getent/nslookup 返回成功
+    cat > "$dir/getent" <<'FAKE_GETENT_COMMON'
+#!/usr/bin/env bash
+echo "203.0.113.77"
+exit 0
+FAKE_GETENT_COMMON
+    cat > "$dir/nslookup" <<'FAKE_NSLOOKUP_COMMON'
+#!/usr/bin/env bash
+echo "Server: 127.0.0.1"
+exit 0
+FAKE_NSLOOKUP_COMMON
+    chmod +x "$dir/getent" "$dir/nslookup"
     echo "$dir"
 }
 
@@ -113,7 +125,7 @@ test_begin "probe: 必需字段齐全"
 FAKE="$(new_fake_runner running)"
 FAKE_BIN_F="$(new_probe_bin)"
 OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$FAKE_BIN_F:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
-for KEY in ts service_state runner_pids github_online proxy_local_reachable direct_github_reachable proxy_github_reachable exit_ip_direct exit_ip_proxy; do
+for KEY in ts service_state runner_pids github_online proxy_local_reachable direct_github_reachable proxy_github_reachable exit_ip_direct exit_ip_proxy internet_reachable dns_resolvable; do
     if json_has_key "$OUT" "$KEY"; then
         pass "字段 $KEY 存在"
     else
@@ -227,6 +239,106 @@ FAKE_GH_OFF
 chmod +x "$FAKE_BIN_T2/gh"
 OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_STATE_FILE="$STATE_FILE" PATH="$FAKE_BIN_T2:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
 assert_eq "$(json_field "$OUT" transition)" "disconnect" "在线→断线应记为 disconnect"
+
+# --- 用例 9b（R2/T3 延伸）：ops.jsonl 近期维护操作 → op 字段反映（区分人工维护 vs 意外中断）---
+test_begin "probe: ops.jsonl 近期维护操作 → op 字段反映"
+# 匹配场景：stopped 服务（prev running）+ 近期 manual-stop → transition=service-stopped + op=manual-stop
+FAKE="$(new_fake_runner stopped)"
+FAKE_BIN_OPS="$(new_probe_bin)"
+OPS_FILE="$(mktemp "${TMPDIR:-/tmp}/probe-ops.XXXXXX")"
+STATE_FILE_B="$(mktemp "${TMPDIR:-/tmp}/probe-state-b.XXXXXX")"
+echo '{"service_state":"running","github_online":"online"}' > "$STATE_FILE_B"
+# 写一条 1 分钟前的 manual-stop 记录（时间窗口内）
+RECENT_TS="$(date -u -v-1M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '1 minute ago' +"%Y-%m-%dT%H:%M:%SZ")"
+printf '{"ts": "%s", "op": "manual-stop"}\n' "$RECENT_TS" > "$OPS_FILE"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE" PROBE_STATE_FILE="$STATE_FILE_B" PATH="$FAKE_BIN_OPS:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" op)" "manual-stop" "近期维护操作应反映在 op 字段"
+
+# 反例 1：2 小时前的记录超出时间窗口 → op 为空（不误报维护操作）
+OLD_TS="$(date -u -v-2H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '2 hours ago' +"%Y-%m-%dT%H:%M:%SZ")"
+printf '{"ts": "%s", "op": "manual-stop"}\n' "$OLD_TS" > "$OPS_FILE"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE" PROBE_STATE_FILE="$STATE_FILE_B" PATH="$FAKE_BIN_OPS:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" op)" "" "超窗维护操作不应误报"
+
+# 反例 2：时间窗口内 manual-start 是独立维护事件（transition=steady 也记录）
+printf '{"ts": "%s", "op": "manual-start"}\n' "$RECENT_TS" > "$OPS_FILE"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE" PROBE_STATE_FILE="$STATE_FILE_B" PATH="$FAKE_BIN_OPS:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" op)" "manual-start" "manual-start 是独立维护事件（steady 也记录）"
+
+# --- 用例 9c（P1 反例）：ops 标记须与 transition 匹配——manual-start 后发生
+# disconnect（意外断线）不得误标为维护操作 ---
+test_begin "probe: op 与 transition 不匹配时不误标（意外断线 ≠ 维护）"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_OPM="$(new_probe_bin)"
+cat > "$FAKE_BIN_OPM/gh" <<'FAKE_GH_OFF2'
+#!/usr/bin/env bash
+if [[ "$*" == *"--jq"* ]]; then
+    printf 'offline\tfalse\n'
+fi
+exit 0
+FAKE_GH_OFF2
+chmod +x "$FAKE_BIN_OPM/gh"
+OPS_FILE_M="$(mktemp "${TMPDIR:-/tmp}/probe-ops-m.XXXXXX")"
+RECENT_TS_M="$(date -u -v-1M +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -d '1 minute ago' +"%Y-%m-%dT%H:%M:%SZ")"
+printf '{"ts": "%s", "op": "manual-start"}\n' "$RECENT_TS_M" > "$OPS_FILE_M"
+STATE_FILE_M="$(mktemp "${TMPDIR:-/tmp}/probe-state-m.XXXXXX")"
+echo '{"service_state":"running","github_online":"online"}' > "$STATE_FILE_M"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PROBE_OPS_FILE="$OPS_FILE_M" PROBE_STATE_FILE="$STATE_FILE_M" PATH="$FAKE_BIN_OPM:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" transition)" "disconnect" "断线应记为 disconnect"
+assert_eq "$(json_field "$OUT" op)" "" "manual-start 与 disconnect 不匹配，op 应为空（不误标维护）"
+
+# 匹配场景：manual-stop + service-stopped 才关联
+# 用 stopped 服务 + 无 gh 的 fake bin（github_online=unknown，避免 disconnect 优先判定）
+FAKE_STOP="$(new_fake_runner stopped)"
+FAKE_BIN_NOGH="$(new_probe_bin)"
+OPS_FILE_S="$(mktemp "${TMPDIR:-/tmp}/probe-ops-s.XXXXXX")"
+printf '{"ts": "%s", "op": "manual-stop"}\n' "$RECENT_TS_M" > "$OPS_FILE_S"
+STATE_FILE_S="$(mktemp "${TMPDIR:-/tmp}/probe-state-s.XXXXXX")"
+echo '{"service_state":"running","github_online":"online"}' > "$STATE_FILE_S"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE_STOP" PROBE_OPS_FILE="$OPS_FILE_S" PROBE_STATE_FILE="$STATE_FILE_S" PATH="$FAKE_BIN_NOGH:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+assert_eq "$(json_field "$OUT" transition)" "service-stopped" "服务停止应记为 service-stopped"
+assert_eq "$(json_field "$OUT" op)" "manual-stop" "manual-stop 与 service-stopped 匹配应关联"
+
+# --- 用例 9d（P2 四类归因）：GitHub 不可达时，独立联网探针区分本机网络 vs 上游故障 ---
+test_begin "probe: GitHub 不可达时独立联网探针仍能区分网络状态"
+FAKE="$(new_fake_runner running)"
+FAKE_BIN_NET="$(mktemp -d "${TMPDIR:-/tmp}/probe-net.XXXXXX")"
+# fake curl：对 GitHub 返回 000（不可达），对 ipify（独立端点）返回 200 + IP
+cat > "$FAKE_BIN_NET/curl" <<'FAKE_CURL_NET'
+#!/usr/bin/env bash
+if [[ "$*" == *"api.github.com"* ]]; then
+    printf '%s' "000"; echo
+    exit 0
+fi
+if [[ "$*" == *"ipify.org"* ]]; then
+    # 探针用 -w %{http_code} 检查状态码，输出 200；IP 内容由 exit_ip 单独探测
+    printf '%s' "200"; echo
+    exit 0
+fi
+printf '%s' "200"; echo
+exit 0
+FAKE_CURL_NET
+chmod +x "$FAKE_BIN_NET/curl"
+# fake DNS：getent/nslookup 返回成功（DNS 可解析）
+cat > "$FAKE_BIN_NET/getent" <<'FAKE_GETENT'
+#!/usr/bin/env bash
+echo "203.0.113.77"
+exit 0
+FAKE_GETENT
+cat > "$FAKE_BIN_NET/nslookup" <<'FAKE_NSLOOKUP'
+#!/usr/bin/env bash
+echo "Server: 127.0.0.1"
+exit 0
+FAKE_NSLOOKUP
+chmod +x "$FAKE_BIN_NET/getent" "$FAKE_BIN_NET/nslookup"
+OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$FAKE_BIN_NET:/usr/bin:/bin" bash "$PROBE_SCRIPT" 2>&1)"
+# GitHub 两条路径失败（000），但独立联网探针成功 → 可判定「本机网络正常，GitHub 上游问题」
+assert_eq "$(json_field "$OUT" direct_github_reachable)" "False" "GitHub 直连不可达"
+if json_has_key "$OUT" internet_reachable; then
+    assert_eq "$(json_field "$OUT" internet_reachable)" "True" "独立联网探针应可达（区分本机网络正常）"
+else
+    fail "缺少 internet_reachable 字段（四类归因需要独立联网探针）"
+fi
 
 # --- 用例 10（S2）：超时后无残留子进程 ---
 test_begin "probe: gh 挂起超时后无残留子进程"
