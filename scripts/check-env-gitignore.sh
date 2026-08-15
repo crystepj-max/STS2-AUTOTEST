@@ -170,31 +170,37 @@ if [[ -n "$neg_rules" ]]; then
     FAILED=1
 fi
 
-# 0b. 语义探针核验：每条否定规则推导探针路径并验证仍被忽略——宽泛通配
-#     （!secrets/*、!secrets/?env 等）不含字面 .env，按 gitignore 匹配语义处理
+# 0b. 语义探针核验：按否定规则所在目录探测 .env 候选路径（git 自身语义匹配）——
+#     宽泛通配（!secrets/*、!secrets/?env、!secrets/.e?? 等）不含字面 .env，
+#     用候选探针 + git check-ignore 判定是否仍被忽略
 neg_violations=""
 while IFS= read -r -d '' gi2; do
     while IFS= read -r pat; do
         [[ "$pat" == "!.env.example" ]] && continue
-        probe="${pat#!}"
-        probe="${probe%/}"
-        if [[ "$probe" == *'*'* || "$probe" == *'?'* || "$probe" == *'['* ]]; then
-            probe="$(printf '%s' "$probe" | sed -E 's/\[([^]]*)\]/\1/g; s/\*+/\.env/g; s/\?/\./g')"
-        fi
-        if [[ "$probe" != *".env"* ]]; then
-            probe="${probe}/.env"
-        fi
-        # 探针相对 .gitignore 所在目录（子目录规则影响其目录下的 .env）
-        gi_dir="$(dirname "$gi2")"
-        if [[ "$gi_dir" == "." ]]; then
-            probe_path="$probe"
+        base="${pat#!}"
+        if [[ "$base" == */* ]]; then
+            pdir="${base%/*}"
+            # 目录部分含通配时探针无法构造，跳过（文字扫描兜底字面形态）
+            if [[ "$pdir" == *'*'* || "$pdir" == *'?'* || "$pdir" == *'['* ]]; then
+                continue
+            fi
         else
-            probe_path="${gi_dir}/${probe}"
+            pdir="."
         fi
-        run_timeout git check-ignore -q "$probe_path"
-        if [[ $? -ne 0 ]]; then
-            neg_violations="${neg_violations}${gi2}: ${pat}（探针 ${probe_path} 未被忽略） "
-        fi
+        gi_dir="$(dirname "$gi2")"
+        for cand in .env .env.prod; do
+            if [[ "$gi_dir" == "." ]]; then
+                probe_path="${pdir}/${cand}"
+            else
+                probe_path="${gi_dir}/${pdir}/${cand}"
+            fi
+            probe_path="${probe_path#./}"
+            run_timeout git check-ignore -q "$probe_path"
+            if [[ $? -ne 0 ]]; then
+                neg_violations="${neg_violations}${gi2}: ${pat}（探针 ${probe_path} 未被忽略） "
+                break
+            fi
+        done
     done < <(grep -E '^!' "$REPO_ROOT/$gi2" || true)
 done < <(run_timeout git ls-files -z | grep -z '\.gitignore$' || true)
 if [[ -n "$neg_violations" ]]; then
