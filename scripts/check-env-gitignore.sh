@@ -180,9 +180,10 @@ while IFS= read -r -d '' gi2; do
         base="${pat#!}"
         if [[ "$base" == */* ]]; then
             pdir="${base%/*}"
-            # 目录部分含通配时探针无法构造，跳过（文字扫描兜底字面形态）
+            # 目录部分通配实例化为具体目录名（!secret*/?env → 探针 secretx/.env），
+            # git 自身语义会按模式匹配该路径
             if [[ "$pdir" == *'*'* || "$pdir" == *'?'* || "$pdir" == *'['* ]]; then
-                continue
+                pdir="$(printf '%s' "$pdir" | sed -E 's/\[([^]]*)\]/\1/g; s/[*?]+/x/g')"
             fi
         else
             pdir="."
@@ -210,7 +211,13 @@ fi
 
 # 0b. 语义核验：未跟踪文件列表不得出现环境文件（否定规则重新暴露会使其出现在
 #     git status 中，即使文件尚未提交）；-z NUL 分隔解析（空格路径不拆、不引号化）
-untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
+status_out="$(run_timeout git status --porcelain -z --untracked-files=all)"
+status_rc=$?
+if [[ $status_rc -ne 0 ]]; then
+    echo "FAIL: git status 失败（退出码 ${status_rc}），无法核验未跟踪环境文件"
+    FAILED=1
+else
+    untracked_env="$(printf '%s' "$status_out" | "$GATE_PYTHON" -c '
 import sys
 out = []
 for entry in sys.stdin.buffer.read().split(b"\0"):
@@ -221,9 +228,10 @@ for entry in sys.stdin.buffer.read().split(b"\0"):
             out.append(path)
 print("\n".join(out))
 ' | grep -v '^\.env\.example$' || true)"
-if [[ -n "$untracked_env" ]]; then
-    echo "FAIL: 存在未被忽略的环境文件：$(echo "$untracked_env" | tr '\n' ' ')"
-    FAILED=1
+    if [[ -n "$untracked_env" ]]; then
+        echo "FAIL: 存在未被忽略的环境文件：$(echo "$untracked_env" | tr '\n' ' ')"
+        FAILED=1
+    fi
 fi
 
 # 1. .env 必须被忽略（git check-ignore 退出码：0=命中忽略，1=未命中；
