@@ -1,7 +1,7 @@
 {
   "task_id": "issue-23-main-merge-protection",
   "updated_at": "2026-08-14",
-  "phase": "T6-T8 复审修复后终版（T0-T5 已完成；S4 REQUEST_CHANGES 四项已全部闭环）",
+  "phase": "S4 复审修复完成（T6-T8 + .env 门禁 + 紧急绕过补验 + 脚本自身限时；待复审）",
   "repo_visibility": "PUBLIC",
   "branch_protection": {
     "required_status_checks": [
@@ -23,9 +23,9 @@
   },
   "env_guard": {
     "gitignore": [
-      "/env",
-      "/env.*",
-      "!/env.example"
+      ".env",
+      ".env.*",
+      "!.env.example"
     ],
     "check_script": "scripts/check-env-gitignore.sh",
     "tracked_env_files": [
@@ -35,7 +35,35 @@
   "emergency_bypass": {
     "mechanism": "临时改规则→操作→立即恢复→回读→审计（T7 演练实证，非静态授权）",
     "drill_evidence": "t7-emergency-bypass-drill.md",
-    "drill_merge_commit": "750ba9768159c3e310bf906abf84a1207f292cbe"
+    "drill_merge_commit": "750ba9768159c3e310bf906abf84a1207f292cbe",
+    "recovery_policy": "单次紧急操作完成后立即恢复（无 24 小时宽限）；24 小时仅适用于事后补验",
+    "ledger": [
+      {
+        "date": "2026-08-14",
+        "authorizer": "crystepj-max",
+        "reason_url": "https://github.com/crystepj-max/STS2-AUTOTEST/issues/23",
+        "authorization_comment_id": 5289650944,
+        "authorization_record_file": "t7-emergency-bypass-drill.md",
+        "authorization_note": "S4 复审授权的紧急绕过演练（issue #23「紧急绕过」条款，预存评论 5289650944 于 04:56:31Z 记录；不可变授权记录文件 t7-emergency-bypass-drill.md 绑定 PR #31/750ba976）",
+        "bypassed_pr": 31,
+        "bypassed_sha": "750ba9768159c3e310bf906abf84a1207f292cbe",
+        "completed_at": "2026-08-14T05:50:11Z",
+        "restored": true,
+        "restoration_evidence": [
+          "t7-ruleset-after.json",
+          "t7-branch-protection-after.json"
+        ],
+        "post_verification": {
+          "within_hours": 24,
+          "run_id": 31774866515,
+          "head_sha": "64ed09fcd1f0174ca211da7170ce61da2a1b6b50",
+          "conclusion": "success",
+          "completed_at": "2026-08-14T07:47:43Z",
+          "covers_bypassed_merge": true,
+          "evidence_file": "t7-post-verification.md"
+        }
+      }
+    ]
   },
   "verification": {
     "t3a_direct_push_rejected": true,
@@ -46,8 +74,11 @@
     "t4_merge_commit": "a0673525aa32fe3845efdbea47c3b023dd442856",
     "t6_thread_resolution_restored": true,
     "t7_emergency_bypass_drill": true,
+    "t7_post_verification_run": 31774866515,
     "t8_missing_check_probe_pr": 31,
-    "t8_missing_check_merge_blocked": true
+    "t8_missing_check_merge_blocked": true,
+    "gate_script_self_timeout": true,
+    "gate_script_timeout_negative_test": "tests/unit/test_check_env_gitignore.py::test_script_self_limits_when_git_stuck"
   },
   "acceptance": {
     "failed_check_blocks_merge": true,

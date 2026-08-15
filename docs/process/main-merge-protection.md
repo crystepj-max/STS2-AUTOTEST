@@ -52,7 +52,7 @@
 | 自动检查 | `bash scripts/check-env-gitignore.sh`（退出码门禁）：① `.env` 必须被忽略；② `.env` 不得被跟踪；③ 已跟踪环境文件只允许 `.env.example` |
 | 使用约定 | 密钥与本地配置只放 `.env`；模板与文档用 `.env.example`；仓库不得出现真实凭据 |
 
-- 证据：`.gitignore`、[`scripts/check-env-gitignore.sh`](../../../scripts/check-env-gitignore.sh)、复审终版 `t5-final-evidence.json` 的 `env_guard` 字段
+- 证据：`.gitignore`、[`scripts/check-env-gitignore.sh`](../../scripts/check-env-gitignore.sh)、复审终版 `t5-final-evidence.json` 的 `env_guard` 字段
 
 ## 常规合并流程
 
@@ -80,18 +80,35 @@
    - branch protection：`enforce_admins: false`（分支保护无「绕过者」概念，须临时解除管理员豁免；
      演练实证：仅授予 ruleset 绕过时 `gh pr merge --admin` 仍被 405 拒绝）。
 3. **操作**：紧急合并目标 PR（`gh pr merge <n> --merge --admin`）。
-4. **立即恢复（最迟 24 小时内，演练为分钟级）**：恢复 ruleset `bypass_actors=[]`；
-   恢复 branch protection `enforce_admins: true`。
+4. **立即恢复（无宽限）**：单次紧急操作完成后**马上**恢复——ruleset `bypass_actors=[]`；
+   branch protection `enforce_admins: true`（演练实测分钟级）。保护被削弱的窗口只存在于
+   「改规则」到「恢复」之间，**不存在 24 小时宽限**——24 小时仅适用于第 6 步的事后补验。
 5. **事后回读**：确认 `current_user_can_bypass: never`、`bypass_actors: []`、
    `enforce_admins: true`，无残留。
-6. **审计与补验**：在「绕过记录」追加一行；被绕过 PR 的变更在 **24 小时内**补齐等价验收证据
-   （等价的 `PR Check Summary` 成功 run 或等价全量检查记录）。
+6. **审计与补验**：在「绕过记录」追加一行（授权/原因链接、被绕过 SHA、操作完成时间、
+   恢复、补验证据）；被绕过 PR 的变更在**操作完成后 24 小时内**补齐等价验收证据
+   （等价的 `PR Check Summary` 成功 run 或等价全量检查记录），补验 run 的 head 须包含
+   被绕过合并的内容（祖先关系，可用 `git merge-base --is-ancestor` 核验）。
+   注意：恢复证据 ≠ 补验证据——「规则已恢复」只证明保护复原，不能替代成功 run。
 
 ### 绕过记录
 
-| 日期 | 授权人 | 原因 | 补验证据 |
-|---|---|---|---|
-| 2026-08-14 | crystepj-max | 紧急绕过流程演练（S4 复审要求）：临时授予绕过 → 合并被阻断的探针 PR #31 → 立即恢复 | [`t7-emergency-bypass-drill.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t7-emergency-bypass-drill.md)（合并 `750ba976`；恢复后回读无残留） |
+| 日期 | 授权人 | 授权/原因链接 | 被绕过 PR | 被绕过 SHA | 操作完成时间 | 恢复 | 补验证据（24h 内成功 run） |
+|---|---|---|---|---|---|---|---|
+| 2026-08-14 | crystepj-max | [issue #23「紧急绕过」条款](https://github.com/crystepj-max/STS2-AUTOTEST/issues/23) + S4 复审授权（演练要求） | [#31](https://github.com/crystepj-max/STS2-AUTOTEST/pull/31) | `750ba9768159c3e310bf906abf84a1207f292cbe` | 2026-08-14T05:50:11Z | 立即（演练分钟级；[回读无残留](../../.agent-runs/issue-23-main-merge-protection/evidence/t7-emergency-bypass-drill.md)） | [run 31774866515](https://github.com/crystepj-max/STS2-AUTOTEST/actions/runs/31774866515)（success，head `64ed09fc`，07:47:43Z 完成——合并后约 2 小时；详见 [`t7-post-verification.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t7-post-verification.md)） |
+
+## 证据对账门禁（S4 复审要求）
+
+交接/复审前运行 `bash scripts/check-issue23-evidence.sh`（依赖 gh CLI），自动核验：
+
+1. `.gitignore` env 条目 ↔ `t5-final-evidence.json` 的 `env_guard.gitignore`；
+2. PR head ↔ 该 head 的 `PR Check Summary` 结论（必须 success）；
+3. Issue #23 正文 ↔ 实时规则（T8 缺失样例引用、`required_review_thread_resolution=true` 标记、ruleset 回读无绕过者）；
+4. 治理文档 Markdown 相对链接可解析；
+5. 绕过台账逐条核验：授权/原因链接、被绕过 SHA 可解析（远端 compare API）、恢复终态与证据文件、
+   补验 run success 且 head 一致、24 小时内完成、补验 head 祖先链包含被绕过合并（compare API，与本地克隆深度无关）。
+
+任一不满足 → 退出码 1。任一输出为 FAIL 的交接/复审结论不成立。
 
 ## 验证证据（双向）
 
