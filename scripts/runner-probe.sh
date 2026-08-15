@@ -48,12 +48,26 @@ cleanup_tmp() {
 trap cleanup_tmp EXIT
 
 # 递归终止进程树（含子进程，防止超时后残留孤儿）
-kill_tree() {
-    local pid="$1" sig="${2:-TERM}" child
+# 收集进程树全部 PID（含后代；父进程退出前保存完整集合，供后续统一 TERM/KILL）
+collect_tree() {
+    local pid="$1"
+    local child
+    echo "$pid"
     for child in $(pgrep -P "$pid" 2>/dev/null || true); do
-        kill_tree "$child" "$sig"
+        collect_tree "$child"
     done
-    kill "-$sig" "$pid" 2>/dev/null || true
+}
+
+kill_tree() {
+    local pid="$1" sig="${2:-TERM}"
+    local pids
+    # 父进程退出前保存完整 PID 集合：子进程被 reparent 后 pgrep -P 找不到，
+    # 必须在首次遍历时全部收集（第二次升级 SIGKILL 时仍能命中）。
+    pids="$(collect_tree "$pid")"
+    local p
+    for p in $pids; do
+        kill "-$sig" "$p" 2>/dev/null || true
+    done
 }
 
 # 带超时执行命令：成功时输出其 stdout；超时/失败返回非 0
@@ -150,45 +164,50 @@ json.dump({"service_state": state, "github_online": online}, open(path, "w"))
 PY
 mv -f "$state_tmp" "$PROBE_STATE_FILE" 2>/dev/null || true
 
-# --- 维护操作识别（R2/T3）：runner-ctl stop/start 写入 ops.jsonl，
-# 最近 PROBE_OP_WINDOW 秒内的操作标记到 op 字段（区分人工维护 vs 意外中断）。
-# 显式 PROBE_OP 优先；否则读 ops 文件最新记录并在时间窗口内时采用。 ---
+# --- 维护操作识别（R2/T3）：runner-ctl stop/start 写入 ops.jsonl。
+# 游标模式：读取自上次采样以来新增的全部操作（cursor 记录已消费行数），
+# 间隔内多次操作（如 stop→start）都识别，不依赖单条与 transition 匹配。
+# 显式 PROBE_OP 优先；否则用游标消费新操作。
 if [[ -z "$PROBE_OP" && -f "$PROBE_OPS_FILE" ]]; then
+    # 游标文件（与 ops 同目录）：记录已消费行数
+    OPS_CURSOR="${PROBE_OPS_FILE}.cursor"
+    cursor="$(cat "$OPS_CURSOR" 2>/dev/null || echo 0)"
     # tail 读取带硬超时（ops 文件系统 I/O 卡顿时探针仍按时输出 JSON）
-    OP_JSON="$(run_with_timeout "$GH_TIMEOUT" tail -1 "$PROBE_OPS_FILE" 2>/dev/null || true)"
-    if [[ -n "$OP_JSON" ]]; then
-        OP_TS="$(printf '%s' "$OP_JSON" | python3 -c 'import json,sys
-try:
-    d=json.loads(sys.stdin.read()); print(d.get("ts",""))
-except Exception:
-    print("")' 2>/dev/null || true)"
-        OP_NAME="$(printf '%s' "$OP_JSON" | python3 -c 'import json,sys
-try:
-    d=json.loads(sys.stdin.read()); print(d.get("op",""))
-except Exception:
-    print("")' 2>/dev/null || true)"
-        if [[ -n "$OP_TS" && -n "$OP_NAME" ]]; then
-            # 用 python3 统一解析（macOS date -j -f 不认 Z 后缀会把 UTC 当本地时间，
-            # 导致窗口判断错 8 小时）；datetime.fromisoformat 处理 Z 为 UTC。
-            NOW_EPOCH="$(date +%s)"
-            OP_EPOCH="$(python3 -c "import sys,datetime
-try:
-    t=datetime.datetime.fromisoformat(sys.argv[1].replace('Z','+00:00'))
-    print(int(t.timestamp()))
-except Exception:
-    print('')" "$OP_TS" 2>/dev/null || echo '')"
-            if [[ -n "$OP_EPOCH" ]] && [[ "$(( NOW_EPOCH - OP_EPOCH ))" -ge 0 ]] && [[ "$(( NOW_EPOCH - OP_EPOCH ))" -le "$PROBE_OP_WINDOW" ]]; then
-                # P1：op 必须与当前 transition 匹配才关联——manual-stop 只关联
-                # service-stopped，manual-start 只关联 service-started；
-                # 否则启动后窗口内的意外断线（disconnect）会被误标为维护操作。
+    OPS_TAIL="$(run_with_timeout "$GH_TIMEOUT" tail -n +"$((cursor + 1))" "$PROBE_OPS_FILE" 2>/dev/null || true)"
+    if [[ -n "$OPS_TAIL" ]]; then
+        # 解析新增操作（时间窗口内 + 与 transition 匹配的才填入 op）
+        NEW_OPS="$(printf '%s' "$OPS_TAIL" | python3 -c 'import json,sys,datetime
+lines=[l for l in sys.stdin.read().splitlines() if l.strip()]
+ops=[]
+for l in lines:
+    try:
+        d=json.loads(l)
+        ts=d.get("ts",""); op=d.get("op","")
+        if ts and op:
+            t=datetime.datetime.fromisoformat(ts.replace("Z","+00:00"))
+            ops.append((int(t.timestamp()), op))
+    except Exception:
+        pass
+for ts,op in ops:
+    print(f"{ts} {op}")' 2>/dev/null || true)"
+        # 时间窗口内且与当前 transition 匹配的操作
+        NOW_EPOCH="$(date +%s)"
+        while IFS= read -r op_line; do
+            [[ -z "$op_line" ]] && continue
+            OP_TS_EPOCH="${op_line%% *}"
+            OP_NAME="${op_line##* }"
+            if [[ "$(( NOW_EPOCH - OP_TS_EPOCH ))" -ge 0 ]] && [[ "$(( NOW_EPOCH - OP_TS_EPOCH ))" -le "$PROBE_OP_WINDOW" ]]; then
                 case "$OP_NAME:$transition" in
                     manual-stop:service-stopped|manual-start:service-started)
                         PROBE_OP="$OP_NAME"
                         ;;
                 esac
             fi
-        fi
+        done <<< "$NEW_OPS"
     fi
+    # 更新游标（记录当前行数）
+    OPS_LINES="$(run_with_timeout "$GH_TIMEOUT" wc -l < "$PROBE_OPS_FILE" 2>/dev/null | tr -d ' ' || echo 0)"
+    printf '%s\n' "${OPS_LINES:-0}" > "$OPS_CURSOR" 2>/dev/null || true
 fi
 
 # --- 代理本地端口可达（/dev/tcp，非阻塞即时失败）---

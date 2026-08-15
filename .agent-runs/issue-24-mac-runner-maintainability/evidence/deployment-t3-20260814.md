@@ -23,16 +23,18 @@
 - launchctl list：`com.sts2.autotest.runner-probe` 已加载
 - 字段含四类归因所需：service/进程/GitHub 侧/busy/transition/op/direct/proxy/出口 IP
 
-## 采集周期（2026-08-15 修正：从最终四类探针部署后重新计时）
+## 采集周期（2026-08-15 修正：以实际完整字段首采时间重新计时）
 
 - 首采：2026-08-14 11:54 UTC（launchd 部署）。
 - 修正 1：维护操作归因链路（runner-ctl 写 ops.jsonl + 探针消费）在
   2026-08-14 14:11 UTC 演练后完整生效。
-- **修正 2（bot 审查 3787 系列）**：独立联网探针（`internet_reachable`/
-  `dns_resolvable`，区分本机网络 vs GitHub 上游）于 2026-08-14 21:05 UTC
-  合并进 main 后生效；此前采样无该字段，不构成完整四类可归因数据。
-- **七天采集期最终计时：自 2026-08-14 21:05 UTC（完整四类探针部署）起，
-  2026-08-21 21:05 UTC 满 7 天**。
+- **修正 2（bot 审查）**：独立联网探针（`internet_reachable`/
+  `dns_resolvable`，区分本机网络 vs GitHub 上游）随本任务合并进 main 生效。
+- **实际验证**：`~/.sts2-runner-probe/probe-20260815.jsonl` 首条含完整四类
+  字段（internet_reachable/dns_resolvable）的采样为 **2026-08-14 16:36:36 UTC**
+  （探针脚本更新后首次执行）。此前采样无该字段，不构成完整四类可归因数据。
+- **七天采集期最终计时：自 2026-08-14 16:36 UTC（可验证的完整字段首采）起，
+  2026-08-21 16:36 UTC 满 7 天**。
 - 每 10 分钟 144 条/天 ≈ 1008 条/7 天。
 
 ## 维护操作归因链路（2026-08-14 补充）
