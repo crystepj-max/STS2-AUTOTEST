@@ -60,7 +60,7 @@
 - 本任务无代码构建：QUALITY_GATES Gate4（Build）适配为「保护配置回读 + PR Check Summary + 本地全量验证」；
   Gate2（API 来源）/Gate3（Localization）/Gate6（Smoke）不适用（无游戏 API/对象变更）。
 - PR #32 附带非忽略文件（.gitignore / 脚本 / JSON 证据）触发 `PR Check Summary`，已通过并合并。
-- PR #33 附带脚本与测试（非忽略）触发 CI，PR Check Summary 已通过（run 31845000064，head 1bd5e50）。
+- PR #33 附带脚本与测试（非忽略）触发 CI，PR Check Summary 已通过（run 31855151465，head 208da99）。
 - 交接前必跑对账门禁：`bash scripts/check-issue23-evidence.sh`（全部 PASS，exit 0）。
 - 已知风险见 developer-handoff「已知风险」节（转公开不可逆、双保护层漂移、线程规则恢复、
   md-only 无法合并、issue-13 未合并、对账门禁依赖 gh/psutil）。
