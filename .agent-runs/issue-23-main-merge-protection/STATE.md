@@ -2,8 +2,8 @@
 
 - 更新时间：2026-08-15（S4 复审第二轮修复完成：紧急绕过补验闭环 + 门禁脚本自备限时 +
   证据统一 + 自动对账门禁，PR #33 待复审）
-- 阶段：复审修复完成，PR #33（chore/issue-23-review-fixes，head `208da99`，
-  PR Check Summary run 31855151465 success，bot 审查线程全部解决）待 Review 节点复审
+- 阶段：复审修复完成，PR #33（chore/issue-23-review-fixes，head `0199d96`，
+  PR Check Summary run 31856341611 success，bot 审查线程全部解决）待 Review 节点复审
 - 状态机位置：`DEV_REVIEW` → `DEV_ASSIGNED`（S4 REQUEST_CHANGES 回退）→ 修复完成
   （PR #32 合入 + macOS 兼容性修复）→ S4 复审第二轮修复完成 → 待复审
 
