@@ -170,6 +170,38 @@ if [[ -n "$neg_rules" ]]; then
     FAILED=1
 fi
 
+# 0b. 语义探针核验：每条否定规则推导探针路径并验证仍被忽略——宽泛通配
+#     （!secrets/*、!secrets/?env 等）不含字面 .env，按 gitignore 匹配语义处理
+neg_violations=""
+while IFS= read -r -d '' gi2; do
+    while IFS= read -r pat; do
+        [[ "$pat" == "!.env.example" ]] && continue
+        probe="${pat#!}"
+        probe="${probe%/}"
+        if [[ "$probe" == *'*'* || "$probe" == *'?'* || "$probe" == *'['* ]]; then
+            probe="$(printf '%s' "$probe" | sed -E 's/\[([^]]*)\]/\1/g; s/\*+/\.env/g; s/\?/\./g')"
+        fi
+        if [[ "$probe" != *".env"* ]]; then
+            probe="${probe}/.env"
+        fi
+        # 探针相对 .gitignore 所在目录（子目录规则影响其目录下的 .env）
+        gi_dir="$(dirname "$gi2")"
+        if [[ "$gi_dir" == "." ]]; then
+            probe_path="$probe"
+        else
+            probe_path="${gi_dir}/${probe}"
+        fi
+        run_timeout git check-ignore -q "$probe_path"
+        if [[ $? -ne 0 ]]; then
+            neg_violations="${neg_violations}${gi2}: ${pat}（探针 ${probe_path} 未被忽略） "
+        fi
+    done < <(grep -E '^!' "$REPO_ROOT/$gi2" || true)
+done < <(run_timeout git ls-files -z | grep -z '\.gitignore$' || true)
+if [[ -n "$neg_violations" ]]; then
+    echo "FAIL: 否定规则会放行 .env（探针未忽略）：$neg_violations"
+    FAILED=1
+fi
+
 # 0b. 语义核验：未跟踪文件列表不得出现环境文件（否定规则重新暴露会使其出现在
 #     git status 中，即使文件尚未提交）；-z NUL 分隔解析（空格路径不拆、不引号化）
 untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '

@@ -209,11 +209,42 @@ else
         if [[ -n "$neg_rules" ]]; then
             fail "存在放行 .env 的否定规则（只允许 !.env.example）：$neg_rules"
         else
-            # 语义验证 ②：.env 必须实际被忽略（两侧协同追加 !.env 等声明比较发现不了）
+        # 语义核验 ②：每条否定规则推导探针路径并验证仍被忽略——宽泛通配
+        # （!secrets/*、!secrets/?env 等）不含字面 .env，须按 gitignore 匹配语义处理：
+        # 通配替换为 .env 形态路径后执行 git check-ignore，未忽略即失败
+        neg_violations=""
+        while IFS= read -r -d '' gi2; do
+            while IFS= read -r pat; do
+                [[ "$pat" == "!.env.example" ]] && continue
+                probe="${pat#!}"
+                probe="${probe%/}"
+                if [[ "$probe" == *'*'* || "$probe" == *'?'* || "$probe" == *'['* ]]; then
+                    probe="$(printf '%s' "$probe" | sed -E 's/\[([^]]*)\]/\1/g; s/\*+/\.env/g; s/\?/\./g')"
+                fi
+                if [[ "$probe" != *".env"* ]]; then
+                    probe="${probe}/.env"
+                fi
+                # 探针相对 .gitignore 所在目录（子目录规则影响其目录下的 .env）
+                gi_dir="$(dirname "$gi2")"
+                if [[ "$gi_dir" == "." ]]; then
+                    probe_path="$probe"
+                else
+                    probe_path="${gi_dir}/${probe}"
+                fi
+                run_timeout git check-ignore -q "$probe_path"
+                if [[ $? -ne 0 ]]; then
+                    neg_violations="${neg_violations}${gi2}: ${pat}（探针 ${probe_path} 未被忽略） "
+                fi
+            done < <(grep -E '^!' "$REPO_ROOT/$gi2" || true)
+        done < <(run_timeout git ls-files -z | grep -z '\.gitignore$' || true)
+        if [[ -n "$neg_violations" ]]; then
+            fail "否定规则会放行 .env（探针未忽略）：$neg_violations"
+        else
+            # 语义验证 ③：.env 必须实际被忽略（两侧协同追加 !.env 等声明比较发现不了）
             run_timeout git check-ignore -q .env
             rc=$?
             if [[ $rc -eq 0 ]]; then
-                # 语义验证 ③：未跟踪文件列表不得出现环境文件（重新暴露会出现在 status 中；
+                # 语义验证 ④：未跟踪文件列表不得出现环境文件（重新暴露会出现在 status 中；
                 # -z NUL 分隔解析，空格路径不拆、不引号化）
                 untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
 import sys
@@ -234,6 +265,7 @@ print("\n".join(out))
             else
                 fail ".env 未被实际忽略（git check-ignore 退出码 ${rc}）"
             fi
+        fi
         fi
     fi
 fi

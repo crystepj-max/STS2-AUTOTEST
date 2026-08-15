@@ -79,6 +79,9 @@ _bmad-output/
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+# 技能目录重忽略环境文件（否定规则会放行嵌套 .env，须按环境文件门禁重新忽略）
+.claude/skills/**/.env
+.claude/skills/**/.env.*
 
 # Codex local config
 .agents/
