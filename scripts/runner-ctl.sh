@@ -23,17 +23,37 @@ SVC_SCRIPT="$RUNNER_DIR/svc.sh"
 SVC_TIMEOUT="${SVC_TIMEOUT:-10}"
 
 # 带超时执行命令：svc.sh 可能挂起，逐项限时；killer 不持有调用方管道
+# 收集进程树完整 PID 集合（父进程退出前保存，供 TERM/KILL 升级用）
+collect_tree() {
+    local pid="$1" child
+    echo "$pid"
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        collect_tree "$child"
+    done
+}
+
+kill_tree() {
+    local pid="$1" sig="${2:-TERM}"
+    local pids p
+    # 首次遍历时保存完整 PID 集合：子进程被 reparent 后 pgrep -P 找不到，
+    # SIGKILL 升级时仍能命中（P2 硬超时）。
+    pids="$(collect_tree "$pid")"
+    for p in $pids; do
+        kill "-$sig" "$p" 2>/dev/null || true
+    done
+}
+
 run_with_timeout() {
     local timeout="$1"
     shift
     local pid rc killer
     "$@" &
     pid=$!
-    ( sleep "$timeout"; pkill -P "$pid" 2>/dev/null || true; kill "$pid" 2>/dev/null || true ) >/dev/null 2>&1 &
+    # 硬超时：SIGTERM 递归终止 → 宽限期 → SIGKILL 升级（拒绝 SIGTERM 的进程也被强制终止）
+    ( sleep "$timeout"; kill_tree "$pid" TERM; sleep 1; kill_tree "$pid" KILL ) >/dev/null 2>&1 &
     killer=$!
     if wait "$pid"; then rc=0; else rc=$?; fi
-    pkill -P "$killer" 2>/dev/null || true
-    kill "$killer" 2>/dev/null || true
+    kill_tree "$killer" KILL
     return "$rc"
 }
 

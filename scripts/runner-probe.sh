@@ -172,8 +172,13 @@ if [[ -z "$PROBE_OP" && -f "$PROBE_OPS_FILE" ]]; then
     # 游标文件（与 ops 同目录）：记录已消费行数
     OPS_CURSOR="${PROBE_OPS_FILE}.cursor"
     cursor="$(cat "$OPS_CURSOR" 2>/dev/null || echo 0)"
-    # tail 读取带硬超时（ops 文件系统 I/O 卡顿时探针仍按时输出 JSON）
-    OPS_TAIL="$(run_with_timeout "$GH_TIMEOUT" tail -n +"$((cursor + 1))" "$PROBE_OPS_FILE" 2>/dev/null || true)"
+    # 同快照读取：一次读入全部内容并按行数推进游标——避免 tail 读取与 wc -l
+    # 之间新操作写入导致游标跳过未读行（P2 游标一致性）。
+    # cat 带硬超时（ops 文件系统 I/O 卡顿时探针仍按时输出 JSON）
+    OPS_SNAPSHOT="$(run_with_timeout "$GH_TIMEOUT" cat "$PROBE_OPS_FILE" 2>/dev/null || true)"
+    OPS_LINES="$(printf '%s\n' "$OPS_SNAPSHOT" | wc -l | tr -d ' ')"
+    # 从快照提取自游标之后的新操作（行号 > cursor）
+    OPS_TAIL="$(printf '%s\n' "$OPS_SNAPSHOT" | tail -n +"$((cursor + 1))" 2>/dev/null || true)"
     if [[ -n "$OPS_TAIL" ]]; then
         # 解析新增操作（时间窗口内 + 与 transition 匹配的才填入 op）
         NEW_OPS="$(printf '%s' "$OPS_TAIL" | python3 -c 'import json,sys,datetime
@@ -205,8 +210,7 @@ for ts,op in ops:
             fi
         done <<< "$NEW_OPS"
     fi
-    # 更新游标（记录当前行数）
-    OPS_LINES="$(run_with_timeout "$GH_TIMEOUT" wc -l < "$PROBE_OPS_FILE" 2>/dev/null | tr -d ' ' || echo 0)"
+    # 更新游标（用同快照的行数——已消费位置与实际读取绑定，不跳过新写入）
     printf '%s\n' "${OPS_LINES:-0}" > "$OPS_CURSOR" 2>/dev/null || true
 fi
 
