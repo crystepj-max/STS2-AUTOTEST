@@ -858,7 +858,7 @@ class TestCombatWaitBackoff:
 
     def test_wait_backoff_uses_configured_poll_interval(self) -> None:
         """配置 poll_interval=1.0 → 等待基础间隔 1.0、封顶 2.0。"""
-        result, fake_time, adapter = self._run_combat_policy(
+        result, fake_time, _ = self._run_combat_policy(
             1.0,
             [
                 _combat_payload(False),  # 等待 → 1.0
