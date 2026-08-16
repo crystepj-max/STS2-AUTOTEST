@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
+
+from runner_utils import TIMEOUT_EXIT_CODE, run_timed, timeout_from_env
 
 IssueKey = tuple[str, str, str, str]
 _ERROR_RE = re.compile(
@@ -15,9 +17,14 @@ _ERROR_RE = re.compile(
     r"error: (?P<message>.*?)(?:  \[(?P<code>[^\]]+)\])?$"
 )
 
+MYPY_LOG_PATH = Path("mypy-check.log")
+MYPY_TIMEOUT_DEFAULT = 900.0  # 15 分钟；可用环境变量 MYPY_TIMEOUT_SECONDS 覆盖（受控验证用）
 
-def _run_mypy(root: Path) -> list[tuple[str, int, int, str, str]]:
-    result = subprocess.run(
+
+def _run_mypy(root: Path, timeout: float) -> list[tuple[str, int, int, str, str]] | None:
+    """运行 mypy 并解析错误行；超时返回 None（输出已保留到日志）。"""
+    result = run_timed(
+        "mypy check",
         [
             "mypy",
             "src/sts2_autotest",
@@ -25,19 +32,22 @@ def _run_mypy(root: Path) -> list[tuple[str, int, int, str, str]]:
             "--show-error-codes",
             "--no-error-summary",
         ],
+        MYPY_LOG_PATH,
+        timeout=timeout,
         cwd=root,
-        capture_output=True,
-        text=True,
     )
 
+    if result.timed_out:
+        print(f"Partial mypy output preserved in {MYPY_LOG_PATH}", file=sys.stderr)
+        return None
     if result.returncode not in (0, 1):
         raise RuntimeError(
             f"mypy failed to run in {root} with exit code {result.returncode}:\n"
-            f"{result.stdout}\n{result.stderr}"
+            f"{result.output}\n{result.error}"
         )
 
     findings: list[tuple[str, int, int, str, str]] = []
-    for line in result.stdout.splitlines():
+    for line in result.output.splitlines():
         match = _ERROR_RE.match(line)
         if not match:
             continue
@@ -105,8 +115,15 @@ def main() -> int:
     baseline_dir = args.baseline_dir.resolve()
     current_dir = args.current_dir.resolve()
 
-    baseline_counts, _ = _fingerprints(baseline_dir, _run_mypy(baseline_dir))
-    current_counts, current_locations = _fingerprints(current_dir, _run_mypy(current_dir))
+    timeout = timeout_from_env(MYPY_TIMEOUT_DEFAULT, "MYPY_TIMEOUT_SECONDS")
+    baseline_findings = _run_mypy(baseline_dir, timeout)
+    if baseline_findings is None:
+        return TIMEOUT_EXIT_CODE
+    current_findings = _run_mypy(current_dir, timeout)
+    if current_findings is None:
+        return TIMEOUT_EXIT_CODE
+    baseline_counts, _ = _fingerprints(baseline_dir, baseline_findings)
+    current_counts, current_locations = _fingerprints(current_dir, current_findings)
 
     new_findings = current_counts - baseline_counts
     resolved_findings = baseline_counts - current_counts

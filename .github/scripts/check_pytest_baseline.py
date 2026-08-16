@@ -14,14 +14,17 @@ when they are not failures of this outer unit-test run.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from runner_utils import TIMEOUT_EXIT_CODE, run_timed, timeout_from_env
+
 JUNIT_PATH = Path("junit-unit.xml")
+PYTEST_LOG_PATH = Path("pytest-check.log")
 PYTEST_OK = 0
 PYTEST_TESTS_FAILED = 1
+PYTEST_TIMEOUT_DEFAULT = 1800.0  # 30 分钟；可用环境变量 PYTEST_TIMEOUT_SECONDS 覆盖（受控验证用）
 
 
 def _load_baseline() -> set[str] | None:
@@ -75,8 +78,14 @@ def _load_final_failures() -> set[str]:
     return failures
 
 
-def _run_pytest() -> int:
-    process = subprocess.Popen(
+def _run_pytest() -> tuple[int, bool]:
+    """运行单元测试；返回 (退出码, 是否超时)。
+
+    超时时子进程（含进程组）已被 run_timed 终止，部分输出保留在
+    pytest-check.log；调用方不再进入 baseline 比较。
+    """
+    result = run_timed(
+        "pytest",
         [
             sys.executable,
             "-m",
@@ -85,17 +94,11 @@ def _run_pytest() -> int:
             "-v",
             f"--junitxml={JUNIT_PATH}",
         ],
-        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        PYTEST_LOG_PATH,
+        timeout=timeout_from_env(PYTEST_TIMEOUT_DEFAULT, "PYTEST_TIMEOUT_SECONDS"),
+        echo=True,
     )
-    try:
-        return process.wait()
-    except KeyboardInterrupt:
-        if sys.platform != "win32":
-            raise
-        exit_code = process.poll()
-        if exit_code is None:
-            raise
-        return exit_code
+    return result.returncode, result.timed_out
 
 
 def main() -> int:
@@ -104,7 +107,15 @@ def main() -> int:
         print(f"::error::No unit-test baseline for platform: {sys.platform}")
         return 2
 
-    exit_code = _run_pytest()
+    exit_code, timed_out = _run_pytest()
+
+    if timed_out:
+        print(
+            "::error::Unit tests timed out; partial JUnit may exist — "
+            f"see {PYTEST_LOG_PATH} for diagnostics",
+            file=sys.stderr,
+        )
+        return TIMEOUT_EXIT_CODE
 
     if exit_code not in (PYTEST_OK, PYTEST_TESTS_FAILED):
         print(f"::error::Pytest exited with collection/infrastructure error: {exit_code}")
