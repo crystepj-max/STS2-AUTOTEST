@@ -81,7 +81,7 @@ def crash_signature(error: Exception, exit_code: int | None = None) -> str:
     return f"{type_name}:{code}"
 
 
-def _failure_signature(failure: Exception) -> str:
+def failure_signature(failure: Exception) -> str:
     """当前失败的确定性签名：STS2Error 取 detail.exit_code，其余仅用异常类型。
 
     无 exit_code 时退化为 ``Type:none``，仍可匹配同类无码失败。
@@ -216,7 +216,7 @@ class DefaultRecoveryStrategy:
         # Crashes get progressive recovery levels
         if isinstance(failure, STS2Error) and failure.category == ErrorCategory.CRASH_ERROR:
             return self._decide_crash(
-                history, max_consecutive, _failure_signature(failure), same_signature_shortcut
+                history, max_consecutive, failure_signature(failure), same_signature_shortcut
             )
 
         # Timeouts → fast path (with consecutive escalation)

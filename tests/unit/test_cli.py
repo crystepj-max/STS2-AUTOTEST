@@ -584,6 +584,52 @@ class TestReportFromEvidence:
         )
         assert report_cmd(args) == 0
 
+    def test_report_store_synthesis_preserves_restart_count(self, tmp_path: Path) -> None:
+        """B1 契约：detach 合成路径保留真实 restart_count、无数据源不编造。
+
+        取消收尾把 cancel_result（顶层含 restart_count）持久化进 run.json；
+        合成 run-result.json 时必须一并拷贝，否则 detach 任务的报告仍缺重启卡。
+        """
+        store_run = tmp_path / ".runs" / "run-cancelled" / "run.json"
+        store_run.parent.mkdir(parents=True)
+        store_run.write_text(json.dumps({
+            "run_id": "run-cancelled",
+            "status": "CANCELLED",
+            "result": {"restart_count": 1, "recovered_screen": "MAIN_MENU"},
+        }))
+
+        args = _create_parser().parse_args(
+            ["report", "run-cancelled", "--evidence-dir", str(tmp_path)]
+        )
+        assert report_cmd(args) == 0
+        payload = json.loads(
+            (tmp_path / "run-cancelled" / "reports" / "run-result.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert payload["restart_count"] == 1
+
+        # 反向：任务记录里没有真实计数 → 合成报告不得编造 0
+        store_run.write_text(json.dumps({
+            "run_id": "run-cancelled-2",
+            "status": "CANCELLED",
+            "result": {"recovered_screen": "MAIN_MENU"},
+        }))
+        (tmp_path / "run-cancelled-2" / "reports").mkdir(parents=True)
+        (tmp_path / "run-cancelled-2" / "reports" / "run-result.json").write_text(
+            json.dumps({"run_id": "run-cancelled-2", "status": "CANCELLED"})
+        )
+        # 用 _report_from_store 直接验证合成逻辑
+        from sts2_autotest.cli.main import _report_from_store
+
+        assert _report_from_store(tmp_path, "run-cancelled-2", store_run) == 0
+        payload2 = json.loads(
+            (tmp_path / "run-cancelled-2" / "reports" / "run-result.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert "restart_count" not in payload2
+
 
 class TestCLIEntryPoint:
     """Main CLI function."""

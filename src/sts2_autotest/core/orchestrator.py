@@ -25,6 +25,7 @@ from sts2_autotest.core.recovery import (
     RecoveryAction,
     RecoveryStrategy,
     crash_signature,
+    failure_signature,
     is_p0_exception,
 )
 from sts2_autotest.core.state_engine import StateEngine, StateTransitionError
@@ -767,6 +768,7 @@ class TestOrchestrator:
             message=exc.message,
             timestamp=exc.timestamp.isoformat(),
             exit_code=exc.detail.get("exit_code") if exc.detail else None,
+            signature=failure_signature(exc),
         )
 
         # P0 session-level fatal — always crash, never downgrade
