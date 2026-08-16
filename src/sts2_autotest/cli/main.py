@@ -2142,6 +2142,56 @@ def _run_environment_precheck(adapter: GameAdapterProtocol) -> str | None:
     return reason_str or "ENVIRONMENT_NOT_READY"
 
 
+def _build_cancel_result(
+    *,
+    duration_ms: int,
+    trajectory: list[Any],
+    pre_cancel_state: Any,
+    recovered_state: Any,
+    last_action: Any,
+    journey_evidence: dict[str, Any],
+    evidence_dir: str | None,
+    recovery: dict[str, Any],
+    lifecycle: Any,
+) -> dict[str, Any]:
+    """构造取消收尾报告数据（run-result.json 的 extra 部分）。
+
+    阶段 C 复审 B1（issue #37）：restart_count 提升到报告顶层，与 relaunch_count
+    同口径——仅当受控重启恢复路径真实执行过（lifecycle 可用）才暴露 recovery 中
+    的真实计数；lifecycle 不可用（无恢复数据源）不写该 key，禁止编造 0。
+    recovery 子 dict 原样保留，供审计核对恢复结果细节。
+    """
+    result: dict[str, Any] = {
+        "duration_ms": duration_ms,
+        "status_trajectory": trajectory,
+        "pre_cancel_state": pre_cancel_state,
+        "pre_cancel_screen": (pre_cancel_state or {}).get("screen")
+        if isinstance(pre_cancel_state, dict) else None,
+        "recovered_screen": (recovered_state or {}).get("screen")
+        if isinstance(recovered_state, dict) else None,
+        "last_action": last_action,
+        "journey_evidence": journey_evidence,
+        "evidence_dir": evidence_dir,
+        # 受控重启恢复结果标记（如实写，不得伪装 normal_game_menu）。
+        "recovery": {
+            "target": recovery.get("target"),
+            "recovery_method": recovery.get("recovery_method"),
+            "normal_menu_abandon": recovery.get("normal_menu_abandon"),
+            "restart_count": recovery.get("restart_count"),
+            "final_screen": recovery.get("final_screen"),
+            "clean_main_menu": recovery.get("clean_main_menu"),
+            "old_run_abandoned": recovery.get("old_run_abandoned"),
+            "reason": recovery.get("reason"),
+            "final_state": recovery.get("final_state"),
+        },
+    }
+    if lifecycle is not None:
+        count = recovery.get("restart_count")
+        if isinstance(count, int):
+            result["restart_count"] = count
+    return result
+
+
 def _run_journey_foreground(
     adapter: GameAdapterProtocol,
     *,
@@ -2494,6 +2544,10 @@ def _run_journey_foreground(
                 "target_scene": resolved_target,
                 "journey_evidence": journey_evidence,
                 "evidence_dir": str(evidence_root / run_id) if run_id else None,
+                # 阶段 C（issue #37）：重拉计数进报告——真实生产者 lifecycle.relaunch_count。
+                "relaunch_count": (
+                    lifecycle.relaunch_count if lifecycle is not None else 0
+                ),
             },
         )
         evidence.on_session_end({
@@ -2595,30 +2649,17 @@ def _run_journey_foreground(
 
         # 2) 写取消报告 + 落盘证据 + 封存。证据封存失败单独归类。
         sealed = False
-        cancel_result = {
-            "duration_ms": duration_ms,
-            "status_trajectory": trajectory,
-            "pre_cancel_state": pre_cancel_state,
-            "pre_cancel_screen": (pre_cancel_state or {}).get("screen")
-            if isinstance(pre_cancel_state, dict) else None,
-            "recovered_screen": (recovered_state or {}).get("screen")
-            if isinstance(recovered_state, dict) else None,
-            "last_action": last_action,
-            "journey_evidence": journey_evidence,
-            "evidence_dir": str(evidence_root / run_id) if run_id else None,
-            # 受控重启恢复结果标记（如实写，不得伪装 normal_game_menu）。
-            "recovery": {
-                "target": recovery.get("target"),
-                "recovery_method": recovery.get("recovery_method"),
-                "normal_menu_abandon": recovery.get("normal_menu_abandon"),
-                "restart_count": recovery.get("restart_count"),
-                "final_screen": recovery.get("final_screen"),
-                "clean_main_menu": recovery.get("clean_main_menu"),
-                "old_run_abandoned": recovery.get("old_run_abandoned"),
-                "reason": recovery.get("reason"),
-                "final_state": recovery.get("final_state"),
-            },
-        }
+        cancel_result = _build_cancel_result(
+            duration_ms=duration_ms,
+            trajectory=trajectory,
+            pre_cancel_state=pre_cancel_state,
+            recovered_state=recovered_state,
+            last_action=last_action,
+            journey_evidence=journey_evidence,
+            evidence_dir=str(evidence_root / run_id) if run_id else None,
+            recovery=recovery,
+            lifecycle=lifecycle,
+        )
         # V11 复核要点：最终截图必须在恢复收尾（干净确认）之后采集，
         # 与报告中的 final_state 互为独立证据，随证据包一并封存。
         try:
@@ -3326,7 +3367,9 @@ def _report_from_store(evidence_dir: Path, run_id: str, store_run: Path) -> int:
     if isinstance(result, dict):
         for key in ("duration_ms", "status_trajectory", "pre_cancel_state",
                     "pre_cancel_screen", "recovered_screen", "last_action",
-                    "evidence_dir", "reason"):
+                    "evidence_dir", "reason", "restart_count"):
+            # B1（issue #37）：restart_count 由取消收尾真实写入 result 时才拷贝，
+            # 任务记录中无该字段（无真实数据源）→ 不编造 0。
             if key in result:
                 payload[key] = result[key]
     out_dir = evidence_dir / run_id / "reports"

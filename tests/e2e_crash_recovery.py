@@ -107,13 +107,25 @@ async def test_level3_terminate_after_three_crashes() -> None:
     orch = TestOrchestrator(adapter=_make_adapter(), recovery=strategy)
     assert not orch._crashed
 
-    await orch._handle_failure("TC-001", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 1"))
+    # issue #37 引入 same_signature_shortcut=2：连续相同签名会在第 2 次短路为
+    # TERMINATE。为保留「三级渐进恢复」原意，三场崩溃使用不同 exit_code，
+    # 使签名不同、不走短路。
+    await orch._handle_failure(
+        "TC-001",
+        STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 1", detail={"exit_code": 1}),
+    )
     assert not orch._crashed
 
-    await orch._handle_failure("TC-002", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 2"))
+    await orch._handle_failure(
+        "TC-002",
+        STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 2", detail={"exit_code": 2}),
+    )
     assert not orch._crashed
 
-    r3 = await orch._handle_failure("TC-003", STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 3"))
+    r3 = await orch._handle_failure(
+        "TC-003",
+        STS2Error(category=ErrorCategory.CRASH_ERROR, message="crash 3", detail={"exit_code": 3}),
+    )
     assert r3.status == "deterministic_fail"
     assert orch._crashed
 

@@ -524,6 +524,45 @@ class TestHandleFailure:
         assert len(orch._failure_history) == 1
         assert orch._failure_history[0].error_type == "timeout_error"
 
+    def test_failure_record_includes_signature(self) -> None:
+        """FailureRecord created by _handle_failure must include deterministic signature."""
+        mock = _make_mock_adapter()
+        evidence = MagicMock()
+        evidence.on_case_end = MagicMock()
+        orch = TestOrchestrator(adapter=mock, evidence=evidence)
+        exc = STS2Error(
+            category=ErrorCategory.CRASH_ERROR,
+            message="Game process died",
+            detail={"exit_code": 1},
+        )
+        _run(orch._handle_failure("TC-001", exc))
+        assert len(orch._failure_history) == 1
+        assert orch._failure_history[0].signature == "STS2Error:1"
+
+    def test_same_crash_signature_shortcut_terminates(self) -> None:
+        """Two same crash signatures in a row trigger deterministic_fail via shortcut."""
+        mock = _make_mock_adapter()
+        evidence = MagicMock()
+        evidence.on_case_end = MagicMock()
+        orch = TestOrchestrator(adapter=mock, evidence=evidence)
+        orch._failure_history = [
+            FailureRecord(
+                error_type=ErrorCategory.CRASH_ERROR.value,
+                message="first crash",
+                timestamp="t1",
+                exit_code=1,
+                signature="STS2Error:1",
+            ),
+        ]
+        exc = STS2Error(
+            category=ErrorCategory.CRASH_ERROR,
+            message="second crash",
+            detail={"exit_code": 1},
+        )
+        result = _run(orch._handle_failure("TC-001", exc))
+        assert result.status == "deterministic_fail"
+        assert orch._failure_history[-1].signature == "STS2Error:1"
+
     def test_consecutive_failures_triggers_deterministic_fail(self) -> None:
         mock = _make_mock_adapter()
         evidence = MagicMock()

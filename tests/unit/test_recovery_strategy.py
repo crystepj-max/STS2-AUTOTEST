@@ -667,3 +667,104 @@ class TestExecuteFullRestart:
         mock_steam.stop_steam.assert_not_called()
         mock_steam.start_steam.assert_not_called()
         mock_steam.start_game.assert_not_called()
+
+
+# ── 阶段 C：相同失败签名短路（issue #37）───────────────────
+
+
+def _crash_error(exit_code: int | None = None, message: str = "crash") -> STS2Error:
+    """构造 CRASH_ERROR 类 STS2Error（可选 exit_code）。"""
+    detail = {"exit_code": exit_code} if exit_code is not None else {}
+    return STS2Error(category=ErrorCategory.CRASH_ERROR, message=message, detail=detail)
+
+
+class TestSameSignatureShortcut:
+    """连续相同失败签名 → 直接 TERMINATE，不再 GAME_RESTART/FULL_RESTART 空转。"""
+
+    @pytest.fixture
+    def strategy(self) -> DefaultRecoveryStrategy:
+        return DefaultRecoveryStrategy()
+
+    def test_terminates_on_repeated_same_signature(
+        self, strategy: DefaultRecoveryStrategy
+    ) -> None:
+        """连续 2 次相同失败签名 → TERMINATE（默认短路阈值 2），判定非 P0。"""
+        error = _crash_error(exit_code=1)
+        history = [
+            FailureRecord(
+                error_type=ErrorCategory.CRASH_ERROR.value,
+                message="crash A",
+                timestamp="2026-01-01T00:00:00Z",
+                exit_code=1,
+                signature=crash_signature(error, 1),
+            ),
+        ]
+        decision = strategy.decide(error, history)
+        assert decision.action == RecoveryAction.TERMINATE
+        assert decision.is_p0 is False
+
+    def test_first_crash_still_gets_one_restart(
+        self, strategy: DefaultRecoveryStrategy
+    ) -> None:
+        """首次 crash（无历史）仍走 GAME_RESTART——不掩盖可能瞬时的一次崩溃。"""
+        decision = strategy.decide(_crash_error(exit_code=1), [])
+        assert decision.action == RecoveryAction.GAME_RESTART
+
+    def test_different_signatures_keep_progressive_restart(
+        self, strategy: DefaultRecoveryStrategy
+    ) -> None:
+        """不同签名（不同 exit_code）→ 仍按渐进恢复：第 2 次 → FULL_RESTART。"""
+        error = _crash_error(exit_code=1)
+        history = [
+            FailureRecord(
+                error_type=ErrorCategory.CRASH_ERROR.value,
+                message="crash B",
+                timestamp="2026-01-01T00:00:00Z",
+                exit_code=2,
+                signature="STS2Error:2",
+            ),
+        ]
+        decision = strategy.decide(error, history)
+        assert decision.action == RecoveryAction.FULL_RESTART
+
+    def test_legacy_records_without_signature_keep_progressive(
+        self, strategy: DefaultRecoveryStrategy
+    ) -> None:
+        """历史记录无 signature（旧格式）→ 保持原渐进逻辑，不短路。"""
+        error = _crash_error(exit_code=1)
+        history = [
+            FailureRecord(
+                error_type=ErrorCategory.CRASH_ERROR.value,
+                message="crash C",
+                timestamp="2026-01-01T00:00:00Z",
+                exit_code=1,
+            ),
+        ]
+        decision = strategy.decide(error, history)
+        assert decision.action == RecoveryAction.FULL_RESTART
+
+    def test_custom_shortcut_threshold(
+        self, strategy: DefaultRecoveryStrategy
+    ) -> None:
+        """same_signature_shortcut=3 → 第 2 次相同签名不短路（仍 FULL_RESTART）。"""
+        error = _crash_error(exit_code=1)
+        history = [
+            FailureRecord(
+                error_type=ErrorCategory.CRASH_ERROR.value,
+                message="crash D",
+                timestamp="2026-01-01T00:00:00Z",
+                exit_code=1,
+                signature="STS2Error:1",
+            ),
+        ]
+        decision = strategy.decide(error, history, same_signature_shortcut=3)
+        assert decision.action == RecoveryAction.FULL_RESTART
+
+    def test_signature_field_defaults_to_empty(
+        self, strategy: DefaultRecoveryStrategy
+    ) -> None:
+        """FailureRecord.signature 默认空串——旧构造代码无需改动。"""
+        record = FailureRecord(
+            error_type="timeout_error", message="x", timestamp="t",
+        )
+        assert record.signature == ""

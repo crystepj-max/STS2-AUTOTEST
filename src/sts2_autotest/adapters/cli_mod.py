@@ -81,8 +81,13 @@ class CliModAdapter:
         cli_path: str | None = None,
         timeout: float = 30.0,
         version_output: str | None = None,
+        poll_interval: float = 0.5,
     ) -> None:
         self.timeout = timeout
+        self.poll_interval = float(poll_interval)
+        # 阶段 A（issue #37）：_run_cli 入口埋点——每次工具启动（含失败）都计数，
+        # 供性能对比「同场战斗启动次数 ↓≥50%」验收度量。
+        self.cli_launch_count = 0
         self._cache_stale = True
         self._cached_state: GameState | None = None
         self._version_checked = False
@@ -112,6 +117,8 @@ class CliModAdapter:
         non-zero exit code, or JSON parse failure.
         """
         cmd = [self.cli_path, *args]
+        # 埋点：统计口径为「实际工具启动次数」，失败调用同样计入（置于 Popen 之前）。
+        self.cli_launch_count += 1
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -585,6 +592,10 @@ class CliModAdapter:
         deadline = time.monotonic() + min(self.timeout, 60.0)
         steps = 0
         consecutive_play_failures = 0
+        # 阶段 A（issue #37）：等待期自适应降频——非玩家回合（状态未变）时轮询
+        # 间隔逐轮翻倍、封顶 2×poll_interval，不再逐轮满频查询；玩家回合（状态
+        # 变化）复位基础间隔。等待期每轮仍读取一次状态（保行为一致）。
+        wait_interval = self.poll_interval
         try:
             while time.monotonic() < deadline and steps < 80:
                 self._cache_stale = True
@@ -598,8 +609,12 @@ class CliModAdapter:
                     return ActionResult(status="failure", state_changed=False, detail="Combat payload missing")
 
                 if not combat.get("is_player_turn", False) or combat.get("is_player_actions_disabled", False):
-                    time.sleep(0.5)
+                    time.sleep(wait_interval)
+                    wait_interval = min(wait_interval * 2.0, self.poll_interval * 2.0)
                     continue
+
+                # 状态已变化（玩家回合）→ 复位等待退避。
+                wait_interval = self.poll_interval
 
                 play_args = _choose_basic_combat_card(combat)
                 if play_args is not None:
