@@ -11,6 +11,8 @@ _SCRIPT = _SCRIPTS_DIR / "check_pytest_baseline.py"
 _SPEC = importlib.util.spec_from_file_location("check_pytest_baseline_script", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 check_pytest_baseline = importlib.util.module_from_spec(_SPEC)
+# sys.modules 常驻条目是刻意的（脚本与 src/ 命名空间隔离，仓库内无同名模块）；
+# 若未来新增同名模块需改为 fixture 作用域化加载
 sys.modules[_SPEC.name] = check_pytest_baseline
 # 脚本内 `from runner_utils import ...` 需要 .github/scripts 在 sys.path 上
 sys.path.insert(0, str(_SCRIPTS_DIR))

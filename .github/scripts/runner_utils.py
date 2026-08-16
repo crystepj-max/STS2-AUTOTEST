@@ -26,9 +26,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence, TextIO
+from typing import TextIO
 
 TIMEOUT_EXIT_CODE = 124  # 与 GNU timeout 一致；调用方据此判定超时
 POLL_INTERVAL = 0.1  # 等待子进程的轮询间隔（秒）
@@ -169,20 +170,34 @@ def run_timed(
                 except subprocess.TimeoutExpired:
                     pass  # 进程组内存在忽略信号的顽固进程时，至少已尽力
     except KeyboardInterrupt:
-        # 交互中断也要先清理子进程，避免残留后再向上传播
+        # 交互中断也要先清理子进程，避免残留后再向上传播；
+        # SIGKILL 后必须 wait 回收，否则子进程成为僵尸停留在进程表中
         if proc.poll() is None:
             _kill_tree(proc)
+            try:
+                proc.wait(timeout=GRACE_PERIOD)
+            except subprocess.TimeoutExpired:
+                pass  # 尽力而为：SIGKILL 不可忽略，wait 仅用于回收
         raise
     finally:
-        stdout_thread.join(timeout=GRACE_PERIOD)
-        stderr_thread.join(timeout=GRACE_PERIOD)
+        for thread in (stdout_thread, stderr_thread):
+            thread.join(timeout=GRACE_PERIOD)
+            if thread.is_alive():
+                # 捕获线程在宽限期内未读完（孙进程继承管道 FD 时可能拖住），
+                # 末尾输出被放弃；显式留痕避免诊断时误以为未产生
+                with log.open("a", encoding="utf-8", errors="replace") as log_file:
+                    log_file.write(
+                        "===== output truncated: capture thread did not finish within grace period =====\n"
+                    )
 
     output = "".join(stdout_lines)
     error = "".join(stderr_lines)
     returncode = proc.returncode if proc.returncode is not None else -1
 
     if timed_out:
-        message = f"TIMEOUT: {name} exceeded {timeout:.0f}s"
+        # `g` 格式：600.0 → "600"，0.05 → "0.05"，亚秒上限（受控验证用 0.000001）
+        # 显示为 "1e-06"，避免取整后显示成误导性的 "0s"
+        message = f"TIMEOUT: {name} exceeded {timeout:g}s"
         print(message, file=sys.stderr, flush=True)
         with log.open("a", encoding="utf-8", errors="replace") as log_file:
             log_file.write(f"{message}\n")

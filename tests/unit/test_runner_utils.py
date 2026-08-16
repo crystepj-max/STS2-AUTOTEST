@@ -7,9 +7,12 @@ import sys
 import time
 from pathlib import Path
 
-import pytest
 import psutil
+import pytest
 
+# 脚本模块加载方式：spec_from_file_location 加载 .github/scripts/runner_utils.py。
+# sys.modules 中该名字的常驻条目是刻意的——脚本与 src/ 命名空间隔离，仓库内
+# 无同名模块；若未来新增同名模块需改为 fixture 作用域化加载。
 _SCRIPT = Path(__file__).resolve().parents[2] / ".github/scripts/runner_utils.py"
 _SPEC = importlib.util.spec_from_file_location("runner_utils", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
@@ -163,6 +166,61 @@ def test_run_timed_echo_streams_child_output_to_console(
     captured = capsys.readouterr()
     assert "echo-out" in captured.out
     assert "echo-err" in captured.err
+
+
+class _InterruptAfterPoll:
+    """代理真实 ``time`` 模块，前 N 次 sleep 正常，之后抛 KeyboardInterrupt。
+
+    用于模拟交互中断发生在子进程运行期间（子进程已写入 pid 文件之后）。
+    """
+
+    def __init__(self, after: int) -> None:
+        self._remaining = after
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(time, name)
+
+    def sleep(self, seconds: float) -> None:
+        if self._remaining > 0:
+            self._remaining -= 1
+            time.sleep(seconds)
+        else:
+            raise KeyboardInterrupt
+
+
+def test_run_timed_cleans_up_and_rethrows_on_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = tmp_path / "child.pid"
+    log = tmp_path / "check.log"
+
+    # spy：断言 _kill_tree 被调用，同时保持真实清理（测试不留残留进程）
+    real_kill_tree = runner_utils._kill_tree
+    kill_calls: list[object] = []
+
+    def spy_kill_tree(proc: object) -> None:
+        kill_calls.append(proc)
+        real_kill_tree(proc)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(runner_utils, "_kill_tree", spy_kill_tree)
+    # 轮询约 1s（10 次 POLL_INTERVAL）后抛 KeyboardInterrupt，此时子进程已写入
+    # pid 文件仍在运行——中断路径必须先清理子进程，再向上传播异常
+    monkeypatch.setattr(runner_utils, "time", _InterruptAfterPoll(10))
+
+    with pytest.raises(KeyboardInterrupt):
+        runner_utils.run_timed(
+            "demo",
+            [sys.executable, "-c", _write_pid_then_sleep(pid_file)],
+            log,
+            timeout=10,
+        )
+
+    assert len(kill_calls) == 1
+    child_pid = int(pid_file.read_text(encoding="utf-8"))
+    deadline = time.monotonic() + 10
+    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not psutil.pid_exists(child_pid), f"child {child_pid} still alive after interrupt"
 
 
 def test_env_timeout_uses_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:

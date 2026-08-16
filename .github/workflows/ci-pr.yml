@@ -16,7 +16,10 @@ jobs:
   validation:
     name: PR Check Summary
     runs-on: ["self-hosted", "macos", "autotest"]
-    timeout-minutes: 45
+    # job 级兜底须 ≥ 各 step 兜底上限之和（ruff 25 + unit 35 + mypy 35 = 95min
+    # + 安装/集成等步骤），否则多检查同时接近上限时 job 被平台硬杀，
+    # summary 与 check-logs 上传均不执行，Timeout 呈现和输出保留同时失效
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -151,19 +154,6 @@ jobs:
           name: junit-integration
           path: junit-integration.xml
 
-      - name: Upload check logs (issue-18)
-        # 超时时已产生的 stdout/stderr 与日志均落盘在 check log 中，随 artifact 保留供诊断
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: check-logs
-          path: |
-            ruff-check.log
-            mypy-check.log
-            pytest-check.log
-            timeout-demo.log
-
       - name: Install visual dependency for mypy
         id: visual
         if: always() && steps.install.outcome == 'success'
@@ -178,6 +168,21 @@ jobs:
         # 单次上限 MYPY_TIMEOUT_SECONDS=900s），保证脚本自身先报 Timeout 而非被 step 硬杀
         timeout-minutes: 35
         run: .venv-ci/bin/python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir .
+
+      - name: Upload check logs (issue-18)
+        # 超时时已产生的 stdout/stderr 与日志均落盘在 check log 中，随 artifact 保留供诊断。
+        # 必须晚于所有产生日志的步骤（mypy 依赖 visual 排在更后）：上传发生在
+        # mypy 之前会导致 mypy-check.log 永不进入 artifact，mypy 超时诊断输出完全丢失。
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs
+          path: |
+            ruff-check.log
+            mypy-check.log
+            pytest-check.log
+            timeout-demo.log
 
       - name: Generate summary
         if: always()
