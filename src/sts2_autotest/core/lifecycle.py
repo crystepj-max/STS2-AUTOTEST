@@ -138,7 +138,10 @@ class GameLifecycleManager:
         steam_controller: Any = None,
         app_id: str = _DEFAULT_APP_ID,
         hang_threshold: float = 18.0,
-        max_relaunches: int = 15,
+        # 阶段 C（issue #37）：重拉上限 15 → 3。确定性失败反复重拉 15 次全是
+        # 无效重启（每次都是一次完整游戏重启）；上限收敛后仍保留 3 次容错
+        # （瞬态可恢复），调用方可经构造参数覆盖。
+        max_relaunches: int = 3,
         api_timeout: float = 150.0,
         launch_timeout: float = 120.0,
         poll_interval: float = 3.0,

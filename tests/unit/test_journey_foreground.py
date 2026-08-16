@@ -320,3 +320,84 @@ def test_success_path_captures_final_state_screenshot(
     # 终态凭证携带的必须是最终状态本身
     final_state = next(state for name, state in captured if "_FINAL_" in name)
     assert final_state["screen"] == "COMBAT"
+
+
+def _cancel_recovery_dict(**overrides: object) -> dict:
+    """构造与 _recover_main_menu_via_restart 返回值同形状的恢复结果。"""
+    base: dict = {
+        "target": "MAIN_MENU",
+        "recovery_method": "controlled_restart",
+        "normal_menu_abandon": False,
+        "restart_count": 0,
+        "final_screen": "MAIN_MENU",
+        "clean_main_menu": True,
+        "old_run_abandoned": False,
+        "reason": None,
+        "final_state": {"screen": "MAIN_MENU"},
+        "ok": True,
+        "blocked": False,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_cancel_result_restart_count_promoted_to_report_top_level() -> None:
+    """B1 契约：取消收尾报告（生产构造点）把真实 restart_count 提升到顶层。
+
+    审查 B1：重启计数此前嵌套在 recovery 子 dict，report_html 只认顶层 key，
+    「重启次数」卡片在生产路径永不渲染。本测试绑定生产构造函数 + 与 write_result
+    相同的顶层展开 + build_report_html 渲染，防止渲染端/生产端再次错配。
+    """
+    from sts2_autotest.cli.main import _build_cancel_result
+    from sts2_autotest.report_html import build_report_html
+
+    cancel_result = _build_cancel_result(
+        duration_ms=1234,
+        trajectory=["MAIN_MENU", "COMBAT"],
+        pre_cancel_state={"screen": "COMBAT"},
+        recovered_state={"screen": "MAIN_MENU"},
+        last_action="end_turn",
+        journey_evidence={},
+        evidence_dir="/tmp/evidence/run-x",
+        recovery=_cancel_recovery_dict(restart_count=1),
+        lifecycle=object(),  # lifecycle 可用 → 受控重启恢复路径真实执行过
+    )
+
+    # 契约 1：顶层提升（write_result 用 payload.update(extra) 展开到 run-result.json）
+    assert cancel_result["restart_count"] == 1
+    assert cancel_result["recovery"]["restart_count"] == 1
+
+    # 契约 2：run-result.json 顶层形状 → HTML 渲染「重启次数」卡片
+    payload: dict = {"run_id": "run-x", "task_id": "run-x", "status": "CANCELLED"}
+    payload.update(cancel_result)
+    html = build_report_html(payload)
+    assert '<div class="num">1</div>重启次数' in html
+
+
+def test_cancel_result_omits_restart_count_without_real_source() -> None:
+    """B1 契约：无真实数据源（lifecycle 不可用）→ 顶层不写 restart_count。
+
+    与 relaunch_count 同口径：有真实数据源才写、无则不写，禁止编造 0。
+    """
+    from sts2_autotest.cli.main import _build_cancel_result
+    from sts2_autotest.report_html import build_report_html
+
+    cancel_result = _build_cancel_result(
+        duration_ms=1234,
+        trajectory=["MAIN_MENU"],
+        pre_cancel_state=None,
+        recovered_state=None,
+        last_action=None,
+        journey_evidence={},
+        evidence_dir=None,
+        recovery=_cancel_recovery_dict(),  # lifecycle 缺失时的 fallback 形状（0 为编造值）
+        lifecycle=None,
+    )
+
+    assert "restart_count" not in cancel_result
+    assert cancel_result["recovery"]["restart_count"] == 0  # 子 dict 原样保留
+
+    payload: dict = {"run_id": "run-x", "task_id": "run-x", "status": "CANCELLED"}
+    payload.update(cancel_result)
+    html = build_report_html(payload)
+    assert "重启次数" not in html

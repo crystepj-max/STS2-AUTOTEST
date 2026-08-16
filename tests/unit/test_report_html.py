@@ -364,3 +364,33 @@ def test_write_html_report_writes_temp_file_before_replace(
     assert written_paths
     assert written_paths[0] != output_path
     assert output_path.is_file()
+
+
+def test_report_renders_restart_and_relaunch_counts(tmp_path):
+    """阶段 C：报告暴露重启/重拉计数，可对比改造前后（0 也显示）。"""
+    config = {
+        "test_run_id": "perf-run",
+        "test_cases": [],
+        "card_results": [],
+        "restart_count": 2,
+        "relaunch_count": 0,
+        "_config_dir": str(tmp_path),
+    }
+    html = build_report_html(config)
+
+    assert '<div class="num">2</div>重启次数' in html
+    assert '<div class="num">0</div>重拉次数' in html
+
+
+def test_report_omits_counter_cards_when_not_provided(tmp_path):
+    """未提供计数（既有报告格式）→ 不渲染计数卡，避免破坏旧报告。"""
+    config = {
+        "test_run_id": "demo-run",
+        "test_cases": [],
+        "card_results": [],
+        "_config_dir": str(tmp_path),
+    }
+    html = build_report_html(config)
+
+    assert "重启次数" not in html
+    assert "重拉次数" not in html

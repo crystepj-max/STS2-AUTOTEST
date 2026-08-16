@@ -133,7 +133,10 @@ class StateMachineConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     transition_timeout: float = Field(default=10.0, gt=0)
-    poll_interval: float = Field(default=0.5, gt=0)
+    # 阶段 A（issue #37）：状态轮询间隔默认 0.5s → 1.0s（降频）。去重为主、
+    # 轮询间隔为次要调参；适配器内部等待的实时节奏由 CliModAdapter(poll_interval=…)
+    # 控制，此处为状态机轮询的全局默认值。
+    poll_interval: float = Field(default=1.0, gt=0)
 
 
 class NotificationsConfig(BaseModel):

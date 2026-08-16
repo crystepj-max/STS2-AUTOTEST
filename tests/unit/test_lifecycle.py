@@ -442,3 +442,33 @@ def test_game_exe_not_hardcoded_to_user_path():
     assert "/Users/chris" not in src
     mgr = GameLifecycleManager(_ProbeAdapter(), game_dir="/opt/steam/StS2")
     assert mgr.game_exe.startswith("/opt/steam/StS2")
+
+
+# ── 阶段 C：重拉上限默认下调（issue #37）───────────────────
+
+
+class TestMaxRelaunches:
+    def test_default_max_relaunches_downgraded_to_3(self) -> None:
+        """默认重拉上限从 15 下调至 3——确定性失败不再空转 15 次。"""
+        mgr = _mgr(FakeAdapter([]))
+        assert mgr.max_relaunches == 3
+
+    def test_custom_max_relaunches(self) -> None:
+        mgr = GameLifecycleManager(
+            FakeAdapter([]), game_exe="/tmp/fake_game",
+            game_dir="/tmp/fake_dir", max_relaunches=5,
+        )
+        assert mgr.max_relaunches == 5
+
+    def test_relaunch_run_stops_at_custom_cap(self, no_sleep, fake_popen) -> None:
+        """自定义上限 1：第 1 次重拉后到达上限，后续调用拒绝且计数不涨。"""
+        mgr = GameLifecycleManager(
+            FakeAdapter([], down_first=0), game_exe="/tmp/fake_game",
+            game_dir="/tmp/fake_dir", max_relaunches=1,
+        )
+        ok1 = asyncio.run(mgr.relaunch_run(api_timeout=1.0))
+        ok2 = asyncio.run(mgr.relaunch_run(api_timeout=1.0))
+        assert ok1 is False  # API 未恢复（down_first=0 但响应为空 → is_api_up False）
+        assert mgr.relaunch_count == 1
+        assert ok2 is False
+        assert mgr.relaunch_count == 1  # 已达上限，不再递增
