@@ -1,0 +1,112 @@
+task_id: task-008
+title: "[P1][Bug] 为自动验收中的外部任务建立明确时间边界"
+repo: STS2-AUTOTEST
+base_branch: main
+working_branch: bugfix/issue-18-timeout-boundaries
+source_issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/18
+gold_band_task: task-008
+gold_band_run: run-001
+type: bug
+priority: P1
+size: M
+# size 依据：issue 标签 sized-m；涉及 3 个 baseline 脚本 + 1 个新增工具模块 + 1 个测试文件 + CI workflow 呈现，
+# 跨 GitHub Actions 与本地验证脚本，非纯单模块。
+
+# 调度判定（2026-08-16，S1 调度节点，输入 = issue #18 标题/正文 + 分诊评论）
+dispatch:
+  complete: true
+  missing: []
+  objective: |
+    让 CI 中的 Ruff、mypy、单元验证三类外部检查各自拥有独立的时间边界；
+    一旦超时就明确报告 Timeout，终止相关子进程并保留已产生的输出，
+    避免单个检查卡住阻塞整个验收流程。
+  scope: |
+    做：.github/scripts/check_ruff_baseline.py、.github/scripts/check_mypy_baseline.py、
+    .github/scripts/check_pytest_baseline.py、新增 .github/scripts/runner_utils.py、
+    新增 tests/unit/test_runner_utils.py、.github/workflows/ci-pr.yml 结果呈现。
+    不做：不改正常路径判定逻辑、不改动 test-agent 运行器内部超时、
+    不修复既存 ruff/mypy 债务、不处理 #24 机器维护问题。
+  acceptance: |
+    1. 三类调用都有独立时间上限，超时后相关子任务被终止。
+    2. 超时后不会留下持续运行的子进程。
+    3. CI 输出明确显示 Timeout，而不是普通质量失败。
+    4. 已产生的 stdout/stderr 与日志/JUnit 输出被保留用于诊断。
+    5. 正常通过路径与 Run #47 保持一致。
+    6. 至少一次受控超时验证证明超时机制可恢复。
+  need_integration_test: true
+  reason: |
+    三要素齐全：任务目标、涉及范围、验收标准均已在 issue 正文及分诊评论中明确。
+    集成测试判定=true：改动横跨多个 GitHub Actions baseline 脚本、新增共享工具模块、
+    涉及 CI workflow 呈现与真实 CI 运行环境，且验收标准第 6 条要求受控超时验证，
+    回归风险在于超时路径可能破坏正常通过路径，必须经集成/CI 级验证。
+  overlimit_redispatch: 不适用（round-001，无超限失败历史）
+
+tickets:  # to-tickets：带依赖顺序的任务清单
+  - id: T1-runner-utils
+    title: 新增 runner_utils.py —— 可复用的超时执行与残留清理工具
+    size: S
+    depends_on: [人工门禁「需求确认」通过]
+    files: [.github/scripts/runner_utils.py, tests/unit/test_runner_utils.py]
+    notes: 提供 run_with_timeout、terminate_process_tree、保留输出路径等原语；先写测试再实现
+  - id: T2-ruff-timeout
+    title: check_ruff_baseline.py 接入独立时间边界
+    size: S
+    depends_on: [T1-runner-utils]
+    files: [.github/scripts/check_ruff_baseline.py, tests/unit/test_runner_utils.py]
+    notes: 调用 runner_utils 执行 ruff；超时报告 Timeout；保留输出；正常路径不变
+  - id: T3-mypy-timeout
+    title: check_mypy_baseline.py 接入独立时间边界
+    size: S
+    depends_on: [T1-runner-utils]
+    files: [.github/scripts/check_mypy_baseline.py, tests/unit/test_runner_utils.py]
+    notes: 调用 runner_utils 执行 mypy；超时报告 Timeout；保留输出；正常路径不变
+  - id: T4-pytest-timeout
+    title: check_pytest_baseline.py 接入独立时间边界
+    size: S
+    depends_on: [T1-runner-utils]
+    files: [.github/scripts/check_pytest_baseline.py, tests/unit/test_runner_utils.py]
+    notes: 调用 runner_utils 执行 pytest；超时报告 Timeout；保留 JUnit/日志；正常路径不变
+  - id: T5-ci-presentation
+    title: ci-pr.yml 结果呈现与受控超时验证
+    size: S
+    depends_on: [T2-ruff-timeout, T3-mypy-timeout, T4-pytest-timeout]
+    files: [.github/workflows/ci-pr.yml]
+    notes: CI 步骤读取超时状态并显式输出 Timeout；安排一次受控超时验证证明可恢复
+
+phases:
+  - id: utils
+    title: 超时执行工具模块
+    size: S
+    status: pending
+    files: [.github/scripts/runner_utils.py, tests/unit/test_runner_utils.py]
+  - id: ruff
+    title: Ruff baseline 接入超时边界
+    size: S
+    status: pending
+    files: [.github/scripts/check_ruff_baseline.py]
+  - id: mypy
+    title: Mypy baseline 接入超时边界
+    size: S
+    status: pending
+    files: [.github/scripts/check_mypy_baseline.py]
+  - id: pytest
+    title: Pytest baseline 接入超时边界
+    size: S
+    status: pending
+    files: [.github/scripts/check_pytest_baseline.py]
+  - id: ci
+    title: CI 呈现与受控验证
+    size: S
+    status: pending
+    files: [.github/workflows/ci-pr.yml]
+    notes: 依赖 ruff/mypy/pytest 三阶段完成
+
+gates:
+  - id: 需求确认
+    type: human
+    status: pending
+    blocking_items:
+      - 确认三类检查（ruff/mypy/pytest）的时间上限数值是否合理
+      - 确认受控超时验证方式（如临时注入 sleep 的测试分支或 CI matrix 参数）
+      - 确认新增 runner_utils.py 的模块位置与命名
+    after_pass: 给 issue #18 补打确认后进入开发（T1 为前置，T2/T3/T4 可并行）
