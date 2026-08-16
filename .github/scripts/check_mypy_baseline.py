@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -14,16 +15,31 @@ _ERROR_RE = re.compile(
     r"^(?P<file>.+?):(?P<line>\d+)(?::(?P<column>\d+))?: "
     r"error: (?P<message>.*?)(?:  \[(?P<code>[^\]]+)\])?$"
 )
+DEFAULT_CONFIG_FILE = Path(".github/mypy-policy.ini")
 
 
-def _run_mypy(root: Path) -> list[tuple[str, int, int, str, str]]:
+def _resolve_tool_bin(bin_arg: str | None, name: str) -> str:
+    """解析工具可执行文件路径：显式传入优先；否则从当前 Python 同 venv 推导（Unix bin/、Windows Scripts/），最后回退 PATH。
+
+    注意：不用 resolve() 展开符号链接——.venv/bin/python 常是指向 uv/pyenv 缓存的链接，
+    resolve 后会偏离 venv 目录，导致推导不到同 venv 工具。
+    """
+    if bin_arg:
+        return bin_arg
+    python_dir = Path(sys.executable).parent
+    for candidate in (python_dir / name, python_dir / f"{name}.exe"):
+        if candidate.is_file():
+            return str(candidate)
+    return name
+
+
+def _run_mypy(root: Path, bin_path: str, config_file: Path) -> list[tuple[str, int, int, str, str]]:
     result = subprocess.run(
         [
-            "mypy",
+            bin_path,
+            "--config-file",
+            str(config_file),
             "src/sts2_autotest",
-            "--strict",
-            "--show-error-codes",
-            "--no-error-summary",
         ],
         cwd=root,
         capture_output=True,
@@ -96,17 +112,37 @@ def _fingerprints(
     return counts, locations
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-dir", type=Path, required=True)
     parser.add_argument("--current-dir", type=Path, required=True)
-    args = parser.parse_args()
+    parser.add_argument(
+        "--config-file",
+        type=Path,
+        default=DEFAULT_CONFIG_FILE,
+        help="mypy 政策配置文件（默认 .github/mypy-policy.ini）。",
+    )
+    parser.add_argument(
+        "--mypy-bin",
+        default=None,
+        help="当前目录使用的 mypy 可执行文件（默认从当前 Python venv 推导，回退 PATH）。",
+    )
+    parser.add_argument(
+        "--baseline-mypy-bin",
+        default=None,
+        help="基线目录使用的 mypy 可执行文件（默认同 --mypy-bin）。",
+    )
+    args = parser.parse_args(argv)
 
     baseline_dir = args.baseline_dir.resolve()
     current_dir = args.current_dir.resolve()
+    config_file = args.config_file.resolve()
 
-    baseline_counts, _ = _fingerprints(baseline_dir, _run_mypy(baseline_dir))
-    current_counts, current_locations = _fingerprints(current_dir, _run_mypy(current_dir))
+    mypy_bin = _resolve_tool_bin(args.mypy_bin, "mypy")
+    baseline_mypy_bin = _resolve_tool_bin(args.baseline_mypy_bin or args.mypy_bin, "mypy")
+
+    baseline_counts, _ = _fingerprints(baseline_dir, _run_mypy(baseline_dir, baseline_mypy_bin, config_file))
+    current_counts, current_locations = _fingerprints(current_dir, _run_mypy(current_dir, mypy_bin, config_file))
 
     new_findings = current_counts - baseline_counts
     resolved_findings = baseline_counts - current_counts
