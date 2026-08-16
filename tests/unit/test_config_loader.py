@@ -179,7 +179,7 @@ class TestFullLayerStack:
         assert cfg.execution.game_timeout == 120.0  # from YAML
         assert cfg.framework.log_level == "DEBUG"  # from env
         assert cfg.execution.max_retries == 5  # from CLI
-        assert cfg.state_machine.poll_interval == 0.5  # default
+        assert cfg.state_machine.poll_interval == 1.0  # default
 
     def test_string_project_dir(self, config_dir: Path) -> None:
         cfg = load_config(project_dir=str(config_dir))

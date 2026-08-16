@@ -712,3 +712,159 @@ class TestMockReplaceability:
         mock = self.MockAdapter()
         adapter_ref: GameAdapterProtocol = mock  # type: ignore[assignment]
         assert adapter_ref is not None
+
+
+# ── 阶段 A：埋点计数 + 轮询间隔配置 + 战斗等待退避（issue #37）──
+
+class _FakeTime:
+    """替身 time 模块：monotonic 递增 + 记录 sleep 调用，避免真实等待。"""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+def _combat_payload(is_player_turn: bool, hand: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """构造 CLI state 响应的战斗载荷。"""
+    return {
+        "screen": "COMBAT",
+        "combat": {
+            "is_player_turn": is_player_turn,
+            "is_player_actions_disabled": False,
+            "hand": hand or [],
+            "enemies": [],
+        },
+    }
+
+
+class TestCliLaunchCount:
+    """_run_cli 入口埋点计数：每次工具启动（含失败）都计入，供性能对比。"""
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_launch_count_starts_at_zero(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        assert adapter.cli_launch_count == 0
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_launch_count_increments_per_cli_call(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        mock_popen.return_value = _mock_popen_ok({})
+        _run(adapter.health_check())   # ping → 1 次启动
+        _run(adapter.get_state())      # state → 1 次启动
+        assert adapter.cli_launch_count == 2
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_launch_count_counts_failures_too(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """失败调用同样计数——统计口径为「实际启动次数」，不得漏计。
+
+        用 get_state 而非 health_check：health_check 既有设计吞掉错误返回
+        healthy=False，不传播异常；get_state 会把 CLI 失败作为 STS2Error 抛出。
+        """
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr="boom")
+        with pytest.raises(STS2Error):
+            _run(adapter.get_state())
+        assert adapter.cli_launch_count == 1
+
+    def test_launch_count_is_per_instance(self) -> None:
+        a = CliModAdapter(cli_path="sts2", timeout=30.0)
+        b = CliModAdapter(cli_path="sts2", timeout=30.0)
+        assert a.cli_launch_count == 0
+        assert b.cli_launch_count == 0
+
+
+class TestPollIntervalConfig:
+    """轮询间隔配置化：默认 0.5s，可经构造参数调整。"""
+
+    def test_default_poll_interval(self) -> None:
+        a = CliModAdapter(cli_path="sts2", timeout=30.0)
+        assert a.poll_interval == 0.5
+
+    def test_custom_poll_interval(self) -> None:
+        a = CliModAdapter(cli_path="sts2", timeout=30.0, poll_interval=1.0)
+        assert a.poll_interval == 1.0
+
+
+class TestCombatWaitBackoff:
+    """阶段 A：战斗等待轮询自适应降频。
+
+    非玩家回合（状态未变）→ 轮询间隔翻倍（0.5 → 1.0 封顶）；
+    玩家回合出现（状态变化）→ 复位基础间隔。等待期间不再逐轮满频查询。
+    """
+
+    def _run_combat_policy(
+        self, poll_interval: float, responses: list[dict[str, Any]]
+    ) -> tuple[Any, _FakeTime, CliModAdapter]:
+        fake_time = _FakeTime()
+        adapter = CliModAdapter(cli_path="sts2", timeout=5.0, poll_interval=poll_interval)
+        mock_proc = MagicMock()
+        mock_proc.communicate.side_effect = [
+            (json.dumps({"ok": True, "data": resp}).encode("utf-8"), b"")
+            for resp in responses
+        ]
+        mock_proc.returncode = 0
+        with patch("sts2_autotest.adapters.cli_mod.subprocess.Popen",
+                   return_value=mock_proc), patch(
+            "sts2_autotest.adapters.cli_mod.time", fake_time
+        ):
+            # _combat_basic_policy_sync 是同步函数，直接调用（不走 asyncio 桥接）。
+            result = adapter._combat_basic_policy_sync()
+        return result, fake_time, adapter
+
+    def test_wait_backoff_doubles_then_caps(self) -> None:
+        """连续等待：0.5 → 1.0 → 1.0（封顶 = 2×poll_interval），不再逐轮满频。"""
+        result, fake_time, adapter = self._run_combat_policy(
+            0.5,
+            [
+                _combat_payload(False),  # 等待 → 0.5
+                _combat_payload(False),  # 等待 → 1.0
+                _combat_payload(False),  # 等待 → 1.0（封顶）
+                {"screen": "VICTORY"},   # 战斗结束
+            ],
+        )
+        assert result.status == "success"
+        assert fake_time.sleeps == [0.5, 1.0, 1.0]
+        # 4 次状态读取（3 次等待 + 1 次战斗结束判定）= 4 次工具启动，
+        # 无等待期间之外的冗余启动。
+        assert adapter.cli_launch_count == 4
+
+    def test_wait_backoff_resets_on_player_turn(self) -> None:
+        """玩家回合出现 → 退避复位；再次等待从基础间隔重新翻倍。"""
+        result, fake_time, adapter = self._run_combat_policy(
+            0.5,
+            [
+                _combat_payload(False),                                  # 等待 → 0.5
+                _combat_payload(False),                                  # 等待 → 1.0
+                _combat_payload(True, hand=[{"id": "1", "type": "Attack", "can_play": True, "target_type": "None"}]),  # 玩家回合 → play_card
+                _combat_payload(False),                                  # play_card 响应（返回后状态仍为等待）
+                _combat_payload(False),                                  # 敌人回合（已复位）→ 0.5
+                {"screen": "VICTORY"},
+            ],
+        )
+        assert result.status == "success"
+        assert fake_time.sleeps == [0.5, 1.0, 0.5]
+        # 5 次状态读取（4 次等待 + 1 次战斗结束判定）+ 1 次 play_card = 6 次启动
+        assert adapter.cli_launch_count == 6
+
+    def test_wait_backoff_uses_configured_poll_interval(self) -> None:
+        """配置 poll_interval=1.0 → 等待基础间隔 1.0、封顶 2.0。"""
+        result, fake_time, adapter = self._run_combat_policy(
+            1.0,
+            [
+                _combat_payload(False),  # 等待 → 1.0
+                _combat_payload(False),  # 等待 → 2.0（封顶）
+                {"screen": "VICTORY"},
+            ],
+        )
+        assert result.status == "success"
+        assert fake_time.sleeps == [1.0, 2.0]

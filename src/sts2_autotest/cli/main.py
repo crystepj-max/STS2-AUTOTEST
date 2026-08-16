@@ -2494,6 +2494,10 @@ def _run_journey_foreground(
                 "target_scene": resolved_target,
                 "journey_evidence": journey_evidence,
                 "evidence_dir": str(evidence_root / run_id) if run_id else None,
+                # 阶段 C（issue #37）：重拉计数进报告——真实生产者 lifecycle.relaunch_count。
+                "relaunch_count": (
+                    lifecycle.relaunch_count if lifecycle is not None else 0
+                ),
             },
         )
         evidence.on_session_end({

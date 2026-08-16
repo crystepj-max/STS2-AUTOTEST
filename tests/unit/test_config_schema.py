@@ -166,7 +166,7 @@ class TestSTS2Config:
         assert cfg.framework.log_level == "INFO"
         assert cfg.adapter.cli.enabled is True
         assert cfg.execution.game_timeout == 60.0
-        assert cfg.state_machine.poll_interval == 0.5
+        assert cfg.state_machine.poll_interval == 1.0
 
     def test_frozen(self) -> None:
         cfg = STS2Config()
