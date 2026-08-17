@@ -23,7 +23,7 @@ visual = [
     "opencv-python-headless>=4.10.0",
 ]
 dev = [
-    "ruff>=0.1.0",
+    "ruff>=0.99.0",
     "mypy>=1.0",
     "import-linter>=2.0",
     "pytest-mock>=3.0",
