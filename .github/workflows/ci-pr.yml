@@ -180,3 +180,4 @@ jobs:
           check "CLI integration" "${{ steps.cli_tests.outcome }}"
 
           exit "$failed"
+

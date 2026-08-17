@@ -61,3 +61,4 @@ def test_codeowners_covers_all_policy_patterns() -> None:
 def test_policy_change_template_exists() -> None:
     template = REPO_ROOT / ".github/PULL_REQUEST_TEMPLATE" / "policy_change.md"
     assert template.is_file(), "独立政策变更 PR 模板缺失"
+# 普通功能变更（探针）
