@@ -13,7 +13,9 @@ when they are not failures of this outer unit-test run.
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -22,11 +24,11 @@ from pathlib import Path
 JUNIT_PATH = Path("junit-unit.xml")
 PYTEST_OK = 0
 PYTEST_TESTS_FAILED = 1
+DEFAULT_BASELINE_JSON = Path(".github/pytest-baseline.json")
 
 
-def _load_baseline() -> set[str] | None:
-    baseline_path = Path(__file__).resolve().parents[1] / "pytest-baseline.json"
-    data = json.loads(baseline_path.read_text(encoding="utf-8"))
+def _load_baseline(baseline_json: Path) -> set[str] | None:
+    data = json.loads(baseline_json.read_text(encoding="utf-8"))
     platform_baseline = data.get(sys.platform)
     if platform_baseline is None:
         return None
@@ -115,8 +117,33 @@ def _classify(
     return new_failures, historical_failures, resolved_failures
 
 
-def main() -> int:
-    allowed = _load_baseline()
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--baseline-json",
+        type=Path,
+        default=None,
+        help=(
+            "允许失败清单路径；CI 必须显式传入 base SHA 版本（.ci-baseline/.github/pytest-baseline.json），"
+            "防止 PR 通过修改当前清单扩大允许范围。"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    baseline_json = args.baseline_json
+    if baseline_json is None:
+        # fail-closed：CI 场景未显式传参时直接失败，杜绝「修改当前清单即扩大允许范围」的退化路径；
+        # 本地便捷模式仅在明确无 CI 环境（无 GITHUB_ACTIONS）时回退到默认文件并告警。
+        if "GITHUB_ACTIONS" in os.environ:
+            print("::error::CI must pass --baseline-json (base SHA 版本).", file=sys.stderr)
+            return 2
+        baseline_json = DEFAULT_BASELINE_JSON
+        print(
+            f"WARNING: --baseline-json 未指定，使用当前工作区默认 {baseline_json}（本地模式）。",
+            file=sys.stderr,
+        )
+
+    allowed = _load_baseline(baseline_json)
     if allowed is None:
         print(f"::error::No unit-test baseline for platform: {sys.platform}")
         return 2
