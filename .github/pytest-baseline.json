@@ -1,11 +1,5 @@
 {
-  "darwin": [
-    "tests/unit/test_mcp_tools.py::TestCompileSpec::test_compile_spec_calls_generator",
-    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_returns_result",
-    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_timeout",
-    "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_reports_failure",
-    "tests/unit/test_smoke_card_validation.py::TestSmokeCardValidation::test_steam_desktop_fallback_can_start_steam_executable"
-  ],
+  "darwin": [],
   "linux": [
     "tests/unit/test_mcp_tools.py::TestCompileSpec::test_compile_spec_calls_generator",
     "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_returns_result",
