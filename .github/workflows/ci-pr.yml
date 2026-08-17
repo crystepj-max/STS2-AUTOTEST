@@ -49,6 +49,9 @@ jobs:
         run: |
           python3.11 -m venv .venv-ci
           .venv-ci/bin/python -m pip install -e ".[dev]"
+          # issue-21：固定 lint 工具版本（不带 --no-deps，保留 mypy 运行时依赖），
+          # 防止 PR 通过修改 pyproject.toml 依赖范围改变检查工具版本
+          .venv-ci/bin/python -m pip install -r .github/requirements-lint.txt --force-reinstall
           echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
 
       - name: Controlled timeout verification (issue-18)
@@ -88,14 +91,27 @@ jobs:
           print(f"CONTROLLED TIMEOUT OK: exit={result.returncode}, no residual process")
           PY
 
+      - name: Install baseline lint environment (issue-21)
+        # 基线独立 venv：用基线自身 dev 依赖 + 固定 lint 工具，隔离 PR 依赖变化对比较的污染
+        id: baseline_install
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3.11 -m venv .venv-baseline
+          cd .ci-baseline
+          ../.venv-baseline/bin/python -m pip install -e ".[dev]"
+          ../.venv-baseline/bin/python -m pip install -r ../.github/requirements-lint.txt --force-reinstall
+          cd ..
+
       - name: Check no new Ruff debt
         id: ruff
-        if: always() && steps.install.outcome == 'success'
+        if: always() && steps.baseline_install.outcome == 'success'
         continue-on-error: true
         # 兜底 step 上限须大于脚本最坏耗时（脚本对 baseline/current 各跑一次，
         # 单次上限 RUFF_TIMEOUT_SECONDS=600s），保证脚本自身先报 Timeout 而非被 step 硬杀
         timeout-minutes: 25
-        run: .venv-ci/bin/python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir .
+        # --ruff-bin/--baseline-ruff-bin 固定工具路径：基线用独立 venv 的 ruff（issue-21）
+        run: .venv-ci/bin/python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir . --ruff-bin .venv-ci/bin/ruff --baseline-ruff-bin .venv-baseline/bin/ruff
 
       - name: Run lint-imports
         id: imports
@@ -115,7 +131,8 @@ jobs:
         continue-on-error: true
         # 兜底 step 上限须大于脚本单次上限（PYTEST_TIMEOUT_SECONDS=1800s + 清理宽限）
         timeout-minutes: 35
-        run: .venv-ci/bin/python .github/scripts/check_pytest_baseline.py
+        # --baseline-json 必须指向 base SHA 版本，防止 PR 修改当前清单扩大允许失败范围（issue-21）
+        run: .venv-ci/bin/python .github/scripts/check_pytest_baseline.py --baseline-json .ci-baseline/.github/pytest-baseline.json
 
       - name: Verify real STS2 CLI is available
         id: cli_check
@@ -162,12 +179,13 @@ jobs:
 
       - name: Check no new mypy debt
         id: mypy
-        if: always() && steps.visual.outcome == 'success'
+        if: always() && steps.visual.outcome == 'success' && steps.baseline_install.outcome == 'success'
         continue-on-error: true
         # 兜底 step 上限须大于脚本最坏耗时（脚本对 baseline/current 各跑一次，
         # 单次上限 MYPY_TIMEOUT_SECONDS=900s），保证脚本自身先报 Timeout 而非被 step 硬杀
         timeout-minutes: 35
-        run: .venv-ci/bin/python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir .
+        # --config-file/--mypy-bin/--baseline-mypy-bin：政策配置与工具路径固定（issue-21）
+        run: .venv-ci/bin/python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir . --config-file .github/mypy-policy.ini --mypy-bin .venv-ci/bin/mypy --baseline-mypy-bin .venv-baseline/bin/mypy
 
       - name: Upload check logs (issue-18)
         # 超时时已产生的 stdout/stderr 与日志均落盘在 check log 中，随 artifact 保留供诊断。

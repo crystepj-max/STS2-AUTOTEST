@@ -24,12 +24,15 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install project
-        run: pip install -e ".[dev]"
+        run: |
+          pip install -e ".[dev]"
+          # issue-21：固定 lint 工具版本，防止检查工具版本漂移
+          pip install -r .github/requirements-lint.txt --force-reinstall
       - name: Run ${{ matrix.check }}
         run: |
           case "${{ matrix.check }}" in
             lint) ruff check src/ tests/ ;;
-            mypy) mypy src/sts2_autotest --strict ;;
+            mypy) mypy --config-file .github/mypy-policy.ini src/sts2_autotest ;;
             lint-imports) lint-imports ;;
             unit-test) python -m pytest tests/unit/ -v --junitxml=junit-unit.xml ;;
           esac

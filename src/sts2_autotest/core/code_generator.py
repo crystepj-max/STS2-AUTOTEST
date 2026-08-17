@@ -26,9 +26,9 @@ _ASSERTION_IMPORTS = (
     "game_reached_state",
     "give_card",
     "hand_size_changed_by",
+    "has_travelable_node",
     "minion_queue_ids_are",
     "no_crash_detected",
-    "has_travelable_node",
     "play_card",
     "player_block_increased_by",
     "player_energy_decreased_by",
@@ -43,27 +43,47 @@ _ASSERTION_IMPORTS = (
 
 
 def _build_import_block(body: str) -> str:
-    """只导入生成内容实际使用的名称，避免生成文件依赖无关功能。"""
-    imports: list[str] = []
+    """生成符合 Ruff I001 的 import 块。
+
+    只导入生成内容实际使用的名称，避免生成文件依赖无关功能。
+    import 按 Ruff isort 默认规则分组：标准库 → 第三方 → 本项目，
+    组内按模块路径字典序排列，组与组之间以空行分隔。
+    返回的块以单个换行结尾，调用方再以空行拼接函数体，
+    最终在 import 块与函数体之间保留两行空行（与 PR #11 清理后的产物一致）。
+    """
+    stdlib: list[str] = []
+    third_party: list[str] = []
+    first_party: list[str] = []
+
     if "json." in body:
-        imports.append("import json")
+        stdlib.append("import json")
     if "Path(" in body:
-        imports.append("from pathlib import Path")
+        stdlib.append("from pathlib import Path")
     if "pytest." in body:
-        imports.append("import pytest")
-    imports.append("from sts2_autotest.dsl.fluent import define")
-    used = [name for name in _ASSERTION_IMPORTS if f"{name}(" in body]
+        third_party.append("import pytest")
+
+    # 本项目 import 按模块路径字典序排列：common < core < dsl。
+    if "GameScreen." in body:
+        first_party.append("from sts2_autotest.common.state import GameScreen")
+    if "ActionDescriptor(" in body:
+        first_party.append("from sts2_autotest.core.action_model import ActionDescriptor")
+    used = sorted(name for name in _ASSERTION_IMPORTS if f"{name}(" in body)
     if used:
-        imports.append(
+        first_party.append(
             "from sts2_autotest.dsl.assertions import (\n"
             + "\n".join(f"    {name}," for name in used)
             + "\n)"
         )
-    if "GameScreen." in body:
-        imports.append("from sts2_autotest.common.state import GameScreen")
-    if "ActionDescriptor(" in body:
-        imports.append("from sts2_autotest.core.action_model import ActionDescriptor")
-    return "\n".join(imports)
+    first_party.append("from sts2_autotest.dsl.fluent import define")
+
+    lines: list[str] = []
+    for group in (stdlib, third_party, first_party):
+        if not group:
+            continue
+        if lines:
+            lines.append("")
+        lines.extend(group)
+    return "\n".join(lines) + "\n"
 
 
 _STEP_TO_ACTION: dict[str, str] = {

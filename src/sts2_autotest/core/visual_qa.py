@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import re
 import subprocess
 import time
@@ -309,7 +310,7 @@ class ScreenshotHealthDetector:
         if self._cv2_module != "auto":
             return self._cv2_module
         try:
-            import cv2
+            cv2 = importlib.import_module("cv2")
         except Exception:
             return None
         return cast(Cv2Module, cv2)
