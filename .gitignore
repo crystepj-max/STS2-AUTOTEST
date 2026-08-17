@@ -106,5 +106,9 @@ sts2-autotest.yml
 # CodeGraph 本地索引（代码地图缓存，不入库）
 .codegraph/
 
+# 本地 agent 记忆与配置（不随平台分发）
+.workbuddy/
+.serena/
+
 # Agent run 产物（开发工作流留痕，不入库）
 .agent-runs/

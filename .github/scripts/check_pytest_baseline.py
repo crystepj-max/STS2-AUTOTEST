@@ -98,6 +98,23 @@ def _run_pytest() -> int:
         return exit_code
 
 
+def _classify(
+    allowed: set[str],
+    current: set[str],
+) -> tuple[set[str], set[str], set[str]]:
+    """将历史允许失败清单与当前最终失败集比对，返回三类结果。
+
+    返回三元组 (新增, 仍存在, 已清偿)：
+    - 新增：当前失败但不在清单内，按新增回归处理并阻止合并；
+    - 仍存在：清单内且当前仍失败，属合法历史豁免；
+    - 已清偿：清单内但当前已恢复，须从清单同步移除（否则豁免继续生效）。
+    """
+    new_failures = current - allowed
+    historical_failures = current & allowed
+    resolved_failures = allowed - current
+    return new_failures, historical_failures, resolved_failures
+
+
 def main() -> int:
     allowed = _load_baseline()
     if allowed is None:
@@ -123,28 +140,41 @@ def main() -> int:
         print("::error::Pytest exited successfully but JUnit contains failed tests.")
         return 2
 
-    new_failures = current - allowed
-    resolved_failures = allowed - current
-    historical_failures = current & allowed
+    new_failures, historical_failures, resolved_failures = _classify(allowed, current)
+    effective_allowed = allowed - resolved_failures
 
     print(f"Unit-test platform: {sys.platform}")
-    print(f"Historical baseline: {len(allowed)} failed test(s)")
-    print(f"Current final failures: {len(current)}")
-    print(f"Still historical: {len(historical_failures)}")
-    print(f"Resolved by current code: {len(resolved_failures)}")
-    print(f"New final failures: {len(new_failures)}")
+    print(f"允许失败清单（历史）: {len(allowed)} 项")
+    print(f"有效允许集（历史 - 已清偿）: {len(effective_allowed)} 项")
+    print(f"当前最终失败: {len(current)} 项")
+    print(f"  新增（本次引入的失败，阻止合并）: {len(new_failures)} 项")
+    print(f"  仍存在（历史豁免且仍失败）: {len(historical_failures)} 项")
+    print(f"  已清偿（已恢复，须从清单移除）: {len(resolved_failures)} 项")
 
     if resolved_failures:
-        print("Resolved historical failures:")
+        print("清偿记录（已恢复的历史豁免，须从 .github/pytest-baseline.json 移除）:")
         for node_id in sorted(resolved_failures):
             print(f"  - {node_id}")
+
+    failed = False
 
     if new_failures:
         for node_id in sorted(new_failures):
             print(f"::error::New unit-test failure: {node_id}")
+        failed = True
+
+    if resolved_failures:
+        for node_id in sorted(resolved_failures):
+            print(
+                f"::error::Recovered historical failure still listed in baseline; "
+                f"remove it to expire the exemption: {node_id}"
+            )
+        failed = True
+
+    if failed:
         return 1
 
-    print("CI passed: this PR introduces no new final unit-test failures.")
+    print("CI passed: no new unit-test failures and no stale baseline items.")
     return 0
 
 
