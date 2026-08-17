@@ -80,11 +80,13 @@
 
 | 探针 | 模拟绕过 | 结果 | 证据 |
 |---|---|---|---|
-| A | 新增失败 + 扩大 `pytest-baseline.json` | 见探针 A 记录 | `.agent-runs/issue-21-bypass-probes/probe-a/` |
+| A | 新增失败 + 扩大 `pytest-baseline.json` | ✅ merge 被拒（CI 从 base SHA 识别新增失败） | `.agent-runs/issue-21-bypass-probes/probe-a/` |
 | B | 新增 `.ruff.toml` 降规则 | ✅ merge 被拒 | `.agent-runs/issue-21-bypass-probes/probe-b/` |
-| C | 修改 `mypy-policy.ini` 去 strict | （机制同 B，可选） | — |
-| D | 修改 `pyproject.toml` 升级依赖 | （机制同 B，可选） | — |
+| C | 修改 `mypy-policy.ini` 去 strict | ✅ merge 被拒（PR #47） | `.agent-runs/issue-21-bypass-probes/probe-c/` |
+| D | 修改 `pyproject.toml` 升级依赖 | ✅ merge 被拒 + CI 仍用固定版本（PR #48） | `.agent-runs/issue-21-bypass-probes/probe-d/` |
 | E | 功能变更 + 修改 `ci-pr.yml` 混合 | ✅ merge 被拒 | `.agent-runs/issue-21-bypass-probes/probe-e/` |
+
+> 探针 A–E 全部于 2026-08-17 验证通过：5 条绕过路径全部封闭。
 
 ## 7. 运行频率
 
@@ -96,4 +98,4 @@
 
 | 时间 | 操作 | 原因 | 授权 | 补验 |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-08-17 | 临时关闭 code owner review + 清空 status check → 合并 PR #46（治理文档）→ 立即恢复双层保护 | 单维护者无法自我审批政策文件；文档变更命中 paths-ignore 无 status check | crystepj-max（项目经理，方案 A） | 24h 内由后续 PR 通过 PR Check Summary 自然验证（详见 `.agent-runs/issue-21-bypass-probes/emergency-doc-merge/`） |
