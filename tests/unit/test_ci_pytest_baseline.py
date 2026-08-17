@@ -3,68 +3,68 @@
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
-_SCRIPT = Path(__file__).resolve().parents[2] / ".github/scripts/check_pytest_baseline.py"
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".github/scripts"
+_SCRIPT = _SCRIPTS_DIR / "check_pytest_baseline.py"
 _SPEC = importlib.util.spec_from_file_location("check_pytest_baseline_script", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 check_pytest_baseline = importlib.util.module_from_spec(_SPEC)
+# sys.modules 常驻条目是刻意的（脚本与 src/ 命名空间隔离，仓库内无同名模块）；
+# 若未来新增同名模块需改为 fixture 作用域化加载
 sys.modules[_SPEC.name] = check_pytest_baseline
+# 脚本内 `from runner_utils import ...` 需要 .github/scripts 在 sys.path 上
+sys.path.insert(0, str(_SCRIPTS_DIR))
 _SPEC.loader.exec_module(check_pytest_baseline)
+runner_utils = sys.modules["runner_utils"]
 
 
-def test_run_pytest_uses_separate_process(monkeypatch) -> None:
-    recorded: list[tuple[list[str], int]] = []
+def test_run_pytest_passes_command_to_run_timed(monkeypatch) -> None:
+    recorded: list[tuple[str, list[str], bool]] = []
 
-    class FakeProcess:
-        def wait(self) -> int:
-            return 1
+    def fake_run_timed(name: str, cmd: list[str], log_path, *, timeout: float, echo: bool):
+        recorded.append((name, cmd, echo))
+        return runner_utils.TimedResult(returncode=1, output="", error="", timed_out=False)
 
-    def fake_popen(command: list[str], *, creationflags: int) -> FakeProcess:
-        recorded.append((command, creationflags))
-        return FakeProcess()
+    monkeypatch.setattr(check_pytest_baseline, "run_timed", fake_run_timed)
 
-    monkeypatch.setattr(check_pytest_baseline.subprocess, "Popen", fake_popen)
-
-    assert check_pytest_baseline._run_pytest() == 1
-    assert recorded == [
-        (
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                "tests/unit/",
-                "-v",
-                f"--junitxml={check_pytest_baseline.JUNIT_PATH}",
-            ],
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        )
+    assert check_pytest_baseline._run_pytest() == (1, False)
+    name, cmd, echo = recorded[0]
+    assert name == "pytest"
+    assert echo is True
+    assert cmd == [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/unit/",
+        "-v",
+        f"--junitxml={check_pytest_baseline.JUNIT_PATH}",
     ]
 
 
-def test_run_pytest_uses_completed_child_status_after_late_interrupt(
-    monkeypatch,
-) -> None:
-    class FakeProcess:
-        def wait(self) -> int:
-            raise KeyboardInterrupt
+def test_run_pytest_reports_timeout_flag(monkeypatch) -> None:
+    def fake_run_timed(name: str, cmd: list[str], log_path, *, timeout: float, echo: bool):
+        return runner_utils.TimedResult(returncode=124, output="partial", error="", timed_out=True)
 
-        def poll(self) -> int:
-            return 1
+    monkeypatch.setattr(check_pytest_baseline, "run_timed", fake_run_timed)
 
-    monkeypatch.setattr(
-        check_pytest_baseline.subprocess,
-        "Popen",
-        lambda *args, **kwargs: FakeProcess(),
+    assert check_pytest_baseline._run_pytest() == (124, True)
+
+
+def test_main_returns_timeout_code_when_pytest_times_out(monkeypatch, tmp_path) -> None:
+    """pytest 超时时 main 返回 124，且不进入 baseline 比较。"""
+    # CI fail-closed（GITHUB_ACTIONS）分支要求显式 --baseline-json，测试必须传参
+    baseline_json = tmp_path / "pytest-baseline.json"
+    baseline_json.write_text('{"darwin": []}', encoding="utf-8")
+    monkeypatch.setattr(check_pytest_baseline, "_load_baseline", lambda baseline_json: set())
+    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: (0, True))
+
+    assert (
+        check_pytest_baseline.main(argv=["--baseline-json", str(baseline_json)])
+        == check_pytest_baseline.TIMEOUT_EXIT_CODE
+        == 124
     )
-    monkeypatch.setattr(check_pytest_baseline.sys, "platform", "linux")
-
-    with pytest.raises(KeyboardInterrupt):
-        check_pytest_baseline._run_pytest()
 
 
 def test_main_accepts_only_historical_failures(monkeypatch, tmp_path) -> None:
@@ -72,7 +72,7 @@ def test_main_accepts_only_historical_failures(monkeypatch, tmp_path) -> None:
     baseline_json = tmp_path / "pytest-baseline.json"
     baseline_json.write_text('{"darwin": []}', encoding="utf-8")
     monkeypatch.setattr(check_pytest_baseline, "_load_baseline", lambda baseline_json: historical)
-    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: 1)
+    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: (1, False))
     monkeypatch.setattr(
         check_pytest_baseline,
         "_load_final_failures",
@@ -126,7 +126,7 @@ def test_main_fails_when_recovered_item_not_removed_from_list(monkeypatch, capsy
     baseline_json = tmp_path / "pytest-baseline.json"
     baseline_json.write_text('{"darwin": []}', encoding="utf-8")
     monkeypatch.setattr(check_pytest_baseline, "_load_baseline", lambda baseline_json: allowed)
-    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: 0)
+    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: (0, False))
     monkeypatch.setattr(check_pytest_baseline, "_load_final_failures", lambda: current)
 
     assert check_pytest_baseline.main(argv=["--baseline-json", str(baseline_json)]) == 1
@@ -141,7 +141,7 @@ def test_main_accepts_when_recovered_item_removed_from_list(monkeypatch, tmp_pat
     baseline_json = tmp_path / "pytest-baseline.json"
     baseline_json.write_text('{"darwin": []}', encoding="utf-8")
     monkeypatch.setattr(check_pytest_baseline, "_load_baseline", lambda baseline_json: set())
-    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: 0)
+    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: (0, False))
     monkeypatch.setattr(check_pytest_baseline, "_load_final_failures", lambda: current)
 
     assert check_pytest_baseline.main(argv=["--baseline-json", str(baseline_json)]) == 0
@@ -163,7 +163,7 @@ def test_main_baseline_json_overrides_current_list(monkeypatch, tmp_path) -> Non
     baseline_json.write_text('{"darwin": []}', encoding="utf-8")
 
     monkeypatch.setattr(check_pytest_baseline.sys, "platform", "darwin")
-    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: 1)
+    monkeypatch.setattr(check_pytest_baseline, "_run_pytest", lambda: (1, False))
     # 实际失败包含新失败
     monkeypatch.setattr(
         check_pytest_baseline,

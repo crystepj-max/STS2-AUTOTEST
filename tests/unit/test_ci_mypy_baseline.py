@@ -7,12 +7,18 @@ import sys
 from pathlib import Path
 
 
-_SCRIPT = Path(__file__).resolve().parents[2] / ".github/scripts/check_mypy_baseline.py"
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".github/scripts"
+_SCRIPT = _SCRIPTS_DIR / "check_mypy_baseline.py"
 _SPEC = importlib.util.spec_from_file_location("check_mypy_baseline_script", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 check_mypy_baseline = importlib.util.module_from_spec(_SPEC)
+# sys.modules 常驻条目是刻意的（脚本与 src/ 命名空间隔离，仓库内无同名模块）；
+# 若未来新增同名模块需改为 fixture 作用域化加载
 sys.modules[_SPEC.name] = check_mypy_baseline
+# 脚本内 `from runner_utils import ...` 需要 .github/scripts 在 sys.path 上
+sys.path.insert(0, str(_SCRIPTS_DIR))
 _SPEC.loader.exec_module(check_mypy_baseline)
+runner_utils = sys.modules["runner_utils"]
 
 
 def test_run_mypy_uses_config_file_and_explicit_bin(monkeypatch) -> None:
@@ -20,13 +26,13 @@ def test_run_mypy_uses_config_file_and_explicit_bin(monkeypatch) -> None:
 
     recorded: list[list[str]] = []
 
-    def fake_run(command: list[str], **kwargs: object) -> object:
-        recorded.append(command)
-        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    def fake_run_timed(name: str, cmd: list[str], log_path, *, timeout: float, cwd):
+        recorded.append(cmd)
+        return runner_utils.TimedResult(returncode=0, output="", error="", timed_out=False)
 
-    monkeypatch.setattr(check_mypy_baseline.subprocess, "run", fake_run)
+    monkeypatch.setattr(check_mypy_baseline, "run_timed", fake_run_timed)
 
-    check_mypy_baseline._run_mypy(Path("."), "/fixed/bin/mypy", Path("/cfg/mypy-policy.ini"))
+    check_mypy_baseline._run_mypy(Path("."), "/fixed/bin/mypy", Path("/cfg/mypy-policy.ini"), timeout=10.0)
 
     assert recorded[0][0] == "/fixed/bin/mypy"
     assert recorded[0][1:3] == ["--config-file", "/cfg/mypy-policy.ini"]
@@ -45,11 +51,11 @@ def test_main_passes_config_and_separate_bins(monkeypatch, tmp_path) -> None:
 
     commands: list[list[str]] = []
 
-    def fake_run(command: list[str], **kwargs: object) -> object:
-        commands.append(command)
-        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+    def fake_run_timed(name: str, cmd: list[str], log_path, *, timeout: float, cwd):
+        commands.append(cmd)
+        return runner_utils.TimedResult(returncode=0, output="", error="", timed_out=False)
 
-    monkeypatch.setattr(check_mypy_baseline.subprocess, "run", fake_run)
+    monkeypatch.setattr(check_mypy_baseline, "run_timed", fake_run_timed)
 
     rc = check_mypy_baseline.main(
         argv=[

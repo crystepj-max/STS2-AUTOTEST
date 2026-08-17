@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
 
-_SCRIPT = Path(__file__).resolve().parents[2] / ".github/scripts/check_ruff_baseline.py"
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2] / ".github/scripts"
+_SCRIPT = _SCRIPTS_DIR / "check_ruff_baseline.py"
 _SPEC = importlib.util.spec_from_file_location("check_ruff_baseline_script", _SCRIPT)
 assert _SPEC is not None and _SPEC.loader is not None
 check_ruff_baseline = importlib.util.module_from_spec(_SPEC)
+# sys.modules 常驻条目是刻意的（脚本与 src/ 命名空间隔离，仓库内无同名模块）；
+# 若未来新增同名模块需改为 fixture 作用域化加载
 sys.modules[_SPEC.name] = check_ruff_baseline
+# 脚本内 `from runner_utils import ...` 需要 .github/scripts 在 sys.path 上
+sys.path.insert(0, str(_SCRIPTS_DIR))
 _SPEC.loader.exec_module(check_ruff_baseline)
+runner_utils = sys.modules["runner_utils"]
 
 
 def test_run_ruff_uses_explicit_bin(monkeypatch) -> None:
@@ -21,13 +26,13 @@ def test_run_ruff_uses_explicit_bin(monkeypatch) -> None:
 
     recorded: list[list[str]] = []
 
-    def fake_run(command: list[str], **kwargs: object) -> object:
-        recorded.append(command)
-        return type("Result", (), {"stderr": "", "stdout": json.dumps([])})()
+    def fake_run_timed(name: str, cmd: list[str], log_path, *, timeout: float, cwd):
+        recorded.append(cmd)
+        return runner_utils.TimedResult(returncode=0, output="[]", error="", timed_out=False)
 
-    monkeypatch.setattr(check_ruff_baseline.subprocess, "run", fake_run)
+    monkeypatch.setattr(check_ruff_baseline, "run_timed", fake_run_timed)
 
-    check_ruff_baseline._run_ruff(Path("."), "/fixed/bin/ruff")
+    check_ruff_baseline._run_ruff(Path("."), "/fixed/bin/ruff", timeout=10.0)
 
     assert recorded[0][0] == "/fixed/bin/ruff"
     assert recorded[0][1:4] == ["check", "src", "tests"]
@@ -84,11 +89,11 @@ def test_main_passes_separate_bins_to_baseline_and_current(monkeypatch, tmp_path
 
     commands: list[list[str]] = []
 
-    def fake_run(command: list[str], **kwargs: object) -> object:
-        commands.append(command)
-        return type("Result", (), {"stderr": "", "stdout": json.dumps([])})()
+    def fake_run_timed(name: str, cmd: list[str], log_path, *, timeout: float, cwd):
+        commands.append(cmd)
+        return runner_utils.TimedResult(returncode=0, output="[]", error="", timed_out=False)
 
-    monkeypatch.setattr(check_ruff_baseline.subprocess, "run", fake_run)
+    monkeypatch.setattr(check_ruff_baseline, "run_timed", fake_run_timed)
 
     rc = check_ruff_baseline.main(
         argv=[
