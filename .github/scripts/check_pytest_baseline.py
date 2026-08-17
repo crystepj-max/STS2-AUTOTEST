@@ -13,20 +13,25 @@ when they are not failures of this outer unit-test run.
 
 from __future__ import annotations
 
+import argparse
 import json
-import subprocess
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from runner_utils import TIMEOUT_EXIT_CODE, run_timed, timeout_from_env
+
 JUNIT_PATH = Path("junit-unit.xml")
+PYTEST_LOG_PATH = Path("pytest-check.log")
 PYTEST_OK = 0
 PYTEST_TESTS_FAILED = 1
+PYTEST_TIMEOUT_DEFAULT = 1800.0  # 30 分钟；可用环境变量 PYTEST_TIMEOUT_SECONDS 覆盖（受控验证用）
+DEFAULT_BASELINE_JSON = Path(".github/pytest-baseline.json")
 
 
-def _load_baseline() -> set[str] | None:
-    baseline_path = Path(__file__).resolve().parents[1] / "pytest-baseline.json"
-    data = json.loads(baseline_path.read_text(encoding="utf-8"))
+def _load_baseline(baseline_json: Path) -> set[str] | None:
+    data = json.loads(baseline_json.read_text(encoding="utf-8"))
     platform_baseline = data.get(sys.platform)
     if platform_baseline is None:
         return None
@@ -75,8 +80,14 @@ def _load_final_failures() -> set[str]:
     return failures
 
 
-def _run_pytest() -> int:
-    process = subprocess.Popen(
+def _run_pytest() -> tuple[int, bool]:
+    """运行单元测试；返回 (退出码, 是否超时)。
+
+    超时时子进程（含进程组）已被 run_timed 终止，部分输出保留在
+    pytest-check.log；调用方不再进入 baseline 比较。
+    """
+    result = run_timed(
+        "pytest",
         [
             sys.executable,
             "-m",
@@ -85,26 +96,70 @@ def _run_pytest() -> int:
             "-v",
             f"--junitxml={JUNIT_PATH}",
         ],
-        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        PYTEST_LOG_PATH,
+        timeout=timeout_from_env(PYTEST_TIMEOUT_DEFAULT, "PYTEST_TIMEOUT_SECONDS"),
+        echo=True,
     )
-    try:
-        return process.wait()
-    except KeyboardInterrupt:
-        if sys.platform != "win32":
-            raise
-        exit_code = process.poll()
-        if exit_code is None:
-            raise
-        return exit_code
+    return result.returncode, result.timed_out
 
 
-def main() -> int:
-    allowed = _load_baseline()
+def _classify(
+    allowed: set[str],
+    current: set[str],
+) -> tuple[set[str], set[str], set[str]]:
+    """将历史允许失败清单与当前最终失败集比对，返回三类结果。
+
+    返回三元组 (新增, 仍存在, 已清偿)：
+    - 新增：当前失败但不在清单内，按新增回归处理并阻止合并；
+    - 仍存在：清单内且当前仍失败，属合法历史豁免；
+    - 已清偿：清单内但当前已恢复，须从清单同步移除（否则豁免继续生效）。
+    """
+    new_failures = current - allowed
+    historical_failures = current & allowed
+    resolved_failures = allowed - current
+    return new_failures, historical_failures, resolved_failures
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--baseline-json",
+        type=Path,
+        default=None,
+        help=(
+            "允许失败清单路径；CI 必须显式传入 base SHA 版本（.ci-baseline/.github/pytest-baseline.json），"
+            "防止 PR 通过修改当前清单扩大允许范围。"
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    baseline_json = args.baseline_json
+    if baseline_json is None:
+        # fail-closed：CI 场景未显式传参时直接失败，杜绝「修改当前清单即扩大允许范围」的退化路径；
+        # 本地便捷模式仅在明确无 CI 环境（无 GITHUB_ACTIONS）时回退到默认文件并告警。
+        if "GITHUB_ACTIONS" in os.environ:
+            print("::error::CI must pass --baseline-json (base SHA 版本).", file=sys.stderr)
+            return 2
+        baseline_json = DEFAULT_BASELINE_JSON
+        print(
+            f"WARNING: --baseline-json 未指定，使用当前工作区默认 {baseline_json}（本地模式）。",
+            file=sys.stderr,
+        )
+
+    allowed = _load_baseline(baseline_json)
     if allowed is None:
         print(f"::error::No unit-test baseline for platform: {sys.platform}")
         return 2
 
-    exit_code = _run_pytest()
+    exit_code, timed_out = _run_pytest()
+
+    if timed_out:
+        print(
+            "::error::Unit tests timed out; partial JUnit may exist — "
+            f"see {PYTEST_LOG_PATH} for diagnostics",
+            file=sys.stderr,
+        )
+        return TIMEOUT_EXIT_CODE
 
     if exit_code not in (PYTEST_OK, PYTEST_TESTS_FAILED):
         print(f"::error::Pytest exited with collection/infrastructure error: {exit_code}")
@@ -123,28 +178,41 @@ def main() -> int:
         print("::error::Pytest exited successfully but JUnit contains failed tests.")
         return 2
 
-    new_failures = current - allowed
-    resolved_failures = allowed - current
-    historical_failures = current & allowed
+    new_failures, historical_failures, resolved_failures = _classify(allowed, current)
+    effective_allowed = allowed - resolved_failures
 
     print(f"Unit-test platform: {sys.platform}")
-    print(f"Historical baseline: {len(allowed)} failed test(s)")
-    print(f"Current final failures: {len(current)}")
-    print(f"Still historical: {len(historical_failures)}")
-    print(f"Resolved by current code: {len(resolved_failures)}")
-    print(f"New final failures: {len(new_failures)}")
+    print(f"允许失败清单（历史）: {len(allowed)} 项")
+    print(f"有效允许集（历史 - 已清偿）: {len(effective_allowed)} 项")
+    print(f"当前最终失败: {len(current)} 项")
+    print(f"  新增（本次引入的失败，阻止合并）: {len(new_failures)} 项")
+    print(f"  仍存在（历史豁免且仍失败）: {len(historical_failures)} 项")
+    print(f"  已清偿（已恢复，须从清单移除）: {len(resolved_failures)} 项")
 
     if resolved_failures:
-        print("Resolved historical failures:")
+        print("清偿记录（已恢复的历史豁免，须从 .github/pytest-baseline.json 移除）:")
         for node_id in sorted(resolved_failures):
             print(f"  - {node_id}")
+
+    failed = False
 
     if new_failures:
         for node_id in sorted(new_failures):
             print(f"::error::New unit-test failure: {node_id}")
+        failed = True
+
+    if resolved_failures:
+        for node_id in sorted(resolved_failures):
+            print(
+                f"::error::Recovered historical failure still listed in baseline; "
+                f"remove it to expire the exemption: {node_id}"
+            )
+        failed = True
+
+    if failed:
         return 1
 
-    print("CI passed: this PR introduces no new final unit-test failures.")
+    print("CI passed: no new unit-test failures and no stale baseline items.")
     return 0
 
 

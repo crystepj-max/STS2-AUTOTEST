@@ -93,6 +93,12 @@ _bmad-output/
 .external/
 tests/output/
 
+# CI baseline 脚本生成的超时/检查日志（issue #18，随 artifact 保留，不入库）
+/ruff-check.log
+/mypy-check.log
+/pytest-check.log
+/timeout-demo.log
+
 # Superpowers brainstorming artifacts
 .superpowers/
 
@@ -109,3 +115,6 @@ sts2-autotest.yml
 # 本地 agent 记忆与配置（不随平台分发）
 .workbuddy/
 .serena/
+
+# Agent run 产物（开发工作流留痕，不入库）
+.agent-runs/

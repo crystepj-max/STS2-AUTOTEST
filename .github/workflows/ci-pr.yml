@@ -16,7 +16,10 @@ jobs:
   validation:
     name: PR Check Summary
     runs-on: ["self-hosted", "macos", "autotest"]
-    timeout-minutes: 45
+    # job 级兜底须 ≥ 各 step 兜底上限之和（ruff 25 + unit 35 + mypy 35 = 95min
+    # + 安装/集成等步骤），否则多检查同时接近上限时 job 被平台硬杀，
+    # summary 与 check-logs 上传均不执行，Timeout 呈现和输出保留同时失效
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
@@ -46,13 +49,69 @@ jobs:
         run: |
           python3.11 -m venv .venv-ci
           .venv-ci/bin/python -m pip install -e ".[dev]"
+          # issue-21：固定 lint 工具版本（不带 --no-deps，保留 mypy 运行时依赖），
+          # 防止 PR 通过修改 pyproject.toml 依赖范围改变检查工具版本
+          .venv-ci/bin/python -m pip install -r .github/requirements-lint.txt --force-reinstall
           echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+
+      - name: Controlled timeout verification (issue-18)
+        # 受控超时验证：以 2 秒上限运行 300 秒 sleep，断言 timed_out 且进程无残留。
+        # 证明超时机制在真实 runner 上能终止进程，且本步骤之后的检查仍可继续运行。
+        # 若 kill 失效（残留进程存活），此步骤失败并阻断 PR。
+        id: timeout_demo
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          .venv-ci/bin/python - <<'PY'
+          import sys
+          import time
+
+          sys.path.insert(0, ".github/scripts")
+          import psutil
+          from runner_utils import run_timed
+
+          result = run_timed(
+              "timeout-demo",
+              [
+                  sys.executable,
+                  "-c",
+                  "import os, time; print('DEMO_PID=' + str(os.getpid()), flush=True); time.sleep(300)",
+              ],
+              "timeout-demo.log",
+              timeout=2,
+          )
+          if not result.timed_out:
+              raise SystemExit(f"controlled timeout failed: no TIMEOUT (rc={result.returncode})")
+          pid = int(next(line.split("=", 1)[1] for line in result.output.splitlines() if line.startswith("DEMO_PID=")))
+          deadline = time.monotonic() + 10
+          while psutil.pid_exists(pid) and time.monotonic() < deadline:
+              time.sleep(0.1)
+          if psutil.pid_exists(pid):
+              raise SystemExit(f"controlled timeout failed: child {pid} still alive")
+          print(f"CONTROLLED TIMEOUT OK: exit={result.returncode}, no residual process")
+          PY
+
+      - name: Install baseline lint environment (issue-21)
+        # 基线独立 venv：用基线自身 dev 依赖 + 固定 lint 工具，隔离 PR 依赖变化对比较的污染
+        id: baseline_install
+        if: always() && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3.11 -m venv .venv-baseline
+          cd .ci-baseline
+          ../.venv-baseline/bin/python -m pip install -e ".[dev]"
+          ../.venv-baseline/bin/python -m pip install -r ../.github/requirements-lint.txt --force-reinstall
+          cd ..
 
       - name: Check no new Ruff debt
         id: ruff
-        if: always() && steps.install.outcome == 'success'
+        if: always() && steps.baseline_install.outcome == 'success'
         continue-on-error: true
-        run: .venv-ci/bin/python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir .
+        # 兜底 step 上限须大于脚本最坏耗时（脚本对 baseline/current 各跑一次，
+        # 单次上限 RUFF_TIMEOUT_SECONDS=600s），保证脚本自身先报 Timeout 而非被 step 硬杀
+        timeout-minutes: 25
+        # --ruff-bin/--baseline-ruff-bin 固定工具路径：基线用独立 venv 的 ruff（issue-21）
+        run: .venv-ci/bin/python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir . --ruff-bin .venv-ci/bin/ruff --baseline-ruff-bin .venv-baseline/bin/ruff
 
       - name: Run lint-imports
         id: imports
@@ -70,7 +129,10 @@ jobs:
         id: unit
         if: always() && steps.install.outcome == 'success'
         continue-on-error: true
-        run: .venv-ci/bin/python .github/scripts/check_pytest_baseline.py
+        # 兜底 step 上限须大于脚本单次上限（PYTEST_TIMEOUT_SECONDS=1800s + 清理宽限）
+        timeout-minutes: 35
+        # --baseline-json 必须指向 base SHA 版本，防止 PR 修改当前清单扩大允许失败范围（issue-21）
+        run: .venv-ci/bin/python .github/scripts/check_pytest_baseline.py --baseline-json .ci-baseline/.github/pytest-baseline.json
 
       - name: Verify real STS2 CLI is available
         id: cli_check
@@ -117,9 +179,28 @@ jobs:
 
       - name: Check no new mypy debt
         id: mypy
-        if: always() && steps.visual.outcome == 'success'
+        if: always() && steps.visual.outcome == 'success' && steps.baseline_install.outcome == 'success'
         continue-on-error: true
-        run: .venv-ci/bin/python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir .
+        # 兜底 step 上限须大于脚本最坏耗时（脚本对 baseline/current 各跑一次，
+        # 单次上限 MYPY_TIMEOUT_SECONDS=900s），保证脚本自身先报 Timeout 而非被 step 硬杀
+        timeout-minutes: 35
+        # --config-file/--mypy-bin/--baseline-mypy-bin：政策配置与工具路径固定（issue-21）
+        run: .venv-ci/bin/python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir . --config-file .github/mypy-policy.ini --mypy-bin .venv-ci/bin/mypy --baseline-mypy-bin .venv-baseline/bin/mypy
+
+      - name: Upload check logs (issue-18)
+        # 超时时已产生的 stdout/stderr 与日志均落盘在 check log 中，随 artifact 保留供诊断。
+        # 必须晚于所有产生日志的步骤（mypy 依赖 visual 排在更后）：上传发生在
+        # mypy 之前会导致 mypy-check.log 永不进入 artifact，mypy 超时诊断输出完全丢失。
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs
+          path: |
+            ruff-check.log
+            mypy-check.log
+            pytest-check.log
+            timeout-demo.log
 
       - name: Generate summary
         if: always()
@@ -132,11 +213,29 @@ jobs:
           echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Python 3.11 | ${{ steps.python.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Install dev dependencies | ${{ steps.install.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Ruff baseline | ${{ steps.ruff.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| mypy baseline | ${{ steps.mypy.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          # 脚本超时（exit 124）会写入 GITHUB_OUTPUT timeout=true，与普通质量失败区分
+          if [ "${{ steps.timeout_demo.outcome }}" = "success" ]; then
+            echo "| Controlled timeout verification | OK (timed out as expected) |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Controlled timeout verification | ${{ steps.timeout_demo.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "${{ steps.ruff.outputs.timeout }}" = "true" ]; then
+            echo "| Ruff baseline | Timeout (124) |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Ruff baseline | ${{ steps.ruff.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "${{ steps.mypy.outputs.timeout }}" = "true" ]; then
+            echo "| mypy baseline | Timeout (124) |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| mypy baseline | ${{ steps.mypy.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "| Import layer | ${{ steps.imports.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Runner script tests | ${{ steps.script_tests.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Unit tests | ${{ steps.unit.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.unit.outputs.timeout }}" = "true" ]; then
+            echo "| Unit tests | Timeout (124) |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Unit tests | ${{ steps.unit.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "| Real STS2 CLI discovery | ${{ steps.cli_check.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| CLI integration | ${{ steps.cli_tests.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
 
@@ -152,14 +251,29 @@ jobs:
               failed=1
             fi
           }
+          # 超时失败同样视为验收失败，但错误信息明确包含 Timeout 而非普通质量失败
+          check_timeout() {
+            name="$1"
+            outcome="$2"
+            marker="$3"
+            if [ "$outcome" != "success" ]; then
+              if [ "$marker" = "true" ]; then
+                echo "::error::$name TIMEOUT: exceeded time limit (exit 124); partial output in check-logs artifact"
+              else
+                echo "::error::$name outcome: $outcome"
+              fi
+              failed=1
+            fi
+          }
 
           check "Python 3.11" "${{ steps.python.outcome }}"
           check "Install dev dependencies" "${{ steps.install.outcome }}"
-          check "Ruff baseline" "${{ steps.ruff.outcome }}"
-          check "mypy baseline" "${{ steps.mypy.outcome }}"
+          check "Controlled timeout verification" "${{ steps.timeout_demo.outcome }}"
+          check_timeout "Ruff baseline" "${{ steps.ruff.outcome }}" "${{ steps.ruff.outputs.timeout }}"
+          check_timeout "mypy baseline" "${{ steps.mypy.outcome }}" "${{ steps.mypy.outputs.timeout }}"
           check "Import layer" "${{ steps.imports.outcome }}"
           check "Runner script tests" "${{ steps.script_tests.outcome }}"
-          check "Unit tests" "${{ steps.unit.outcome }}"
+          check_timeout "Unit tests" "${{ steps.unit.outcome }}" "${{ steps.unit.outputs.timeout }}"
           check "Real STS2 CLI discovery" "${{ steps.cli_check.outcome }}"
           check "CLI integration" "${{ steps.cli_tests.outcome }}"
 
