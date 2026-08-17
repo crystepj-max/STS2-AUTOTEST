@@ -357,7 +357,7 @@ class TestCodeGenerator:
         assert "player_hp_changed_by(1)" in code
         assert "# TODO: implement assertion" not in code
 
-    def test_generate_case_test_maps_rest_assertion(self) -> None:
+    def test_generate_case_test_maps_rest_navigation_assertions(self) -> None:
         spec = TestSpec(
             id="TC-GAWAIN-NAVIGATE-TO-REST",
             title="Gawain rest navigation",

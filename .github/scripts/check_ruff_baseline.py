@@ -18,10 +18,36 @@ from typing import Any
 IssueKey = tuple[str, str, str, str]
 
 
-def _run_ruff(root: Path) -> list[dict[str, Any]]:
+def _resolve_tool_bin(bin_arg: str | None, name: str) -> str:
+    """解析工具可执行文件路径：显式传入优先；否则从当前 Python 同 venv 推导（Unix bin/、Windows Scripts/），最后回退 PATH。
+
+    注意：不用 resolve() 展开符号链接——.venv/bin/python 常是指向 uv/pyenv 缓存的链接，
+    resolve 后会偏离 venv 目录，导致推导不到同 venv 工具。
+    """
+    if bin_arg:
+        return _absolute_bin(bin_arg)
+    python_dir = Path(sys.executable).parent
+    for candidate in (python_dir / name, python_dir / f"{name}.exe"):
+        if candidate.is_file():
+            return str(candidate)
+    return name
+
+
+def _absolute_bin(bin_path: str) -> str:
+    """把含路径分隔符的相对路径转成绝对路径（基于当前工作目录）。
+
+    基线比较时子进程的 cwd 是基线目录，相对 bin 路径会在错误的目录下解析，
+    因此任何含分隔符的路径都必须先转绝对；纯命令名（无分隔符）保持 PATH 解析。
+    """
+    if "/" in bin_path or "\\" in bin_path:
+        return str(Path(bin_path).resolve())
+    return bin_path
+
+
+def _run_ruff(root: Path, bin_path: str) -> list[dict[str, Any]]:
     result = subprocess.run(
         [
-            "ruff",
+            bin_path,
             "check",
             "src",
             "tests",
@@ -36,7 +62,8 @@ def _run_ruff(root: Path) -> list[dict[str, Any]]:
     )
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
-    return json.loads(result.stdout)
+    payload: Any = json.loads(result.stdout)
+    return list(payload)
 
 
 def _relative_path(root: Path, filename: str) -> str:
@@ -113,17 +140,30 @@ def _print_new_findings(
             print(f"  {source}")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-dir", type=Path, required=True)
     parser.add_argument("--current-dir", type=Path, required=True)
-    args = parser.parse_args()
+    parser.add_argument(
+        "--ruff-bin",
+        default=None,
+        help="当前目录使用的 ruff 可执行文件（默认从当前 Python venv 推导，回退 PATH）。",
+    )
+    parser.add_argument(
+        "--baseline-ruff-bin",
+        default=None,
+        help="基线目录使用的 ruff 可执行文件（默认同 --ruff-bin）。",
+    )
+    args = parser.parse_args(argv)
 
     baseline_dir = args.baseline_dir.resolve()
     current_dir = args.current_dir.resolve()
 
-    baseline_findings = _run_ruff(baseline_dir)
-    current_findings = _run_ruff(current_dir)
+    ruff_bin = _resolve_tool_bin(args.ruff_bin, "ruff")
+    baseline_ruff_bin = _resolve_tool_bin(args.baseline_ruff_bin or args.ruff_bin, "ruff")
+
+    baseline_findings = _run_ruff(baseline_dir, baseline_ruff_bin)
+    current_findings = _run_ruff(current_dir, ruff_bin)
     baseline_counts, _ = _fingerprints(baseline_dir, baseline_findings)
     current_counts, current_details = _fingerprints(current_dir, current_findings)
 

@@ -1,6 +1,6 @@
 """Core orchestration and state management for STS2-AUTOTEST."""
 
-from sts2_autotest.core.action_model import ActionDescriptor, TestResult
+from sts2_autotest.core.action_model import ActionDescriptor
 from sts2_autotest.core.evidence_hooks import RealEvidenceHooks, StubEvidenceHooks
 from sts2_autotest.core.journeys import GenericJourneys, JourneyFailure
 from sts2_autotest.core.lifecycle import GameLifecycleManager
