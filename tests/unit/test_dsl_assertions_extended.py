@@ -26,12 +26,12 @@ class TestNoCrashDetected:
 class TestHasTravelableNode:
     def test_has_travelable_nodes(self) -> None:
         state = GameState(screen=GameScreen.MAP, travelable_nodes=[1, 2, 3])
-        ok, msg = has_travelable_node()(state)
+        ok, _ = has_travelable_node()(state)
         assert ok
 
     def test_no_travelable_nodes(self) -> None:
         state = GameState(screen=GameScreen.MAP, travelable_nodes=[])
-        ok, msg = has_travelable_node()(state)
+        ok, _ = has_travelable_node()(state)
         assert not ok
 
     def test_travelable_nodes_not_in_state(self) -> None:

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -21,7 +20,6 @@ from sts2_autotest.core.markdown_parser import MarkdownParser
 
 class WorkspaceError(Exception):
     """Raised when workspace configuration cannot be loaded or parsed."""
-    pass
 
 
 class Workspace:
@@ -149,7 +147,7 @@ class Workspace:
     def projects(self) -> list[ProjectConfig]:
         return list(self._projects.values())
 
-    def resolve_project(self, name: str) -> Optional[ProjectConfig]:
+    def resolve_project(self, name: str) -> ProjectConfig | None:
         """Find a project by name. Returns None if not found."""
         return self._projects.get(name)
 

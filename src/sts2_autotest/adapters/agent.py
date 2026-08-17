@@ -1098,13 +1098,13 @@ class AgentAdapter:
         if self._client is not None:
             try:
                 await asyncio.wait_for(self._client.aclose(), timeout=10)
-            except (asyncio.TimeoutError, Exception) as exc:
+            except (TimeoutError, Exception) as exc:
                 logger.debug("Error closing HTTP client: %s", exc)
             self._client = None
         if self._mcp_client is not None:
             try:
                 await asyncio.wait_for(self._mcp_client.aclose(), timeout=10)
-            except (asyncio.TimeoutError, Exception) as exc:
+            except (TimeoutError, Exception) as exc:
                 logger.debug("Error closing MCP client: %s", exc)
             self._mcp_client = None
 

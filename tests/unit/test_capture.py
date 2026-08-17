@@ -196,13 +196,13 @@ class TestScreenCaptureFromConfig:
         cfg_strict = FrameworkConfig(screenshot_rgb_threshold=10)
         sc = ScreenCapture.from_config(tmp_path, cfg_strict)
         bgra = _make_bgra_varied(num_colors=3)
-        ok, count = sc._count_distinct_rgb(bgra)
+        ok, _ = sc._count_distinct_rgb(bgra)
         assert not ok  # 3 distinct colors < threshold 10
 
         # Use default threshold — same image should pass
         cfg_default = FrameworkConfig()
         sc2 = ScreenCapture.from_config(tmp_path, cfg_default)
-        ok2, count2 = sc2._count_distinct_rgb(bgra)
+        ok2, _ = sc2._count_distinct_rgb(bgra)
         assert ok2  # 3 distinct colors >= threshold 3
 
     def test_custom_resolution_affects_check(self, tmp_path: Path) -> None:
@@ -877,7 +877,7 @@ class TestMacOSOffscreenGuard:
             assert _ensure_macos_window_onscreen(1231) is False
 
     def test_capture_refuses_stale_frame_for_offscreen_window(self, tmp_path: Path) -> None:
-        import sts2_autotest.evidence.capture as capture
+        from sts2_autotest.evidence import capture
 
         target = tmp_path / "event.jpg"
         with patch.object(capture, "_find_macos_window", return_value=(1231, (0, 0, 1504, 846))), \

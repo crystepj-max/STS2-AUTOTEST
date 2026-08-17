@@ -146,7 +146,7 @@ class TestPersistentRunTools:
 
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_submit_run_persists_and_is_idempotent(self, mock_worker, monkeypatch, tmp_path):
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run
@@ -169,7 +169,7 @@ class TestPersistentRunTools:
 
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_submit_suite_does_not_append_all_target(self, mock_worker, monkeypatch, tmp_path):
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run
@@ -212,7 +212,7 @@ class TestPersistentRunTools:
 
     def test_submit_rejects_directory_project_outside_allowed_roots(self, monkeypatch, tmp_path):
         """目录型 project 必须位于允许范围内（与 spec_dir 同一白名单）。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
         from sts2_autotest.cli.mcp_tools import handle_submit_run
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
@@ -227,7 +227,7 @@ class TestPersistentRunTools:
 
     def test_submit_rejects_project_config_outside_allowed_roots(self, monkeypatch, tmp_path):
         """项目声明指向的配置文件越出允许范围时同样拒绝。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
         from sts2_autotest.cli.mcp_tools import handle_submit_run
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
@@ -249,7 +249,7 @@ class TestPersistentRunTools:
 
     def test_run_tests_in_dir_injects_project_dir_env(self, monkeypatch, tmp_path):
         """执行生成测试时，项目上下文经 STS2_PROJECT_DIR 传入子进程。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         captured: dict = {}
 
@@ -274,7 +274,7 @@ class TestPersistentRunTools:
         assert captured["env"]["STS2_PROJECT_DIR"] == str(project_dir.resolve())
 
     def test_run_tests_in_dir_without_project_keeps_default_env(self, monkeypatch, tmp_path):
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         captured: dict = {}
 
@@ -295,7 +295,7 @@ class TestPersistentRunTools:
 
     def test_submit_rejects_declared_spec_outside_allowed_roots(self, monkeypatch, tmp_path):
         """项目声明的规格目录指向允许范围外时拒绝（白名单覆盖声明内部路径）。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
         from sts2_autotest.cli.mcp_tools import handle_submit_run
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
@@ -319,7 +319,7 @@ class TestPersistentRunTools:
 
     def test_submit_rejects_declared_output_outside_allowed_roots(self, monkeypatch, tmp_path):
         """项目声明的输出目录指向允许范围外时拒绝。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
         from sts2_autotest.cli.mcp_tools import handle_submit_run
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
@@ -343,7 +343,7 @@ class TestPersistentRunTools:
 
     def test_run_test_rejects_project_outside_allowed_roots(self, monkeypatch, tmp_path):
         """run_test 与 submit_run 同一校验：白名单外项目目录拒绝。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
         from sts2_autotest.cli.mcp_tools import handle_run_test
 
         allowed = tmp_path / "allowed"
@@ -359,7 +359,7 @@ class TestPersistentRunTools:
 
     def test_run_test_rejects_unresolvable_project_name(self, monkeypatch, tmp_path):
         """无法解析的登记名称结构化失败（PROJECT_CONFIG_INVALID），不静默中性执行。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
         from sts2_autotest.cli.mcp_tools import handle_run_test
 
         monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
@@ -372,7 +372,7 @@ class TestPersistentRunTools:
 
     def test_registered_project_is_validated_after_resolution(self, monkeypatch, tmp_path):
         """登记名称解析出的真实目录同样必须位于允许范围内。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
         from sts2_autotest.cli.mcp_tools import handle_run_test
 
         allowed = tmp_path / "allowed"
@@ -392,7 +392,7 @@ class TestPersistentRunTools:
 
     def test_all_public_project_entries_reject_unknown_name(self, monkeypatch, tmp_path):
         """提交、编译、执行、完整流水线对未知项目使用同一结构化失败。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
         monkeypatch.chdir(tmp_path)
@@ -432,7 +432,7 @@ class TestPersistentRunTools:
 
     def test_run_pipeline_passes_project_to_compile_and_run(self, monkeypatch, tmp_path) -> None:
         """Agent 完整流程：project 贯穿编译（别名）与执行（项目上下文）。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [tmp_path])
         monkeypatch.delenv("STS2_PROJECT__CHARACTER_ALIASES", raising=False)
@@ -481,7 +481,7 @@ class TestPersistentRunTools:
 
     @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
     def test_resume_run_preserves_resume_mode_in_worker_argv(self, mock_worker, monkeypatch, tmp_path):
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import (
@@ -509,7 +509,7 @@ class TestPersistentRunTools:
         self, mock_worker, monkeypatch, tmp_path
     ):
         """修复四：原任务还在跑（未终态/证据未封存）时，恢复必须被拒。"""
-        import sts2_autotest.cli.mcp_tools as mcp_tools
+        from sts2_autotest.cli import mcp_tools
 
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_protocol import McpError

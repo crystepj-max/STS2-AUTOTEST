@@ -54,7 +54,7 @@ async def _parse_http_request(
     raw = b""
     try:
         raw = await asyncio.wait_for(reader.readline(), timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         raise ValueError("Request timeout")
 
     if not raw:

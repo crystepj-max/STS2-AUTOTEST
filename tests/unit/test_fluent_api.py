@@ -282,7 +282,7 @@ class TestAssertionFunctions:
 
     def test_game_reached_state_match(self) -> None:
         fn = game_reached_state(GameScreen.MAP)
-        ok, msg = fn(GameState(screen=GameScreen.MAP))
+        ok, _ = fn(GameState(screen=GameScreen.MAP))
         assert ok is True
 
     def test_game_reached_state_mismatch(self) -> None:
