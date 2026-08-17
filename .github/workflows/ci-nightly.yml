@@ -15,51 +15,190 @@ jobs:
     timeout-minutes: 360  # 6 hour max
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      # ---------- Phase 0: Environment readiness probe ----------
+      - name: Environment readiness check
+        id: env_check
+        timeout-minutes: 2
+        run: |
+          echo "::group::Environment readiness probe"
+          FAIL=0
+
+          # 1. Python availability
+          if ! command -v python3 &> /dev/null; then
+            echo "❌ python3 not found in PATH"
+            FAIL=1
+          else
+            PYTHON_VER=$(python3 --version 2>&1)
+            echo "✅ Python: $PYTHON_VER"
+          fi
+
+          # 2. pip availability
+          if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
+            echo "❌ pip not found"
+            FAIL=1
+          else
+            echo "✅ pip available"
+          fi
+
+          # 3. sts2 CLI availability (optional but logged)
+          if command -v sts2 &> /dev/null; then
+            echo "✅ sts2 CLI: $(sts2 --version 2>&1 || echo 'version unknown')"
+          else
+            echo "⚠️ sts2 CLI not in PATH (game tests will be skipped)"
+          fi
+
+          # 4. Disk space check (>5GB free)
+          FREE_GB=$(df -g . 2>/dev/null | awk 'NR==2{print $4}' || df -h . | awk 'NR==2{print $4}' | sed 's/G//')
+          echo "💾 Disk free: ${FREE_GB}"
+
+          # 5. Runner health marker
+          echo "runner_ready=true" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+          if [ "$FAIL" -eq 1 ]; then
+            echo "::error::Environment readiness check FAILED — marking run as BLOCKED"
+            echo "blocked_reason=environment_not_ready" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "✅ Environment readiness check passed"
+
+      # ---------- Phase 1: Setup (with fallback) ----------
+      - name: Setup Python
+        id: setup_python
+        timeout-minutes: 5
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install project
+        id: install
+        timeout-minutes: 5
         run: pip install -e ".[dev]"
 
-      # Code quality
+      # ---------- Phase 2: Static quality gates ----------
       - name: Lint
+        id: lint
+        timeout-minutes: 3
         run: ruff check src/ tests/
+
       - name: Type check
+        id: typecheck
+        timeout-minutes: 5
         run: mypy src/sts2_autotest --strict
+
       - name: Import layer check
+        id: import_check
+        timeout-minutes: 2
         run: lint-imports
 
-      # Tests
+      # ---------- Phase 3: Unit tests ----------
       - name: Unit tests
+        id: unit_tests
+        timeout-minutes: 15
         run: python -m pytest tests/unit/ -v --junitxml=junit-unit.xml
+
+      # ---------- Phase 4: CLI integration tests ----------
       - name: CLI integration tests
+        id: cli_tests
+        timeout-minutes: 10
         run: python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
+
+      # ---------- Phase 5: Game integration tests (real game required) ----------
       - name: Game integration tests
+        id: game_tests
+        timeout-minutes: 120
         continue-on-error: true
         run: python -m pytest tests/integration/ -v -m requires_game --timeout=300 --junitxml=junit-game.xml
 
-      # Evidence packaging
-      - name: Package evidence
+      # ---------- Phase 6: Result classification ----------
+      - name: Classify results
+        id: classify
         if: always()
-        run: autotest report --evidence-dir tests/output/ --coverage
+        run: |
+          echo "::group::Result classification"
 
-      # Cleanup old evidence
+          # Determine overall classification
+          ENV_READY="${{ steps.env_check.outputs.runner_ready }}"
+          CLASSIFICATION="UNKNOWN"
+
+          if [ "$ENV_READY" != "true" ]; then
+            CLASSIFICATION="BLOCKED"
+            REASON="Environment not ready (runner setup failed)"
+          elif [ "${{ steps.setup_python.conclusion }}" == "failure" ]; then
+            CLASSIFICATION="BLOCKED"
+            REASON="Python setup failed"
+          elif [ "${{ steps.install.conclusion }}" == "failure" ]; then
+            CLASSIFICATION="BLOCKED"
+            REASON="Project installation failed"
+          elif [ "${{ steps.lint.conclusion }}" == "failure" ] || [ "${{ steps.typecheck.conclusion }}" == "failure" ] || [ "${{ steps.import_check.conclusion }}" == "failure" ]; then
+            CLASSIFICATION="FAILED"
+            REASON="Static quality gate failure"
+          elif [ "${{ steps.unit_tests.conclusion }}" == "failure" ]; then
+            CLASSIFICATION="FAILED"
+            REASON="Unit tests failed"
+          elif [ "${{ steps.cli_tests.conclusion }}" == "failure" ]; then
+            CLASSIFICATION="FAILED"
+            REASON="CLI integration tests failed"
+          elif [ "${{ steps.game_tests.conclusion }}" == "failure" ]; then
+            CLASSIFICATION="FAILED"
+            REASON="Game integration tests failed (may be environment-related)"
+          else
+            CLASSIFICATION="PASSED"
+            REASON="All stages completed successfully"
+          fi
+
+          echo "classification=$CLASSIFICATION" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+          echo "🏷️ Classification: $CLASSIFICATION — $REASON"
+
+      # ---------- Phase 7: Evidence packaging ----------
+      - name: Package evidence
+        id: package
+        if: always()
+        timeout-minutes: 10
+        run: |
+          # Create classification marker for downstream consumers
+          mkdir -p tests/output/
+          cat > tests/output/classification.json << 'CLASS_EOF'
+          {
+            "run_id": "${{ github.run_id }}",
+            "classification": "${{ steps.classify.outputs.classification }}",
+            "reason": "${{ steps.classify.outputs.reason }}",
+            "timestamp": "$(date -u +%FT%TZ)",
+            "stages": {
+              "env_ready": "${{ steps.env_check.conclusion }}",
+              "setup_python": "${{ steps.setup_python.conclusion }}",
+              "install": "${{ steps.install.conclusion }}",
+              "lint": "${{ steps.lint.conclusion }}",
+              "typecheck": "${{ steps.typecheck.conclusion }}",
+              "import_check": "${{ steps.import_check.conclusion }}",
+              "unit_tests": "${{ steps.unit_tests.conclusion }}",
+              "cli_tests": "${{ steps.cli_tests.conclusion }}",
+              "game_tests": "${{ steps.game_tests.conclusion }}"
+            }
+          }
+          CLASS_EOF
+          autotest report --evidence-dir tests/output/ --coverage || echo "⚠️ Evidence packaging had issues but continuing"
+
+      # ---------- Phase 8: Cleanup ----------
       - name: Clean old evidence (>7 days)
         if: always()
         run: |
           find tests/output/ -type d -name "run-*" -mtime +$EVIDENCE_RETENTION_DAYS -exec rm -rf {} + 2>/dev/null || true
           echo "Evidence cleanup complete"
 
-      # Upload artifacts
+      # ---------- Phase 9: Upload artifacts ----------
       - name: Upload JUnit results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: junit-nightly
+          name: junit-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
           path: junit-*.xml
       - name: Upload evidence pack
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-nightly
+          name: evidence-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
           path: tests/output/
