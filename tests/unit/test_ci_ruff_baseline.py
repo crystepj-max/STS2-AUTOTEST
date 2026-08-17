@@ -61,6 +61,19 @@ def test_resolve_tool_bin_falls_back_to_path(monkeypatch, tmp_path) -> None:
     assert check_ruff_baseline._resolve_tool_bin(None, "ruff") == "ruff"
 
 
+def test_relative_bin_absolute_for_baseline_cwd(monkeypatch, tmp_path) -> None:
+    """CI 传入相对 bin 路径（.venv-baseline/bin/ruff）时必须转绝对，否则子进程 cwd=基线目录时解析错误。"""
+
+    # 模拟脚本在仓库根运行、CI 传入相对路径
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.chdir(repo_root)
+
+    resolved = check_ruff_baseline._resolve_tool_bin(".venv-baseline/bin/ruff", "ruff")
+    assert resolved == str((repo_root / ".venv-baseline" / "bin" / "ruff").resolve())
+    assert Path(resolved).is_absolute()
+
+
 def test_main_passes_separate_bins_to_baseline_and_current(monkeypatch, tmp_path) -> None:
     """--ruff-bin 与 --baseline-ruff-bin 可分别指定（基线独立 venv）。"""
 

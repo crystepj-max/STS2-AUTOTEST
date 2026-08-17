@@ -25,12 +25,23 @@ def _resolve_tool_bin(bin_arg: str | None, name: str) -> str:
     resolve 后会偏离 venv 目录，导致推导不到同 venv 工具。
     """
     if bin_arg:
-        return bin_arg
+        return _absolute_bin(bin_arg)
     python_dir = Path(sys.executable).parent
     for candidate in (python_dir / name, python_dir / f"{name}.exe"):
         if candidate.is_file():
             return str(candidate)
     return name
+
+
+def _absolute_bin(bin_path: str) -> str:
+    """把含路径分隔符的相对路径转成绝对路径（基于当前工作目录）。
+
+    基线比较时子进程的 cwd 是基线目录，相对 bin 路径会在错误的目录下解析，
+    因此任何含分隔符的路径都必须先转绝对；纯命令名（无分隔符）保持 PATH 解析。
+    """
+    if "/" in bin_path or "\\" in bin_path:
+        return str(Path(bin_path).resolve())
+    return bin_path
 
 
 def _run_mypy(root: Path, bin_path: str, config_file: Path) -> list[tuple[str, int, int, str, str]]:
