@@ -93,6 +93,12 @@ _bmad-output/
 .external/
 tests/output/
 
+# CI baseline 脚本生成的超时/检查日志（issue #18，随 artifact 保留，不入库）
+/ruff-check.log
+/mypy-check.log
+/pytest-check.log
+/timeout-demo.log
+
 # Superpowers brainstorming artifacts
 .superpowers/
 

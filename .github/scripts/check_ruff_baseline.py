@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from runner_utils import TIMEOUT_EXIT_CODE, run_timed, timeout_from_env
+
 IssueKey = tuple[str, str, str, str]
+
+RUFF_LOG_PATH = Path("ruff-check.log")
+RUFF_TIMEOUT_DEFAULT = 600.0  # 10 分钟；可用环境变量 RUFF_TIMEOUT_SECONDS 覆盖（受控验证用）
 
 
 def _resolve_tool_bin(bin_arg: str | None, name: str) -> str:
@@ -44,8 +48,10 @@ def _absolute_bin(bin_path: str) -> str:
     return bin_path
 
 
-def _run_ruff(root: Path, bin_path: str) -> list[dict[str, Any]]:
-    result = subprocess.run(
+def _run_ruff(root: Path, bin_path: str, timeout: float) -> list[dict[str, Any]] | None:
+    """运行 ruff 并解析 JSON 发现；超时返回 None（输出已保留到日志）。"""
+    result = run_timed(
+        "ruff check",
         [
             bin_path,
             "check",
@@ -55,15 +61,21 @@ def _run_ruff(root: Path, bin_path: str) -> list[dict[str, Any]]:
             "json",
             "--exit-zero",
         ],
+        RUFF_LOG_PATH,
+        timeout=timeout,
         cwd=root,
-        check=True,
-        capture_output=True,
-        text=True,
     )
-    if result.stderr:
-        print(result.stderr, file=sys.stderr, end="")
-    payload: Any = json.loads(result.stdout)
-    return list(payload)
+    if result.timed_out:
+        print(f"Partial ruff output preserved in {RUFF_LOG_PATH}", file=sys.stderr)
+        return None
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ruff failed to run in {root} with exit code {result.returncode}:\n"
+            f"{result.output}\n{result.error}"
+        )
+    if result.error:
+        print(result.error, file=sys.stderr, end="")
+    return json.loads(result.output)
 
 
 def _relative_path(root: Path, filename: str) -> str:
@@ -159,11 +171,16 @@ def main(argv: list[str] | None = None) -> int:
     baseline_dir = args.baseline_dir.resolve()
     current_dir = args.current_dir.resolve()
 
+    timeout = timeout_from_env(RUFF_TIMEOUT_DEFAULT, "RUFF_TIMEOUT_SECONDS")
     ruff_bin = _resolve_tool_bin(args.ruff_bin, "ruff")
     baseline_ruff_bin = _resolve_tool_bin(args.baseline_ruff_bin or args.ruff_bin, "ruff")
 
-    baseline_findings = _run_ruff(baseline_dir, baseline_ruff_bin)
-    current_findings = _run_ruff(current_dir, ruff_bin)
+    baseline_findings = _run_ruff(baseline_dir, baseline_ruff_bin, timeout)
+    if baseline_findings is None:
+        return TIMEOUT_EXIT_CODE
+    current_findings = _run_ruff(current_dir, ruff_bin, timeout)
+    if current_findings is None:
+        return TIMEOUT_EXIT_CODE
     baseline_counts, _ = _fingerprints(baseline_dir, baseline_findings)
     current_counts, current_details = _fingerprints(current_dir, current_findings)
 
