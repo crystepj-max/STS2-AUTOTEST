@@ -13,8 +13,9 @@ import _thread
 import json
 import os
 import threading
+from collections.abc import Generator
 from pathlib import Path
-from typing import Any, Generator, cast
+from typing import Any, cast
 
 import pytest
 

@@ -3,9 +3,10 @@
 import asyncio
 import json
 import signal
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
@@ -24,6 +25,7 @@ from sts2_autotest.core.recovery import (
     RecoveryAction,
     RecoveryStrategy,
     crash_signature,
+    failure_signature,
     is_p0_exception,
 )
 from sts2_autotest.core.state_engine import StateEngine, StateTransitionError
@@ -766,6 +768,7 @@ class TestOrchestrator:
             message=exc.message,
             timestamp=exc.timestamp.isoformat(),
             exit_code=exc.detail.get("exit_code") if exc.detail else None,
+            signature=failure_signature(exc),
         )
 
         # P0 session-level fatal — always crash, never downgrade

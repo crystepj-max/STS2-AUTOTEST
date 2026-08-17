@@ -58,6 +58,13 @@ __pycache__/
 *.pyc
 *.pyo
 .venv/
+
+# 本地环境配置（密钥与本地配置只放 .env，模板 .env.example 入库；
+# 门禁脚本：scripts/check-env-gitignore.sh）
+.env
+.env.*
+!.env.example
+
 .pytest_cache/
 .mypy_cache/
 .import_linter_cache/
@@ -72,6 +79,9 @@ _bmad-output/
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+# 技能目录重忽略环境文件（否定规则会放行嵌套 .env，须按环境文件门禁重新忽略）
+.claude/skills/**/.env
+.claude/skills/**/.env.*
 
 # Codex local config
 .agents/
@@ -93,5 +103,12 @@ tests/output/
 sts2-autotest.yaml
 sts2-autotest.yml
 
-# 本地环境配置（CLAUDE.md 契约：.env 不入库；issue-13 提交时补规则防误入）
-/.env
+# CodeGraph 本地索引（代码地图缓存，不入库）
+.codegraph/
+
+# 本地 agent 记忆与配置（不随平台分发）
+.workbuddy/
+.serena/
+
+# Agent run 产物（开发工作流留痕，不入库）
+.agent-runs/

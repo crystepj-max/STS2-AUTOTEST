@@ -10,7 +10,7 @@ import platform
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import mss
@@ -468,7 +468,7 @@ class ScreenCapture:
         self._max_retries = max_retries
 
     @classmethod
-    def from_config(cls, output_dir: Path, settings: ScreenCaptureSettings) -> "ScreenCapture":
+    def from_config(cls, output_dir: Path, settings: ScreenCaptureSettings) -> ScreenCapture:
         """Construct ScreenCapture from a ScreenCaptureSettings protocol instance.
 
         The settings protocol is implemented by FrameworkConfig, allowing
@@ -734,7 +734,7 @@ class ScreenCapture:
         if png_bytes is None:
             raise OSError("mss.tools.to_png returned None")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         timestamp = now.strftime("%Y%m%dT%H%M%S")
         ms = now.microsecond // 1000
         filename = f"{case_id}_{timestamp}_{ms:03d}.png"

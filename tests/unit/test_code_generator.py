@@ -1,12 +1,15 @@
 """Tests for code_generator.py — TestSpec → pytest code generation."""
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
-from sts2_autotest.core.code_generator import CodeGenerator
+from sts2_autotest.core.code_generator import CodeGenerator, _build_import_block
 
 
 class TestCodeGenerator:
@@ -354,7 +357,7 @@ class TestCodeGenerator:
         assert "player_hp_changed_by(1)" in code
         assert "# TODO: implement assertion" not in code
 
-    def test_generate_case_test_maps_rest_assertion(self) -> None:
+    def test_generate_case_test_maps_rest_navigation_assertions(self) -> None:
         spec = TestSpec(
             id="TC-GAWAIN-NAVIGATE-TO-REST",
             title="Gawain rest navigation",
@@ -491,3 +494,132 @@ class TestCodeGenerator:
             compile(code, "<test>", "exec")
         except SyntaxError as e:
             pytest.fail(f"Generated code has syntax error: {e}")
+
+    def test_import_block_groups_and_sorts_by_isort_default(self) -> None:
+        """import 块按 标准库→第三方→本项目 分组，组间一个空行，断言名按字典序。"""
+        body = (
+            'json.dumps(x)\n'
+            'Path("/tmp/x")\n'
+            'pytest.skip("x")\n'
+            'GameScreen.MAP\n'
+            'ActionDescriptor(action_type="x")\n'
+            'start_new_run()\n'
+            'return_to_menu()\n'
+            'no_crash_detected()\n'
+        )
+
+        block = _build_import_block(body)
+
+        assert block == (
+            "import json\n"
+            "from pathlib import Path\n"
+            "\n"
+            "import pytest\n"
+            "\n"
+            "from sts2_autotest.common.state import GameScreen\n"
+            "from sts2_autotest.core.action_model import ActionDescriptor\n"
+            "from sts2_autotest.dsl.assertions import (\n"
+            "    no_crash_detected,\n"
+            "    return_to_menu,\n"
+            "    start_new_run,\n"
+            ")\n"
+            "from sts2_autotest.dsl.fluent import define\n"
+        )
+
+    def test_import_block_sorts_assertion_names_alphabetically(self) -> None:
+        """断言名在 import 块内按字典序输出，与 spec 声明顺序无关。"""
+        spec = TestSpec(
+            id="TC-SORT-ASSERTS",
+            title="Sort assertions",
+            steps=["开始新 run"],
+            assertions=[
+                "玩家格挡增加 5",        # player_block_increased_by
+                "敌人受到 6 点伤害",      # enemy_hp_decreased_by
+                "不 crash",               # no_crash_detected
+                "game reached state REST",  # game_reached_state
+            ],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        match = re.search(
+            r"from sts2_autotest\.dsl\.assertions import \((.*?)\)\n",
+            code,
+            re.DOTALL,
+        )
+        assert match is not None
+        names = [
+            line.strip().rstrip(",")
+            for line in match.group(1).splitlines()
+            if line.strip()
+        ]
+        assert names == sorted(names)
+        for expected in (
+            "enemy_hp_decreased_by",
+            "game_reached_state",
+            "no_crash_detected",
+            "player_block_increased_by",
+        ):
+            assert expected in names
+
+    def test_import_block_and_body_separated_by_two_blank_lines(self) -> None:
+        spec = TestSpec(
+            id="TC-BLANK-LINES",
+            title="Blank lines",
+            steps=["开始新 run"],
+            assertions=["不 crash"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        # import 块以 define 收尾，随后恰好两个空行再进入 def
+        assert (
+            "from sts2_autotest.dsl.fluent import define\n\n\ndef test_tc_blank_lines"
+            in code
+        )
+
+    def test_generate_case_test_is_idempotent(self) -> None:
+        spec = TestSpec(
+            id="TC-IDEMPOTENT",
+            title="Idempotent",
+            steps=["启动游戏", "选择 Ironclad", "开始新 run"],
+            assertions=["不 crash", "位于 MAP"],
+        )
+
+        assert self.generator.generate_case_test(spec) == self.generator.generate_case_test(spec)
+
+    def test_generate_suite_test_is_idempotent(self) -> None:
+        suite = SuiteSpec(
+            id="SUITE-IDEMPOTENT",
+            title="Idempotent suite",
+            includes=["TC-ONE"],
+        )
+        specs = {
+            "TC-ONE": TestSpec(id="TC-ONE", title="One", steps=["开始新 run"]),
+        }
+
+        first = self.generator.generate_suite_test(suite, specs)
+        second = self.generator.generate_suite_test(suite, specs)
+        assert first == second
+
+    def test_generated_code_satisfies_ruff_i001(self, tmp_path: Path) -> None:
+        """生成产物应通过 Ruff I001（import 排序）；ruff 不可用时跳过。"""
+        ruff = shutil.which("ruff")
+        if ruff is None:
+            pytest.skip("ruff 不在 PATH，跳过 I001 校验")
+
+        spec = TestSpec(
+            id="TC-RUFF-I001",
+            title="Ruff I001",
+            steps=["启动游戏", "选择 Ironclad", "开始新 run", "进入首次战斗"],
+            assertions=["不 crash", "位于 MAP", "敌人受到 6 点伤害"],
+        )
+        out_file = tmp_path / "test_tc_ruff_i001.py"
+        out_file.write_text(self.generator.generate_case_test(spec), encoding="utf-8")
+
+        result = subprocess.run(
+            [ruff, "check", "--select", "I001", "--output-format", "concise", str(out_file)],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr

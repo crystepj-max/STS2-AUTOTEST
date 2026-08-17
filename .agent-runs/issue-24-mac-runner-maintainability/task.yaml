@@ -1,0 +1,129 @@
+task_id: issue-24-mac-runner-maintainability
+title: 提升自有 Mac 自动验收的连接与服务可维护性（自托管 runner 运行保障）
+repo: STS2-AUTOTEST
+base_branch: main
+working_branch: fix/issue-24-mac-runner-maintainability
+source_issue: https://github.com/crystepj-max/STS2-AUTOTEST/issues/24
+type: bug
+priority: P1
+size: M
+
+# 分诊结论（2026-08-14，需求阶段本机取证）
+# 当前真实安装：~/actions-runner（v2.336.0，agentId 21，svc.sh 服务模式，
+# launchd label actions.runner.crystepj-max-STS2-AUTOTEST.Chris-Mac-mini-STS2-AUTOTEST，
+# PID 40231/40235，GitHub 侧唯一注册且 online）。
+# scripts/setup-mac-runner.sh 描述的是另一套不存在的安装
+# （~/actions-runner-autotest + com.sts2.autotest-runner.plist + run.sh）——
+# 脚本/文档与实际漂移，直接解释 Issue 症状 3「旧状态命令报告 Stopped、
+# 停止/启动未真正替换后台进程」：按旧 label 操作打不到真实服务。
+# Runner 日志（2026-08-14 00:18–00:19 UTC）可见 BrokerServer 长轮询被反复
+# cancel（TaskCanceledException / SocketException 89）+ backoff 重试后自行恢复，
+# 与 Issue 症状 1/2「连接中断后未重新注册便自行恢复」一致；
+# 另有 AAD token 获取慢（6.1s / 14.6s）。
+# issue-13 探针（evidence/network-probe-20260813.md）已实证：本机直连 GitHub
+# 超时不可用，必须走 ClashX 代理；间歇 TLS 抖动重试可自愈。
+
+triage:
+  labels: [bug, sized-m]
+  first_real_failure: runner-ops-tooling
+  independent_failures:
+    - id: F1
+      symptom: "状态工具漂移：setup-mac-runner.sh 指向不存在的 ~/actions-runner-autotest 与 com.sts2.autotest-runner label，实际服务为 svc.sh 管理的 actions.runner.* label"
+      nature: persistent
+      evidence: 本机取证 2026-08-14（launchctl list / svc.sh status / LaunchAgents 目录）
+    - id: F2
+      symptom: "BrokerServer 长轮询连接被 cancel（SocketException 89）后退避重试自行恢复；AAD token 获取偶发 6–15s"
+      nature: intermittent
+      evidence: ~/actions-runner/_diag/Runner_20260813-151834-utc.log
+    - id: F3
+      symptom: "代理路径间歇 TLS 抖动（issue-13 F2 同源），直连不可用"
+      nature: intermittent
+      evidence: .agent-runs/issue-13-restore-main-ci/evidence/network-probe-20260813.md
+  cascade:
+    - "任务长时间等待 / 凭证缺失 / 重复领取冲突（Run #39/#40，PR #12 复盘）"
+
+decisions:
+  size_confirmed: M（5 切片，单一子系统=自托管 runner 运维；活跃工作量 ≤3 天，7 天为被动采集等待，不构成 L）
+  task_boundary: 单 task.yaml 覆盖 Issue 全部 5 项；T7 代理决策依赖 T3 满 7 天数据，任务保持 open 至收口（AskUserQuestion 用户未选择，按推荐执行；Issue「独立的运行保障改进任务」指双机/冗余等更大改造，不在本任务）
+  authorization: 逐项二次确认（用户 2026-08-14 确认）——工作目录外改动（~/actions-runner、~/Library/LaunchAgents、服务重启）实施前逐项请示，所有改动先备份、留命令记录
+  proxy_baseline: 决策起点为「维持 ClashX 代理」（issue-13 已实证直连不可用）；T7 以 7 天数据验证并正式记录决策，禁止在数据不足时认定代理软件为唯一根因（Issue 明确不做）
+  reregister: 不重新注册 runner（GitHub 侧注册唯一且 online，无损坏证据）
+
+roles:
+  developer:
+    tool: codex
+    required_protocols:
+      - ../sts2-dev-infra/agent-protocol/AGENT_CONTRACT.md
+      - ../sts2-dev-infra/agent-protocol/ROLE_DEVELOPER.md
+  reviewer:
+    tool: claude-code
+    required_protocols:
+      - ../sts2-dev-infra/agent-protocol/AGENT_CONTRACT.md
+      - ../sts2-dev-infra/agent-protocol/ROLE_REVIEWER.md
+  tester:
+    tool: local-test-runner
+    required_protocols:
+      - ../sts2-dev-infra/agent-protocol/ROLE_TESTER.md
+      - ../sts2-dev-infra/agent-protocol/QUALITY_GATES.md
+
+scope:
+  include:
+    - scripts/setup-mac-runner.sh（修正与实际安装的漂移）
+    - scripts/（新增 runner 健康探针 / 健康检查脚本）
+    - .github/workflows/（健康检查前置 step）
+    - docs/（新增 runner 运维手册）
+    - ~/actions-runner/（逐项二次确认授权，先备份）
+    - ~/Library/LaunchAgents/actions.runner.*.plist（逐项二次确认授权，先备份）
+    - .agent-runs/issue-24-mac-runner-maintainability/
+  exclude:
+    - ../_upstream/
+    - src/sts2_autotest/（无代码缺陷证据，禁止顺手改动）
+    - Ruff 历史债治理（Issue 明确不做，归属 Issue #25）
+    - runner 重新注册（无注册损坏证据）
+    - 双机/冗余等运行保障改进（后续独立任务）
+
+tickets:
+  - id: T1
+    title: 归档基线证据：PR #12 Run #39/#40/#47 日志签名、本机 runner 日志连接中断签名、状态工具漂移证据
+    depends_on: []
+    slice: 取证
+  - id: T2
+    title: 状态一致性修复：修正 setup-mac-runner.sh 漂移，提供统一的 status/stop/start 入口；实证 status 反映真实进程、stop 后不可接收任务、start 后进程已更新且可接收
+    depends_on: [T1]
+    slice: 状态修复
+  - id: T3
+    title: 部署连续采集（≥7 天）：轻量定时探针记录 runner 进程/launchd/GitHub 侧 status、代理与直连可达性、出口特征，JSONL 落盘，能区分本机网络/代理出口/GitHub 上游/维护操作四类
+    depends_on: [T1]
+    slice: 数据采集（被动等待 7 天，可与 T2/T4/T5/T6 并行）
+  - id: T4
+    title: 轻量健康检查：scripts/check-runner-health.sh（不依赖游戏环境），接入验收 workflow 前置 step，业务验收开始前给出可用/不可用
+    depends_on: [T2]
+    slice: 健康检查
+  - id: T5
+    title: 故障处理手册：docs/ 运维手册（状态核查、停止/启动、代理验证、签名→处置表），以非原排障人员可独立执行为验收标准
+    depends_on: [T2, T4]
+    slice: 手册
+  - id: T6
+    title: 人工恢复演练：模拟 runner 中断→按手册恢复→确认可接收任务，保留演练记录
+    depends_on: [T5]
+    slice: 演练
+  - id: T7
+    title: 代理决策收口：7 天数据四类归因，正式记录直连或稳定代理决策及验证依据，回填 Issue 完成标准
+    depends_on: [T3]
+    slice: 收口（需 T3 满 7 天）
+
+quality_gates:
+  - knowledge_gate
+  - evidence_retained              # 修复前后日志/探针记录均落盘 evidence/
+  - status_consistency_verified    # status/stop/start 与真实进程一致，有实证记录
+  - health_check_gate_executed     # 健康检查在验收 workflow 前置实际执行
+  - runbook_drill_passed           # 非原排障人员按手册完成恢复演练
+  - seven_day_data_attributed      # ≥7 天数据完成四类归因
+  - proxy_decision_recorded        # 决策及验证依据落盘并回填 Issue
+  - reviewer_approved
+
+artifacts:
+  developer_handoff: .agent-runs/issue-24-mac-runner-maintainability/developer-handoff.md
+  review_report: .agent-runs/issue-24-mac-runner-maintainability/review-report.md
+  test_report: .agent-runs/issue-24-mac-runner-maintainability/test-report.md
+  evidence_dir: .agent-runs/issue-24-mac-runner-maintainability/evidence/

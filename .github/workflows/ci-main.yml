@@ -25,9 +25,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # issue-13 修复（2026-08-13）：main push 检查此前全量直跑 ruff/mypy，
-      # ruff 0.16 默认规则扩增后存量 363 项历史债必然失败；
-      # 对齐 ci-pr.yml 的 baseline 机制（PR #10「新代码不增债」设计），
-      # 以 push 前一个提交为基线，只拦截新增债务。
+      # 规则/依赖演化后存量债务必然失败；对齐 ci-pr.yml 的 baseline 机制
+      # （PR #10「新代码不增债」设计），以 push 前一个提交为基线，只拦截新增债务。
       - name: Checkout historical baseline
         uses: actions/checkout@v4
         with:
@@ -37,7 +36,10 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install project
-        run: pip install -e ".[dev,visual]"
+        run: |
+          pip install -e ".[dev,visual]"
+          # issue-21：固定 lint 工具版本，防止检查工具版本漂移
+          pip install -r .github/requirements-lint.txt --force-reinstall
       - name: Run ${{ matrix.check }}
         run: |
           case "${{ matrix.check }}" in

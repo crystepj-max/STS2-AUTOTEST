@@ -8,8 +8,8 @@ for each test.
 import asyncio
 import os
 import platform
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Any, Callable, Generator
 
 import pytest
 

@@ -14,9 +14,10 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from sts2_autotest.adapters.base import ActionResult
 from sts2_autotest.common.state import GameScreen, GameState
@@ -116,19 +117,19 @@ class FluentBuilder:
         self._settle_timeout = settle_timeout
         self._settle_poll_interval = settle_poll_interval
 
-    def require_start_state(self, start_state: str) -> "FluentBuilder":
+    def require_start_state(self, start_state: str) -> FluentBuilder:
         self._start_state_text = start_state.strip()
         return self
 
-    def setup(self, *actions: ActionDescriptor) -> "FluentBuilder":
+    def setup(self, *actions: ActionDescriptor) -> FluentBuilder:
         self._setup_actions.extend(actions)
         return self
 
-    def execute(self, *actions: ActionDescriptor) -> "FluentBuilder":
+    def execute(self, *actions: ActionDescriptor) -> FluentBuilder:
         self._execute_actions.extend(actions)
         return self
 
-    def on_error(self, *handlers: HandlerFn) -> "FluentBuilder":
+    def on_error(self, *handlers: HandlerFn) -> FluentBuilder:
         """Register error callback(s). Called if assert_that fails."""
         for handler in handlers:
             self._validate_handler(handler)

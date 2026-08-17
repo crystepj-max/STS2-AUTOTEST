@@ -15,10 +15,11 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from sts2_autotest.common.errors import CancelFailureReason
 from sts2_autotest.common.logging import get_logger
@@ -55,7 +56,7 @@ TERMINAL_STATUSES = frozenset({
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _game_control_reachable(host: str = "127.0.0.1", port: int = 8080) -> bool:
@@ -82,7 +83,7 @@ def _game_control_reachable(host: str = "127.0.0.1", port: int = 8080) -> bool:
 
 
 def _safe_run_id(prefix: str = "run") -> str:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"{prefix}-{stamp}-{uuid.uuid4().hex[:8]}"
 
 
@@ -148,7 +149,7 @@ class RunRecord:
         return payload
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RunRecord":
+    def from_dict(cls, data: dict[str, Any]) -> RunRecord:
         request_data = data.get("request", {})
         request = RunRequest(
             project=request_data.get("project"),

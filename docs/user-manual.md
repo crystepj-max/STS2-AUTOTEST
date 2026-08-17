@@ -182,7 +182,7 @@ execution:
 
 state_machine:
   transition_timeout: 10.0
-  poll_interval: 0.5
+  poll_interval: 1.0
 ```
 
 ### 5.2 常用配置项
@@ -199,7 +199,7 @@ state_machine:
 | `execution.game_timeout` | `60.0` | 游戏动作等待超时。 |
 | `execution.max_retries` | `3` | 默认重试次数。 |
 | `execution.max_consecutive_failures` | `3` | 连续相同失败达到阈值后标记为确定性失败。 |
-| `state_machine.poll_interval` | `0.5` | 状态轮询间隔。 |
+| `state_machine.poll_interval` | `1.0` | 状态轮询间隔。 |
 
 ## 6. 命令行使用
 

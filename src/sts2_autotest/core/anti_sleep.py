@@ -21,7 +21,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from types import TracebackType
-from typing import Any
+from typing import Any, Self
 
 from sts2_autotest.common.logging import get_logger
 
@@ -117,7 +117,7 @@ class AntiSleepGuard:
             pass
 
     # ── context manager ─────────────────────────────────────
-    def __enter__(self) -> "AntiSleepGuard":
+    def __enter__(self) -> Self:
         self.start()
         return self
 

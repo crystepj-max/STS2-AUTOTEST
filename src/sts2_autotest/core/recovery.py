@@ -6,9 +6,10 @@ DefaultRecoveryStrategy: pure-function decide() + async execute().
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Callable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
@@ -52,6 +53,9 @@ class FailureRecord:
     message: str
     timestamp: str
     exit_code: int | None = None
+    # 阶段 C（issue #37）：确定性失败签名（crash_signature 产物）。空串 = 旧格式
+    # 记录（无签名），短路判定对其不生效，保持原渐进恢复逻辑。
+    signature: str = ""
 
 
 # P0 exceptions: session-level — framework/environment cannot proceed
@@ -75,6 +79,20 @@ def crash_signature(error: Exception, exit_code: int | None = None) -> str:
     type_name = type(error).__name__
     code = exit_code if exit_code is not None else "none"
     return f"{type_name}:{code}"
+
+
+def failure_signature(failure: Exception) -> str:
+    """当前失败的确定性签名：STS2Error 取 detail.exit_code，其余仅用异常类型。
+
+    无 exit_code 时退化为 ``Type:none``，仍可匹配同类无码失败。
+    """
+    exit_code: int | None = None
+    if isinstance(failure, STS2Error):
+        detail = failure.detail or {}
+        code = detail.get("exit_code")
+        if isinstance(code, int) and not isinstance(code, bool):
+            exit_code = code
+    return crash_signature(failure, exit_code)
 
 
 def is_p0_exception(exc: Exception) -> bool:
@@ -103,6 +121,7 @@ class RecoveryStrategy(Protocol):
         history: list[FailureRecord],
         *,
         max_consecutive: int = 3,
+        same_signature_shortcut: int = 2,
     ) -> RecoveryDecision: ...
 
     async def execute(
@@ -127,6 +146,7 @@ class StubRecoveryStrategy:
         history: list[FailureRecord],
         *,
         max_consecutive: int = 3,
+        same_signature_shortcut: int = 2,
     ) -> RecoveryDecision:
         return RecoveryDecision(
             action=RecoveryAction.TERMINATE,
@@ -169,12 +189,15 @@ class DefaultRecoveryStrategy:
         history: list[FailureRecord],
         *,
         max_consecutive: int = 3,
+        same_signature_shortcut: int = 2,
     ) -> RecoveryDecision:
         """Decide recovery action based on exception type + failure history.
 
         Decision logic:
         1. P0 exceptions (FileNotFoundError, OSError, VERSION_MISMATCH) → TERMINATE (is_p0=True)
-        2. CRASH_ERROR → progressive levels: GAME_RESTART → FULL_RESTART → TERMINATE
+        2. CRASH_ERROR → progressive levels: GAME_RESTART → FULL_RESTART → TERMINATE，
+           阶段 C 附加「相同失败签名短路」：连续 same_signature_shortcut 次相同
+           签名 → 直接 TERMINATE，不再 GAME_RESTART / FULL_RESTART 空转
         3. Timeout → FAST_PATH (with consecutive escalation)
         4. Other adapter errors → FAST_PATH (with consecutive escalation)
         """
@@ -192,7 +215,9 @@ class DefaultRecoveryStrategy:
 
         # Crashes get progressive recovery levels
         if isinstance(failure, STS2Error) and failure.category == ErrorCategory.CRASH_ERROR:
-            return self._decide_crash(history, max_consecutive)
+            return self._decide_crash(
+                history, max_consecutive, failure_signature(failure), same_signature_shortcut
+            )
 
         # Timeouts → fast path (with consecutive escalation)
         if isinstance(failure, STS2Error) and failure.category in _FAST_PATH_CATEGORIES:
@@ -261,6 +286,8 @@ class DefaultRecoveryStrategy:
         self,
         history: list[FailureRecord],
         max_consecutive: int,
+        current_signature: str,
+        same_signature_shortcut: int = 2,
     ) -> RecoveryDecision:
         """Three-level progressive crash recovery.
 
@@ -269,9 +296,18 @@ class DefaultRecoveryStrategy:
         3rd+ consecutive crash → TERMINATE.
         Note: history does NOT include the current crash
         (appended after decide()), so we add +1 for the current.
+
+        阶段 C（issue #37）：相同失败签名短路——当前失败签名非空且连续
+        same_signature_shortcut 次（含本次）相同 → 直接 TERMINATE（is_p0=False）。
+        这类「确定性失败」重启也不可能修复，短路避免 GAME_RESTART / FULL_RESTART
+        空转；判定仍为失败（不掩盖真实失败）。旧格式记录（signature=""）不短路。
         """
         if not history:
             return RecoveryDecision(action=RecoveryAction.GAME_RESTART)
+        if current_signature:
+            consecutive_sig = self._consecutive_signature_count(history, current_signature) + 1
+            if consecutive_sig >= same_signature_shortcut:
+                return RecoveryDecision(action=RecoveryAction.TERMINATE, is_p0=False)
         # Count consecutive crashes from history, +1 for current crash
         consecutive = self._consecutive_count(history, ErrorCategory.CRASH_ERROR.value) + 1
         if consecutive >= max_consecutive:
@@ -279,6 +315,20 @@ class DefaultRecoveryStrategy:
         if consecutive >= max_consecutive - 1:
             return RecoveryDecision(action=RecoveryAction.FULL_RESTART)
         return RecoveryDecision(action=RecoveryAction.GAME_RESTART)
+
+    @staticmethod
+    def _consecutive_signature_count(history: list[FailureRecord], signature: str) -> int:
+        """Count consecutive failures with the same signature from the end of history.
+
+        无签名（""）的记录不参与匹配——旧格式记录使计数中断。
+        """
+        count = 0
+        for record in reversed(history):
+            if record.signature and record.signature == signature:
+                count += 1
+            else:
+                break
+        return count
 
     @staticmethod
     def _consecutive_count(history: list[FailureRecord], error_type: str) -> int:

@@ -236,6 +236,21 @@ def build_report_html(config: dict[str, Any]) -> str:
   <span class="badge badge-pass">通过</span>
 </div><div class="case-body"><pre class="log" style="margin-top:8px">{_h(nav_path)}</pre></div></div>"""
 
+    # 阶段 C（issue #37）：重启/重拉计数暴露——哪个 key 提供就渲染哪张卡
+    # （0 也显示）；未提供的 key 不渲染，避免为不存在的计数编造 0，也不破坏
+    # 既有报告格式。
+    counter_cards = ""
+    if "restart_count" in config:
+        counter_cards += (
+            f'\n  <div class="summary-card total"><div class="num">'
+            f'{int(config["restart_count"])}</div>重启次数</div>'
+        )
+    if "relaunch_count" in config:
+        counter_cards += (
+            f'\n  <div class="summary-card total"><div class="num">'
+            f'{int(config["relaunch_count"])}</div>重拉次数</div>'
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -302,6 +317,7 @@ pre.log{{background:#050510;color:#6ee;padding:8px;border-radius:4px;font-size:1
   <div class="summary-card block"><div class="num">{counts['blocked']}</div>阻塞</div>
   <div class="summary-card skip"><div class="num">{counts['skipped']}</div>跳过</div>
   <div class="summary-card total"><div class="num">{counts['total']}</div>总计</div>
+{counter_cards}
 </div>
 <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap">{badge_row}</div>
 <h2 style="font-size:16px;margin-bottom:12px;color:#999">测试案例</h2>
