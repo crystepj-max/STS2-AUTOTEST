@@ -173,8 +173,8 @@ def _select_macos_window(
         ):
             continue
 
-        width = int(round(float(window.get("width", 0) or 0)))
-        height = int(round(float(window.get("height", 0) or 0)))
+        width = round(float(window.get("width", 0) or 0))
+        height = round(float(window.get("height", 0) or 0))
         window_id = int(window.get("window_id", 0) or 0)
         if window_id <= 0 or width <= 0 or height <= 0:
             continue

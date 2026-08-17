@@ -291,12 +291,12 @@ class TestProbeReady:
 
     def test_state_refused_is_control_unavailable(self):
         mgr = _mgr(_ProbeAdapter(state=ConnectionError("refused")))
-        ok, reason, _ = _probe(mgr)
+        _, reason, _ = _probe(mgr)
         assert reason == EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE
 
     def test_actions_refused_is_control_unavailable(self):
         mgr = _mgr(_ProbeAdapter(actions=ConnectionError("refused")))
-        ok, reason, _ = _probe(mgr)
+        _, reason, _ = _probe(mgr)
         assert reason == EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE
 
     def test_unknown_screen_is_stale(self):

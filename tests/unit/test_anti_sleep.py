@@ -5,7 +5,7 @@ subprocess.Popen is mocked; no real caffeinate is launched.
 
 from unittest.mock import MagicMock
 
-import sts2_autotest.core.anti_sleep as anti_sleep
+from sts2_autotest.core import anti_sleep
 from sts2_autotest.core.anti_sleep import AntiSleepGuard
 
 
