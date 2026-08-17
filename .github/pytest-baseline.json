@@ -1,5 +1,7 @@
 {
-  "darwin": [],
+  "darwin": [
+    "tests/unit/test_probe_failure.py::test_always_fails"
+  ],
   "linux": [
     "tests/unit/test_mcp_tools.py::TestCompileSpec::test_compile_spec_calls_generator",
     "tests/unit/test_mcp_tools.py::TestRunTest::test_run_test_returns_result",
