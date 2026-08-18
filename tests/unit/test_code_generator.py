@@ -10,6 +10,7 @@ import pytest
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
 from sts2_autotest.core.code_generator import CodeGenerator, _build_import_block
+from sts2_autotest.core.markdown_parser import MarkdownParser
 
 
 class TestCodeGenerator:
@@ -623,3 +624,26 @@ class TestCodeGenerator:
             text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_tc_prepare_new_run_spec_covers_multi_stage_neow(self) -> None:
+        """TC-PREPARE-NEW-RUN 必须在选祝福后推进事件对话，闭环 v0.107.1 多阶段 Neow。
+
+        v0.107.1 的 Neow 祝福为多阶段流程：choose_event(0) 选择「新叶」后游戏
+        进入 GRID_CARD_SELECT（选 1 张牌来变换），单次 choose_event 不足到达 MAP。
+        规格必须追加「推进事件对话」步骤（生成 advance_dialogue()），由其下发
+        grid_select_card 处理选牌后抵达地图。
+        """
+        spec_path = (
+            Path(__file__).resolve().parents[2]
+            / "docs"
+            / "process"
+            / "specs"
+            / "cases"
+            / "TC-PREPARE-NEW-RUN.md"
+        )
+        spec = MarkdownParser().parse_case(spec_path.read_text(encoding="utf-8"))
+        code = self.generator.generate_case_test(spec)
+
+        assert "choose_event(0)" in code
+        assert "advance_dialogue()" in code
+        assert code.index("choose_event(0)") < code.index("advance_dialogue()")
