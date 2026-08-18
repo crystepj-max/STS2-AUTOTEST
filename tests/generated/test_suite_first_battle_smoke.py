@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
-
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
 from sts2_autotest.dsl.assertions import (
     advance_dialogue,
     choose_event,
@@ -10,15 +9,14 @@ from sts2_autotest.dsl.assertions import (
     embark,
     enter_combat,
     game_reached_state,
-    has_travelable_node,
     no_crash_detected,
+    has_travelable_node,
     return_to_menu,
     select_character,
     skip_card_reward,
     start_new_run,
 )
-from sts2_autotest.dsl.fluent import define
-
+from sts2_autotest.common.state import GameScreen
 
 def test_suite_first_battle_smoke(autotest, _session_loop):
     """首次战斗冒烟"""

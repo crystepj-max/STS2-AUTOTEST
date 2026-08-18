@@ -6,6 +6,10 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+  # issue-13 修复（2026-08-13）：允许针对同一主分支提交手动重跑，
+  # 支撑「同提交结论」验收（T4 触发主分支重跑）；dispatch 时
+  # github.event.before 为空，基线回退为当前提交（见 quick-checks）。
+  workflow_dispatch:
 
 jobs:
   # ── 代码质量 + 单元测试（Mac + GitHub fallback）──
@@ -20,19 +24,27 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # issue-13 修复（2026-08-13）：main push 检查此前全量直跑 ruff/mypy，
+      # 规则/依赖演化后存量债务必然失败；对齐 ci-pr.yml 的 baseline 机制
+      # （PR #10「新代码不增债」设计），以 push 前一个提交为基线，只拦截新增债务。
+      - name: Checkout historical baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.before || github.sha }}
+          path: .ci-baseline
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install project
         run: |
-          pip install -e ".[dev]"
+          pip install -e ".[dev,visual]"
           # issue-21：固定 lint 工具版本，防止检查工具版本漂移
           pip install -r .github/requirements-lint.txt --force-reinstall
       - name: Run ${{ matrix.check }}
         run: |
           case "${{ matrix.check }}" in
-            lint) ruff check src/ tests/ ;;
-            mypy) mypy --config-file .github/mypy-policy.ini src/sts2_autotest ;;
+            lint) python .github/scripts/check_ruff_baseline.py --baseline-dir .ci-baseline --current-dir . ;;
+            mypy) python .github/scripts/check_mypy_baseline.py --baseline-dir .ci-baseline --current-dir . ;;
             lint-imports) lint-imports ;;
             unit-test) python -m pytest tests/unit/ -v --junitxml=junit-unit.xml ;;
           esac
@@ -71,29 +83,58 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0'
+      # issue-13 修复（2026-08-14 attempt-004）：STS2-GAWAIN 为私有仓库，
+      # 默认 GITHUB_TOKEN 不可跨仓库访问（实测错误：Repository not found）。
+      # 需用户在 STS2-AUTOTEST 仓库配置 GH_PAT（对 crystepj-max/STS2-GAWAIN
+      # 有 contents:read 的 PAT）；未配置时快速失败并给出诊断，而非模糊报错。
+      - name: Check cross-repo token (GH_PAT)
+        run: |
+          if [ -z "${{ secrets.GH_PAT }}" ]; then
+            echo "::error::GH_PAT secret is not set. Create a PAT with read access (contents:read) to crystepj-max/STS2-GAWAIN and add it to STS2-AUTOTEST repository secrets as GH_PAT."
+            exit 1
+          fi
       - name: Checkout Gawain
         uses: actions/checkout@v4
         with:
           repository: crystepj-max/STS2-GAWAIN
           path: gawain-src
           ref: main
-      - name: Build Gawain
+          token: ${{ secrets.GH_PAT }}
+      - name: Build and deploy Gawain
         run: |
           cd gawain-src
-          dotnet publish Gawain.csproj -c Release
-      - name: Deploy to mods directory
-        run: |
-          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/SlayTheSpire2}"
+          # issue-13（2026-08-18）：Directory.Build.props 为机器本地文件、不入库，CI checkout
+          # 缺失 Sts2InstallDir/ModsPath/GodotPath，构建会报 "Slay the Spire 2 data not found" /
+          # "Godot path must be set up"；此处按本地 Directory.Build.props 等效显式传入，
+          # 由 csproj 自动复制 dll/pdb/json 并导出 .pck 到游戏 mods 目录。
+          # 游戏目录实际名称为 "Slay the Spire 2"（带空格），无空格变体不存在。
+          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2}"
           MODS_DIR="$GAME_DIR/SlayTheSpire2.app/Contents/MacOS/mods"
-          mkdir -p "$MODS_DIR/Gawain"
-          # Find the actual publish output (respects csproj output settings)
-          PUBLISH_DIR=$(find gawain-src -type d -name "publish" -path "*/Release/*" | head -1)
-          if [ -z "$PUBLISH_DIR" ]; then
-            echo "ERROR: publish output not found"
+          GODOT_BIN="${GODOT_PATH:-}"
+          if [ -z "$GODOT_BIN" ] || [ ! -x "$GODOT_BIN" ]; then
+            for p in "/Applications/Godot_mono.app/Contents/MacOS/Godot" "/Applications/Godot.app/Contents/MacOS/Godot"; do
+              if [ -x "$p" ]; then GODOT_BIN="$p"; break; fi
+            done
+          fi
+          if [ -z "$GODOT_BIN" ] || [ ! -x "$GODOT_BIN" ]; then
+            echo "::error::Godot executable not found (set GODOT_PATH or install Godot Mono)."
             exit 1
           fi
-          cp -r "$PUBLISH_DIR"/* "$MODS_DIR/Gawain/"
-          echo "Deployed Gawain to $MODS_DIR/Gawain/"
+          dotnet publish Gawain.csproj -c Release \
+            -p:Sts2InstallDir="$GAME_DIR" \
+            -p:ModsPath="$MODS_DIR/" \
+            -p:GodotPath="$GODOT_BIN"
+      - name: Verify deployment
+        run: |
+          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2}"
+          MODS_DIR="$GAME_DIR/SlayTheSpire2.app/Contents/MacOS/mods"
+          for f in Gawain.dll Gawain.json Gawain.pdb gawain.pck; do
+            if [ ! -f "$MODS_DIR/Gawain/$f" ]; then
+              echo "::error::deploy artifact missing: $MODS_DIR/Gawain/$f"
+              exit 1
+            fi
+          done
+          echo "Gawain deployed and verified: $MODS_DIR/Gawain/ (dll/json/pdb/pck)"
 
   # ── Job Summary ──
 
@@ -101,7 +142,10 @@ jobs:
     name: Push Summary
     needs: [quick-checks, cli-integration, deploy-gawain]
     if: always()
-    runs-on: ubuntu-latest
+    # issue-13 修复（2026-08-13 attempt-003）：summary 为信息性 job（仅写 step summary），
+    # 移至自托管 runner——2026-08-13 起仓库级托管 runner 因账户计费故障无法分配，
+    # 保留 ubuntu-latest 会让主分支验收在自托管验收链全绿时仍整体标红。
+    runs-on: ["self-hosted", "macos", "autotest"]
     timeout-minutes: 5
     steps:
       - name: Generate summary

@@ -1,18 +1,16 @@
 import json
-
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
 from sts2_autotest.dsl.assertions import (
     advance_dialogue,
     embark,
     game_reached_state,
-    has_travelable_node,
     no_crash_detected,
+    has_travelable_node,
     return_to_menu,
     select_character,
     start_new_run,
 )
-from sts2_autotest.dsl.fluent import define
-
+from sts2_autotest.common.state import GameScreen
 
 # Given: 已安装并可连接 STS2-Cli-Mod
 # Given: 游戏可被启动
