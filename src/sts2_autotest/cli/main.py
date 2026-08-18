@@ -709,7 +709,7 @@ def _abandon_saved_run(
         force_fresh()
     try:
         st = loop.run_until_complete(adapter.get_state())
-        view, actions, _src = _frame_signals(adapter, loop, st)
+        _view, actions, _src = _frame_signals(adapter, loop, st)
         if "confirm_modal" in actions:
             loop.run_until_complete(adapter.act("confirm_modal"))
     except Exception as exc:  # noqa: BLE001
@@ -936,10 +936,10 @@ def _ensure_clean_main_menu(
         if op is None or not op_actions:
             recovered = _recover_main_menu_via_restart(lifecycle, adapter, loop)
             return bool(recovered.get("ok"))
-        last, verdict = _settle_main_menu_state(adapter, loop, _ff, tries=30)
+        _last, verdict = _settle_main_menu_state(adapter, loop, _ff, tries=30)
         if verdict == "dirty":
             _abandon_saved_run(adapter, loop, force_fresh=_ff)
-            last, verdict = _settle_main_menu_state(adapter, loop, _ff, tries=30)
+            _last, verdict = _settle_main_menu_state(adapter, loop, _ff, tries=30)
         if verdict != "clean":
             # 旧局清不掉、或菜单迟迟不发布可执行操作（无法确认干净）→
             # 经受控重启兜底，保证后续任务从可验证的干净起点开局（V11）。
@@ -3116,12 +3116,9 @@ def _check_env() -> dict[str, dict[str, str]]:
             "message": "No mutual exclusion conflict",
         }
 
-    # Python version
+    # Python version（requires-python >=3.11，>=3.11 恒成立，else 分支为死代码）
     pv = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    if sys.version_info >= (3, 11):
-        checks["python"] = {"status": "OK", "message": pv}
-    else:
-        checks["python"] = {"status": "FAIL", "message": f"need >=3.11, got {pv}"}
+    checks["python"] = {"status": "OK", "message": pv}
 
     # Steam installed — check default paths + libraryfolders.vdf
     from sts2_autotest.adapters.discovery import steam_roots

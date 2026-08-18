@@ -281,7 +281,7 @@ def _orchestrator(_session_loop: asyncio.AbstractEventLoop) -> Generator[TestOrc
         _session_loop.run_until_complete(
             asyncio.wait_for(orch.stop_session(), timeout=SESSION_TEARDOWN_TIMEOUT)
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("Session teardown timed out after %ss", SESSION_TEARDOWN_TIMEOUT)
     except Exception as exc:
         logger.warning("Session teardown failed: %s", exc)
