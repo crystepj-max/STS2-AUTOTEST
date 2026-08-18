@@ -14,9 +14,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from baseline_common import IssueKey, move_aware_difference
 from runner_utils import TIMEOUT_EXIT_CODE, run_timed, timeout_from_env
-
-IssueKey = tuple[str, str, str, str]
 
 RUFF_LOG_PATH = Path("ruff-check.log")
 RUFF_TIMEOUT_DEFAULT = 600.0  # 10 分钟；可用环境变量 RUFF_TIMEOUT_SECONDS 覆盖（受控验证用）
@@ -184,12 +183,14 @@ def main(argv: list[str] | None = None) -> int:
     baseline_counts, _ = _fingerprints(baseline_dir, baseline_findings)
     current_counts, current_details = _fingerprints(current_dir, current_findings)
 
-    new_findings = current_counts - baseline_counts
-    resolved_findings = baseline_counts - current_counts
+    new_findings, resolved_findings, moved_count = move_aware_difference(
+        baseline_counts, current_counts
+    )
 
     print(f"Ruff historical baseline: {sum(baseline_counts.values())} finding(s)")
     print(f"Current PR: {sum(current_counts.values())} finding(s)")
     print(f"Resolved by this PR: {sum(resolved_findings.values())}")
+    print(f"Moved with files (not new): {moved_count}")
     print(f"New in this PR: {sum(new_findings.values())}")
     _print_rule_counts("Current", current_findings)
 
