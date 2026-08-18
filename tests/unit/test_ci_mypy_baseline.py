@@ -82,3 +82,87 @@ def test_main_passes_config_and_separate_bins(monkeypatch, tmp_path) -> None:
 
 def test_resolve_tool_bin_prefers_explicit() -> None:
     assert check_mypy_baseline._resolve_tool_bin("/explicit/mypy", "mypy") == "/explicit/mypy"
+
+
+def _run_main_with_findings(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    baseline_findings: list[tuple[str, int, int, str, str]],
+    current_findings: list[tuple[str, int, int, str, str]],
+) -> tuple[int, str]:
+    """用伪造 mypy 错误集合跑 main()，返回 (退出码, 输出全文)。"""
+
+    baseline_dir = tmp_path / "baseline"
+    current_dir = tmp_path / "current"
+    baseline_dir.mkdir(exist_ok=True)
+    current_dir.mkdir(exist_ok=True)
+    config_file = tmp_path / "mypy-policy.ini"
+    config_file.write_text("[mypy]\nstrict = True\n", encoding="utf-8")
+
+    def fake_run_mypy(root, bin_path, config, timeout):
+        if root == baseline_dir:
+            return baseline_findings
+        return current_findings
+
+    monkeypatch.setattr(check_mypy_baseline, "_run_mypy", fake_run_mypy)
+
+    rc = check_mypy_baseline.main(
+        argv=[
+            "--baseline-dir",
+            str(baseline_dir),
+            "--current-dir",
+            str(current_dir),
+            "--config-file",
+            str(config_file),
+        ]
+    )
+    return rc, capsys.readouterr().out
+
+
+def test_main_rename_only_is_not_new(monkeypatch, tmp_path, capsys) -> None:
+    """S1：只重命名文件——mypy 基线比较 0 新增，退出码 0（issue #17）。"""
+
+    (tmp_path / "baseline" / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "current" / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "baseline" / "src" / "legacy_a.py").write_text("import os\n", encoding="utf-8")
+    (tmp_path / "current" / "src" / "modern_a.py").write_text("import os\n", encoding="utf-8")
+
+    rc, out = _run_main_with_findings(
+        monkeypatch,
+        tmp_path,
+        capsys,
+        baseline_findings=[("src/legacy_a.py", 1, 0, "unused-import", "Module os is imported but unused")],
+        current_findings=[("src/modern_a.py", 1, 0, "unused-import", "Module os is imported but unused")],
+    )
+
+    assert rc == 0
+    assert "Moved with files (not new): 1" in out
+    assert "New in this PR: 0" in out
+
+
+def test_main_move_plus_new_blocks_ci(monkeypatch, tmp_path, capsys) -> None:
+    """S5：移动 + 实质新增——只报真实新增并阻断，退出码 1（issue #17）。"""
+
+    (tmp_path / "baseline" / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "current" / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "baseline" / "src" / "legacy_a.py").write_text("import os\n", encoding="utf-8")
+    (tmp_path / "current" / "src" / "modern_a.py").write_text("import os\n", encoding="utf-8")
+    (tmp_path / "current" / "src" / "new_file.py").write_text("x: int = 's'\n", encoding="utf-8")
+
+    rc, out = _run_main_with_findings(
+        monkeypatch,
+        tmp_path,
+        capsys,
+        baseline_findings=[("src/legacy_a.py", 1, 0, "unused-import", "Module os is imported but unused")],
+        current_findings=[
+            ("src/modern_a.py", 1, 0, "unused-import", "Module os is imported but unused"),
+            ("src/new_file.py", 1, 0, "assignment", "Incompatible types in assignment"),
+        ],
+    )
+
+    assert rc == 1
+    assert "Moved with files (not new): 1" in out
+    assert "src/new_file.py" in out
+    assert "modern_a.py" not in out
+    assert "CI failed: new mypy debt is not allowed." in out

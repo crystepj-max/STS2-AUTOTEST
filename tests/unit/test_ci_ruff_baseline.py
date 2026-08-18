@@ -112,3 +112,72 @@ def test_main_passes_separate_bins_to_baseline_and_current(monkeypatch, tmp_path
     # 基线用 baseline venv 的 ruff，当前用 current venv 的 ruff
     assert commands[0][0] == "/venv-baseline/bin/ruff"
     assert commands[1][0] == "/venv-current/bin/ruff"
+
+
+def _finding(filename: str, code: str, message: str, row: int = 1) -> dict:
+    return {
+        "filename": filename,
+        "location": {"row": row, "column": 1},
+        "code": code,
+        "message": message,
+    }
+
+
+def test_main_rename_only_is_not_new(monkeypatch, tmp_path, capsys) -> None:
+    """S1：只重命名文件——Ruff 基线比较 0 新增，退出码 0（issue #17）。"""
+
+    baseline_dir = tmp_path / "baseline"
+    current_dir = tmp_path / "current"
+    (baseline_dir / "src").mkdir(parents=True)
+    (current_dir / "src").mkdir(parents=True)
+    (baseline_dir / "src" / "legacy_a.py").write_text("import os\n", encoding="utf-8")
+    (current_dir / "src" / "modern_a.py").write_text("import os\n", encoding="utf-8")
+
+    def fake_run_ruff(root, bin_path, timeout):
+        if root == baseline_dir:
+            return [_finding("src/legacy_a.py", "F401", "unused import")]
+        return [_finding("src/modern_a.py", "F401", "unused import")]
+
+    monkeypatch.setattr(check_ruff_baseline, "_run_ruff", fake_run_ruff)
+
+    rc = check_ruff_baseline.main(
+        argv=["--baseline-dir", str(baseline_dir), "--current-dir", str(current_dir)]
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Moved with files (not new): 1" in out
+    assert "New in this PR: 0" in out
+
+
+def test_main_move_plus_new_blocks_ci(monkeypatch, tmp_path, capsys) -> None:
+    """S5：移动 + 实质新增——只报真实新增并阻断，退出码 1（issue #17）。"""
+
+    baseline_dir = tmp_path / "baseline"
+    current_dir = tmp_path / "current"
+    (baseline_dir / "src").mkdir(parents=True)
+    (current_dir / "src").mkdir(parents=True)
+    (baseline_dir / "src" / "legacy_a.py").write_text("import os\n", encoding="utf-8")
+    (current_dir / "src" / "modern_a.py").write_text("import os\n", encoding="utf-8")
+    (current_dir / "src" / "new_file.py").write_text("print(missing)\n", encoding="utf-8")
+
+    def fake_run_ruff(root, bin_path, timeout):
+        if root == baseline_dir:
+            return [_finding("src/legacy_a.py", "F401", "unused import")]
+        return [
+            _finding("src/modern_a.py", "F401", "unused import"),
+            _finding("src/new_file.py", "F821", "undefined name"),
+        ]
+
+    monkeypatch.setattr(check_ruff_baseline, "_run_ruff", fake_run_ruff)
+
+    rc = check_ruff_baseline.main(
+        argv=["--baseline-dir", str(baseline_dir), "--current-dir", str(current_dir)]
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Moved with files (not new): 1" in out
+    assert "src/new_file.py" in out
+    assert "modern_a.py" not in out
+    assert "CI failed: new Ruff debt is not allowed." in out

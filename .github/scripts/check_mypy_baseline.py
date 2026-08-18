@@ -9,9 +9,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from baseline_common import IssueKey, move_aware_difference
 from runner_utils import TIMEOUT_EXIT_CODE, run_timed, timeout_from_env
-
-IssueKey = tuple[str, str, str, str]
 _ERROR_RE = re.compile(
     r"^(?P<file>.+?):(?P<line>\d+)(?::(?P<column>\d+))?: "
     r"error: (?P<message>.*?)(?:  \[(?P<code>[^\]]+)\])?$"
@@ -173,12 +172,14 @@ def main(argv: list[str] | None = None) -> int:
     baseline_counts, _ = _fingerprints(baseline_dir, baseline_findings)
     current_counts, current_locations = _fingerprints(current_dir, current_findings)
 
-    new_findings = current_counts - baseline_counts
-    resolved_findings = baseline_counts - current_counts
+    new_findings, resolved_findings, moved_count = move_aware_difference(
+        baseline_counts, current_counts
+    )
 
     print(f"mypy historical baseline: {sum(baseline_counts.values())} error(s)")
     print(f"Current PR: {sum(current_counts.values())} error(s)")
     print(f"Resolved by this PR: {sum(resolved_findings.values())}")
+    print(f"Moved with files (not new): {moved_count}")
     print(f"New in this PR: {sum(new_findings.values())}")
 
     if new_findings:
