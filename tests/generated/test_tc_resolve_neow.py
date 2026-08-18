@@ -1,14 +1,12 @@
 import json
-
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
 from sts2_autotest.dsl.assertions import (
     choose_event,
     game_reached_state,
-    has_travelable_node,
     no_crash_detected,
+    has_travelable_node,
 )
-from sts2_autotest.dsl.fluent import define
-
+from sts2_autotest.common.state import GameScreen
 
 # Given: 已安装并可连接 STS2-Cli-Mod
 # Given: 当前事件为开局祝福事件

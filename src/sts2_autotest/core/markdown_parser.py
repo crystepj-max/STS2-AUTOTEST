@@ -9,14 +9,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
 
 
 class ParsingError(ValueError):
     """Raised when a Markdown spec cannot be parsed."""
-    pass
 
 
 def detect_level(markdown: str) -> str:
@@ -38,7 +36,7 @@ def detect_level(markdown: str) -> str:
     return level
 
 
-def _extract_section(markdown: str, section_name: str) -> Optional[str]:
+def _extract_section(markdown: str, section_name: str) -> str | None:
     """Extract a section's content by its ``## `` heading name."""
     pattern = rf'##\s+{re.escape(section_name)}\s*\n(.*?)(?=\n##\s|\Z)'
     m = re.search(pattern, markdown, re.DOTALL)

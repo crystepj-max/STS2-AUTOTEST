@@ -148,19 +148,48 @@ fi
 run_with_timeout "$SETUP_CMD_TIMEOUT" ./config.sh "${CONFIG_ARGS[@]}"
 
 # 运行环境写入 runner .env（R4：手册声明代理等运行环境位于 runner .env，追加而非覆盖）
+# issue-13 F1：RUNNER_TOOL_CACHE 必须写入 .env；服务模式由下方 plist 注入保证一致，
+# 否则 setup-python 解析为 /Users/runner（GitHub 托管机约定）导致 mkdir 无权限。
 ENV_FILE="$RUNNER_DIR/.env"
-if [[ -f "$ENV_FILE" ]] && grep -q '^HTTP_PROXY=' "$ENV_FILE"; then
-    echo ".env 已含 HTTP_PROXY，跳过代理写入。"
+if [[ -f "$ENV_FILE" ]] && grep -q '^RUNNER_TOOL_CACHE=' "$ENV_FILE"; then
+    echo ".env 已含 RUNNER_TOOL_CACHE，跳过环境写入。"
 else
     {
+        echo "STS2_WORKSPACE=$HOME/STS2-WORKSPACE"
+        # 注意：游戏目录名带空格（"Slay the Spire 2"），无空格变体不存在
+        echo "STS2_GAME_DIR=\"$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2\""
+        echo 'STS2_MODS_DIR="$STS2_GAME_DIR/Mods"'
+        echo "GODOT_PATH=/Applications/Godot.app"
+        echo "RUNNER_TOOL_CACHE=$RUNNER_DIR/_work/_tool"
+        # 代理（issue-13）：本机直连 github.com 超时，必须走 ClashX；服务模式需同步注入 plist（见下）
         echo "HTTP_PROXY=$PROXY_URL"
         echo "HTTPS_PROXY=$PROXY_URL"
+        echo "http_proxy=$PROXY_URL"
+        echo "https_proxy=$PROXY_URL"
+        echo "NO_PROXY=127.0.0.1,localhost"
+        echo "no_proxy=127.0.0.1,localhost"
     } >> "$ENV_FILE"
-    echo "已写入运行环境（HTTP_PROXY/HTTPS_PROXY）到 $ENV_FILE"
+    echo "已写入运行环境（STS2_*/RUNNER_TOOL_CACHE/代理）到 $ENV_FILE"
 fi
 
 # 安装 launchd 服务（svc.sh 形态，非自定义 plist）并启动验证（R4：装后状态为真）
 run_with_timeout "$SETUP_CMD_TIMEOUT" ./svc.sh install
+# issue-13 F1（实机已人工补丁生效，此处对全新安装生效）：服务模式（runsvc.sh）不读 .env，
+# RUNNER_TOOL_CACHE/代理必须注入 svc.sh 生成的 launchd plist 的 EnvironmentVariables，
+# 否则 setup-python 解析为 /Users/runner 导致 mkdir 无权限。
+SVC_PLIST="$HOME/Library/LaunchAgents/actions.runner.$(echo "$REPO" | tr '/' '-').${RUNNER_NAME}.plist"
+if [[ -f "$SVC_PLIST" ]]; then
+    /usr/libexec/PlistBuddy -c 'Delete :EnvironmentVariables' "$SVC_PLIST" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c 'Add :EnvironmentVariables dict' "$SVC_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:RUNNER_TOOL_CACHE string $RUNNER_DIR/_work/_tool" "$SVC_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:HTTP_PROXY string $PROXY_URL" "$SVC_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:HTTPS_PROXY string $PROXY_URL" "$SVC_PLIST"
+    /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:NO_PROXY string 127.0.0.1,localhost" "$SVC_PLIST"
+    echo "已注入 RUNNER_TOOL_CACHE/代理到 $SVC_PLIST"
+    launchctl unload "$SVC_PLIST" 2>/dev/null || true
+else
+    echo "WARNING: 未找到 svc.sh 生成的 plist（$SVC_PLIST），跳过环境注入；请手动确认服务模式环境。" >&2
+fi
 run_with_timeout "$SETUP_CMD_TIMEOUT" ./svc.sh start
 SVC_STATUS="$(run_with_timeout "$SETUP_CMD_TIMEOUT" ./svc.sh status 2>/dev/null || true)"
 if [[ "$SVC_STATUS" == *"Started:"* ]]; then
