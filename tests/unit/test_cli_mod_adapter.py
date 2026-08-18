@@ -943,3 +943,69 @@ class TestPlayPhaseRemovedDegradation:
         mock_popen.return_value = _mock_popen_error(returncode=1, stderr="boom")
         with pytest.raises(STS2Error):
             _run(adapter.get_state())
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_degraded_state_carries_empty_combat_and_stays_stale(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """降级 COMBAT 带空 combat 标记（避开 phantom 误判）且不缓存（保持 stale）。"""
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
+        # 空 combat（而非 None）是「降级占位」标记：is_phantom_combat 据此
+        # 不再把 COMBAT + combat=None 误判为不可退出的假战斗。
+        assert getattr(result, "combat", None) == {}
+        # 降级状态不得缓存，否则下一轮 get_state 命中陈旧快照，掩盖真实过渡。
+        assert adapter._cache_stale is True
+
+    @patch("sts2_autotest.adapters.cli_mod.time.sleep")
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_retries_after_degraded_combat_in_event_resolution(
+        self, mock_popen: MagicMock, mock_sleep: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """事件推进途中命中降级 COMBAT 时，choose_map_node 重读直至真实 MAP。"""
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            event={"is_in_dialogue": False, "options": [{"index": 0}]},
+        )
+        adapter._cache_stale = False
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),          # choose_event 0（推进事件）
+            _mock_popen_error(returncode=1, stderr=stderr),  # state → 降级 COMBAT
+            _mock_popen_ok({             # state（重读）→ 真实 MAP
+                "screen": "MAP",
+                "map": {
+                    "travelable_coords": [{"col": 3, "row": 0}],
+                    "nodes": [
+                        {
+                            "col": 3,
+                            "row": 0,
+                            "type": "MONSTER",
+                            "state": "TRAVELABLE",
+                        }
+                    ],
+                },
+            }),
+            _mock_popen_ok({}),          # choose_map_node 3 0
+        ]
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+            ["sts2", "state"],
+            ["sts2", "choose_map_node", "3", "0"],
+        ]

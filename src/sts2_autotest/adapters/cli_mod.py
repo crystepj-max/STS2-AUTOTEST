@@ -50,6 +50,19 @@ def _is_play_phase_removed_error(exc: STS2Error) -> bool:
         text += " " + str(value).lower()
     return _PLAY_PHASE_REMOVED_MARKER in text
 
+
+def _is_degraded_combat_state(state: GameState) -> bool:
+    """识别「降级占位」的 COMBAT 状态（空 combat、无真实战斗数据）。
+
+    真实战斗状态总是带非空 combat 载荷（hand/enemies/player 等）；只有
+    ``_degraded_combat_state`` 会构造 ``combat={}`` 的 COMBAT 快照。据此把
+    「查询失败占位」与「真实战斗」区分开，供事件推进循环决定是重读还是返回。
+    """
+    if state.screen != GameScreen.COMBAT:
+        return False
+    combat = getattr(state, "combat", None)
+    return isinstance(combat, dict) and not combat
+
 # CLI 命令返回的 screen 值 → GameScreen 枚举映射
 _SCREEN_MAP: dict[str, GameScreen] = {
     "MENU": GameScreen.MAIN_MENU,
@@ -396,23 +409,34 @@ class CliModAdapter:
         """把「移除 get_IsPlayPhase」的 CLI 错误降级为 COMBAT 状态快照。
 
         Game v0.107.1 移除了 CombatManager.get_IsPlayPhase()，CLI 查询战斗状态时
-        报「Method not found」。此时尽力保留信封里的部分字段，回退到 COMBAT，
-        避免把游戏版本演进误判为运行错误。
+        报「Method not found」。此时回退到一个「降级占位」COMBAT 快照：带空的
+        ``combat`` 字段，避免 orchestrator 的 lifecycle.is_phantom_combat 把
+        ``COMBAT + combat=None + in_combat=False`` 误判为不可退出的假战斗。
+
+        该占位状态**不缓存**（保持 cache_stale=True）：查询失败只是游戏过渡中的
+        瞬时现象（如 EVENT → MAP 途中短暂进入战斗状态），下一轮 get_state 必须
+        重新查询 CLI 才能拿到真实状态，不能命中陈旧快照。
         """
         combat_hint: dict[str, Any] = {}
         if isinstance(raw, dict):
             raw_data = raw.get("data", {})
             if isinstance(raw_data, dict):
-                combat_hint = {k: v for k, v in raw_data.items() if k != "error"}
+                combat_hint = {
+                    k: v
+                    for k, v in raw_data.items()
+                    if k not in {"error", "screen", "combat"}
+                }
         logger.warning(
             "CombatManager.get_IsPlayPhase removed (game v0.107.1+) — "
             "returning degraded COMBAT state",
         )
+        # 空 combat 是「降级占位」标记：既避开 is_phantom_combat，也供
+        # _advance_event_until_map_sync 识别为「过渡中、需重读」。
+        combat_hint["combat"] = {}
         state = GameState(screen=GameScreen.COMBAT, **combat_hint)
-        if state.screen != GameScreen.UNKNOWN:
-            self._cached_state = state
-            self._cache_stale = False
-            self._available_actions_cache = None
+        # 不缓存降级状态；仅失效动作缓存，保证下一次状态读取重新走 CLI。
+        self._cache_stale = True
+        self._available_actions_cache = None
         return state
 
     def _action_error_result(self, exc: STS2Error, state_changed: bool) -> ActionResult:
@@ -725,6 +749,15 @@ class CliModAdapter:
         deadline = time.monotonic() + min(self.timeout, 20.0)
         state = self._cached_state or self._get_state_sync()
         while time.monotonic() < deadline:
+            # 降级占位 COMBAT：state 查询命中「移除 get_IsPlayPhase」，游戏仍在
+            # 过渡（EVENT → MAP）。不能把它当真实战斗返回，否则 choose_map_node
+            # 会提前短路、漏掉真正的地图节点选择；短暂等待后重读直至真实状态。
+            if _is_degraded_combat_state(state):
+                time.sleep(self.poll_interval)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                continue
             if state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return state
             if state.screen != GameScreen.EVENT:
