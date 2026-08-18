@@ -868,3 +868,78 @@ class TestCombatWaitBackoff:
         )
         assert result.status == "success"
         assert fake_time.sleeps == [1.0, 2.0]
+
+
+# ── 游戏 v0.107.1+ 移除 CombatManager.get_IsPlayPhase() 的降级兜底 ──
+
+_PLAY_PHASE_METHOD_NOT_FOUND = (
+    "Method not found: 'Boolean MegaCrit.Sts2.Core.Combat."
+    "CombatManager.get_IsPlayPhase()'."
+)
+
+
+class TestPlayPhaseRemovedDegradation:
+    """命令层对「移除 get_IsPlayPhase」的降级兜底。
+
+    CLI 以两种形态上报该错误，都必须被识别并降级为 COMBAT / 成功，
+    而不是把游戏版本演进误判为运行错误：
+    1) 非零退出 + stderr JSON message（走 _run_cli → _handle_nonzero_exit）
+    2) ok=false 信封（走 _parse_response）
+    """
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_get_state_degrades_to_combat_on_run_cli_method_not_found(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """_run_cli 因移除 get_IsPlayPhase 非零退出时，get_state 降级为 COMBAT。"""
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_get_state_degrades_to_combat_on_parse_response_method_not_found(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """ok=false 信封携带移除方法错误时，get_state 降级为 COMBAT。"""
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (
+            json.dumps({
+                "ok": False,
+                "error": "METHOD_NOT_FOUND",
+                "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+            }).encode("utf-8"),
+            b"",
+        )
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_act_degrades_to_success_on_method_not_found(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """动作命令命中移除方法错误时，act 降级为 success（交由上层重读状态）。"""
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+        result = _run(adapter.act("end_turn"))
+        assert result.status == "success"
+        assert result.state_changed is True
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_get_state_still_raises_on_unrelated_error(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """非移除方法错误仍按原样抛出，不误降级。"""
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr="boom")
+        with pytest.raises(STS2Error):
+            _run(adapter.get_state())

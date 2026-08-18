@@ -126,6 +126,51 @@ class TestExecuteAction:
 
         assert result.status == "success"
 
+    def test_non_map_action_retries_post_action_state_after_is_play_phase_glitch(self) -> None:
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.side_effect = [
+            GameState(screen=GameScreen.COMBAT),
+            STS2Error(
+                category=ErrorCategory.ADAPTER_ERROR,
+                message="Method not found: 'Boolean MegaCrit.Sts2.Core.Combat.CombatManager.get_IsPlayPhase()'.",
+            ),
+            GameState(screen=GameScreen.COMBAT),
+        ]
+        mock.get_available_actions.return_value = ["end_turn"]
+        mock.act.return_value = ActionResult(status="success", state_changed=True)
+        mock.wait_until_actionable.return_value = True
+        mock.capture_bug_snapshot.return_value = {}
+        orch = TestOrchestrator(adapter=mock)
+        action = ActionDescriptor(action_type="end_turn")
+
+        with patch("sts2_autotest.core.orchestrator.asyncio.sleep", new=AsyncMock()):
+            result = _run(orch.execute_action(action))
+
+        assert result.status == "success"
+
+    def test_non_map_action_false_negative_is_recovered_when_state_advances(self) -> None:
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.side_effect = [
+            GameState(screen=GameScreen.EVENT),
+            GameState(screen=GameScreen.COMBAT),
+        ]
+        mock.get_available_actions.return_value = ["advance_dialogue"]
+        mock.act.return_value = ActionResult(
+            status="failure",
+            state_changed=True,
+            detail="Method not found: 'Boolean MegaCrit.Sts2.Core.Combat.CombatManager.get_IsPlayPhase()'.",
+        )
+        mock.wait_until_actionable.return_value = True
+        mock.capture_bug_snapshot.return_value = {}
+        orch = TestOrchestrator(adapter=mock)
+        action = ActionDescriptor(action_type="advance_dialogue")
+
+        result = _run(orch.execute_action(action))
+
+        assert result.status == "success"
+
     def test_choose_neow_blessing_accepts_fallback_option_without_reset(self) -> None:
         bad_state = GameState(
             screen=GameScreen.EVENT,

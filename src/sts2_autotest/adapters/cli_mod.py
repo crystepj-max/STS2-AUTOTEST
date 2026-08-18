@@ -31,6 +31,25 @@ from sts2_autotest.common.state import GameScreen, GameState
 
 logger = get_logger("adapters.cli_mod")
 
+# 游戏 v0.107.1+ 移除了 CombatManager.get_IsPlayPhase()，而 STS2-Cli-Mod 仍会在
+# 查询战斗状态时调用它，导致 CLI 以「Method not found: ... get_IsPlayPhase()」报错。
+# 该错误会以两种形态出现：非零退出（stderr JSON 的 message 字段，经 _handle_nonzero_exit
+# 抛出）与 ok=false 信封（经 _parse_response 抛出）。框架据此识别并降级，避免把游戏
+# 版本演进误判为运行错误。
+_PLAY_PHASE_REMOVED_MARKER = "get_isplayphase"
+
+
+def _is_play_phase_removed_error(exc: STS2Error) -> bool:
+    """判断 STS2Error 是否由「游戏移除 CombatManager.get_IsPlayPhase」引发。
+
+    匹配 message 与 detail 中出现的 ``get_IsPlayPhase``（大小写不敏感），
+    以区别于其它无关的 CLI 错误。
+    """
+    text = str(exc.message or "").lower()
+    for value in (exc.detail or {}).values():
+        text += " " + str(value).lower()
+    return _PLAY_PHASE_REMOVED_MARKER in text
+
 # CLI 命令返回的 screen 值 → GameScreen 枚举映射
 _SCREEN_MAP: dict[str, GameScreen] = {
     "MENU": GameScreen.MAIN_MENU,
@@ -319,30 +338,15 @@ class CliModAdapter:
         if not self._cache_stale and self._cached_state is not None:
             return self._cached_state
 
-        raw = self._run_cli("state")
+        # _run_cli 也可能因移除 get_IsPlayPhase 非零退出（而非经 _parse_response
+        # 的 ok=false 信封），因此把两者都纳入降级范围。
+        raw: dict[str, Any] | None = None
         try:
+            raw = self._run_cli("state")
             data = self._parse_response(raw)
         except STS2Error as exc:
-            # Game v0.107.1 removed CombatManager.get_IsPlayPhase(), causing
-            # "Method not found" when CLI queries combat state.
-            # Degrade gracefully: return COMBAT with whatever fields we have.
-            error_msg = str(exc.message or "")
-            if "get_IsPlayPhase" in error_msg or "Method not found" in error_msg:
-                combat_hint = {}
-                if isinstance(raw, dict):
-                    raw_data = raw.get("data", {})
-                    if isinstance(raw_data, dict):
-                        combat_hint = {k: v for k, v in raw_data.items() if k != "error"}
-                logger.warning(
-                    "CombatManager method not found (game v0.107.1+) — "
-                    "returning degraded COMBAT state",
-                )
-                state = GameState(screen=GameScreen.COMBAT, **combat_hint)
-                if state.screen != GameScreen.UNKNOWN:
-                    self._cached_state = state
-                    self._cache_stale = False
-                    self._available_actions_cache = None
-                return state
+            if _is_play_phase_removed_error(exc):
+                return self._degraded_combat_state(raw)
             raise  # Re-raise other errors
 
         # Map CLI screen name to GameScreen enum
@@ -387,6 +391,41 @@ class CliModAdapter:
             self._cache_stale = False
             self._available_actions_cache = None  # screen changed, invalidate actions
         return state
+
+    def _degraded_combat_state(self, raw: dict[str, Any] | None) -> GameState:
+        """把「移除 get_IsPlayPhase」的 CLI 错误降级为 COMBAT 状态快照。
+
+        Game v0.107.1 移除了 CombatManager.get_IsPlayPhase()，CLI 查询战斗状态时
+        报「Method not found」。此时尽力保留信封里的部分字段，回退到 COMBAT，
+        避免把游戏版本演进误判为运行错误。
+        """
+        combat_hint: dict[str, Any] = {}
+        if isinstance(raw, dict):
+            raw_data = raw.get("data", {})
+            if isinstance(raw_data, dict):
+                combat_hint = {k: v for k, v in raw_data.items() if k != "error"}
+        logger.warning(
+            "CombatManager.get_IsPlayPhase removed (game v0.107.1+) — "
+            "returning degraded COMBAT state",
+        )
+        state = GameState(screen=GameScreen.COMBAT, **combat_hint)
+        if state.screen != GameScreen.UNKNOWN:
+            self._cached_state = state
+            self._cache_stale = False
+            self._available_actions_cache = None
+        return state
+
+    def _action_error_result(self, exc: STS2Error, state_changed: bool) -> ActionResult:
+        """把动作命令的 STS2Error 映射为 ActionResult。
+
+        命中「移除 get_IsPlayPhase」错误时降级为成功（动作已下发、游戏仍在推进，
+        交由上层重读状态确认真实转移）；超时与其余错误保持原有语义。
+        """
+        if _is_play_phase_removed_error(exc):
+            return ActionResult(status="success", state_changed=True, detail=exc.message)
+        if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+            return ActionResult(status="timeout", state_changed=state_changed, detail=exc.message)
+        return ActionResult(status="failure", state_changed=state_changed, detail=exc.message)
 
     def _get_available_actions_sync(self) -> list[str]:
         """Derive available actions from current game screen state."""
@@ -455,9 +494,7 @@ class CliModAdapter:
                 except STS2Error as exc:
                     self._cache_stale = True
                     self._available_actions_cache = None
-                    if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                        return ActionResult(status="timeout", state_changed=True, detail=exc.message)
-                    return ActionResult(status="failure", state_changed=True, detail=exc.message)
+                    return self._action_error_result(exc, state_changed=True)
                 if event_result.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                     return ActionResult(status="success", state_changed=True)
                 if event_result.screen != GameScreen.MAP:
@@ -504,7 +541,7 @@ class CliModAdapter:
                 except STS2Error as exc:
                     self._cache_stale = True
                     self._available_actions_cache = None
-                    return ActionResult(status="failure", state_changed=False, detail=exc.message)
+                    return self._action_error_result(exc, state_changed=False)
         if action == "return_to_menu" and self._cached_state is not None:
             try:
                 cur = self._get_state_sync()
@@ -526,9 +563,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error_result(exc, state_changed=False)
 
     def _embark_sync(self) -> ActionResult:
         """Embark and wait for the game to leave character select."""
@@ -556,9 +591,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error_result(exc, state_changed=False)
 
     def _bundle_select_and_confirm_sync(self, index: int) -> ActionResult:
         """Preview then confirm a bundle (Scroll Boxes relic picker).
@@ -584,9 +617,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=True, detail=exc.message)
-            return ActionResult(status="failure", state_changed=True, detail=exc.message)
+            return self._action_error_result(exc, state_changed=True)
 
     def _combat_basic_policy_sync(self) -> ActionResult:
         deadline = time.monotonic() + min(self.timeout, 60.0)
@@ -640,9 +671,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=True, detail=exc.message)
-            return ActionResult(status="failure", state_changed=True, detail=exc.message)
+            return self._action_error_result(exc, state_changed=True)
 
     def _start_new_run_sync(self) -> ActionResult:
         """Execute the semantic new-run flow across menu sub-screens."""
@@ -676,9 +705,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error_result(exc, state_changed=False)
 
     def _poll_state_after_new_run(self) -> GameState:
         deadline = time.monotonic() + min(self.timeout, 5.0)
