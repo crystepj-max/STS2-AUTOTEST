@@ -193,7 +193,7 @@ def _select_macos_window(
 def _find_macos_window(window_title: str) -> tuple[int, tuple[int, int]] | None:
     """Return the best matching macOS on-screen window id and size."""
     try:
-        import Quartz  # type: ignore[import-untyped]
+        import Quartz  # type: ignore[import-not-found]
     except Exception:
         return None
 
@@ -221,7 +221,7 @@ def _capture_macos_window_png(path: Path, window_title: str) -> bool:
     """Capture a specific macOS window directly into a PNG file."""
     try:
         import Quartz
-        from AppKit import (  # type: ignore[import-untyped]
+        from AppKit import (  # type: ignore[import-not-found]
             NSBitmapImageRep,
             NSPNGFileType,
         )
