@@ -202,6 +202,12 @@ jobs:
             pytest-check.log
             timeout-demo.log
 
+      - name: Check workflow artifact step order (issue-51)
+        # 静态校验 upload-artifact 必须晚于 manifest 声明的 producer 步骤；乱序则 fail-closed。
+        id: workflow_artifact_order
+        if: always() && steps.install.outcome == 'success'
+        run: .venv-ci/bin/python .github/scripts/check_workflow_artifact_order.py
+
       - name: Generate summary
         if: always()
         run: |
@@ -276,5 +282,6 @@ jobs:
           check_timeout "Unit tests" "${{ steps.unit.outcome }}" "${{ steps.unit.outputs.timeout }}"
           check "Real STS2 CLI discovery" "${{ steps.cli_check.outcome }}"
           check "CLI integration" "${{ steps.cli_tests.outcome }}"
+          check "Workflow artifact order" "${{ steps.workflow_artifact_order.outcome }}"
 
           exit "$failed"
