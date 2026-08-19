@@ -156,6 +156,15 @@ class TestScreenToActions:
         assert "relic_select" in actions
         assert "relic_skip" in actions
 
+    def test_tri_select_actions(self) -> None:
+        actions = _screen_to_actions(GameScreen.TRI_SELECT)
+        assert "tri_select_card" in actions
+        assert "tri_select_skip" in actions
+        # Neow 祝福「铅制镇纸」带出的三选一屏：advance_dialogue 必须可用，
+        # 否则编排器会在 action-availability 检查时报
+        # 「Game not actionable before action: advance_dialogue」。
+        assert "advance_dialogue" in actions
+
     def test_card_reward_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.CARD_REWARD)
         assert "reward_choose_card" in actions

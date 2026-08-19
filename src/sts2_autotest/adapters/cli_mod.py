@@ -485,8 +485,13 @@ class CliModAdapter:
         # 「reported success but produced no observable state change」）。
         if action == "advance_dialogue" and self._cached_state is not None:
             cur = self._cached_state
-            if cur.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+            if cur.screen in {GameScreen.MAP, GameScreen.COMBAT}:
                 return ActionResult(status="success", state_changed=False)
+            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT}:
+                # Neow 祝福可能带出奖励/三选一屏（失物盒→CARD_REWARD、铅制镇纸→
+                # TRI_SELECT）而非直接 Proceed→MAP。advance_dialogue 语义为「推进
+                # 事件后流程到地图」，故跳过奖励/三选一并循环点击 Proceed 直至 MAP。
+                return self._advance_reward_to_map_sync()
             grid = getattr(cur, "grid_card_select", {})
             if cur.screen == GameScreen.EVENT and isinstance(grid, dict):
                 cards = grid.get("cards", [])
@@ -794,6 +799,80 @@ class CliModAdapter:
 
         return state
 
+    def _advance_reward_to_map_sync(self) -> ActionResult:
+        """从 Neow 事件后的奖励/三选一屏推进到 MAP。
+
+        Neow 祝福可能把游戏带进 CARD_REWARD（失物盒）或 TRI_SELECT（铅制镇纸）
+        而不是直接 Proceed→MAP。advance_dialogue 的语义是「推进事件后的流程到
+        地图」，因此这里跳过奖励/三选一并循环点击 Proceed，直至到达 MAP/COMBAT
+        或超时。真机曾卡在 ``Expected MAP, got CARD_REWARD`` 与
+        ``Game not actionable before action: advance_dialogue``。
+        """
+        deadline = time.monotonic() + min(self.timeout, 20.0)
+        state = self._cached_state
+        while time.monotonic() < deadline:
+            if state is None or _is_degraded_combat_state(state):
+                # 降级占位 COMBAT：游戏仍在过渡，短暂等待后重读。
+                time.sleep(self.poll_interval)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                try:
+                    state = self._get_state_sync()
+                except STS2Error:
+                    state = self._cached_state
+                continue
+            if state.screen in {GameScreen.MAP, GameScreen.COMBAT}:
+                return ActionResult(status="success", state_changed=True)
+            if state.screen == GameScreen.CARD_REWARD:
+                try:
+                    raw = self._run_cli("reward_skip_card")
+                    self._parse_response(raw)
+                except STS2Error:
+                    raw = self._run_cli("proceed")
+                    self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                continue
+            if state.screen == GameScreen.TRI_SELECT:
+                try:
+                    raw = self._run_cli("tri_select_skip")
+                    self._parse_response(raw)
+                except STS2Error:
+                    raw = self._run_cli("proceed")
+                    self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                continue
+            if state.screen == GameScreen.EVENT:
+                # 跳过后回到 Neow 事件：点击 Proceed 收尾进 MAP。
+                event = getattr(state, "event", None)
+                options = event.get("options", []) if isinstance(event, dict) else []
+                proceed_idx = _find_proceed_option_index(options)
+                if proceed_idx is not None:
+                    raw = self._run_cli("choose_event", str(proceed_idx))
+                else:
+                    raw = self._run_cli(*_event_progress_cli_args(state))
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                continue
+            # 其它过渡态（UNKNOWN 加载中等）：短暂等待后重读。
+            time.sleep(self.poll_interval)
+            self._cache_stale = True
+            self._available_actions_cache = None
+            try:
+                state = self._get_state_sync()
+            except STS2Error:
+                state = self._cached_state
+        return ActionResult(
+            status="failure",
+            state_changed=True,
+            detail="advance_dialogue did not reach MAP before timeout",
+        )
+
     def _wait_until_actionable_sync(self, timeout: float) -> bool:
         """Poll until health_check passes and actions are available."""
         deadline = time.monotonic() + timeout
@@ -892,7 +971,7 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
         GameScreen.EVENT: ["start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
         GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
         GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "probe"],
-        GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "probe"],
+        GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "advance_dialogue", "probe"],
         GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
         GameScreen.CARD_REWARD: ["start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],
         GameScreen.RELIC_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],

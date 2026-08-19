@@ -403,6 +403,63 @@ class TestAct:
         mock_popen.assert_not_called()
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_skips_card_reward_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """Neow 祝福「失物盒」带出 CARD_REWARD 时，advance_dialogue 必须跳过奖励
+        并点击 Proceed 收尾到 MAP，不能再无操作返回（真机曾卡 Expected MAP, got
+        CARD_REWARD）。"""
+        adapter._cached_state = GameState(screen=GameScreen.CARD_REWARD)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # reward_skip_card
+            _mock_popen_ok(  # state → EVENT（Neow Proceed 残留）
+                {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_in_dialogue": False,
+                        "options": [{"index": 0, "is_proceed": True}],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_event 0（点击 Proceed）
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "reward_skip_card"],
+            ["sts2", "state"],
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_skips_tri_select_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """Neow 祝福「铅制镇纸」带出 TRI_SELECT 时，advance_dialogue 必须跳过三选一
+        推进到 MAP（真机曾报 Game not actionable before action: advance_dialogue）。"""
+        adapter._cached_state = GameState(screen=GameScreen.TRI_SELECT)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # tri_select_skip
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "tri_select_skip"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_choose_event_is_noop_on_map(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:
