@@ -25,6 +25,33 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
+async def _no_sleep(*a, **k):
+    return None
+
+
+def _advance_abandon_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """推进 recovery/orchestrator 的放弃轮询时钟，避免单测空等 30s。"""
+    clock = {"now": 0.0}
+
+    def _monotonic() -> float:
+        return clock["now"]
+
+    async def _sleep(seconds: float, *_a: Any, **_k: Any) -> None:
+        clock["now"] += float(seconds)
+
+    monkeypatch.setattr("sts2_autotest.core.recovery.time.monotonic", _monotonic)
+    monkeypatch.setattr("sts2_autotest.core.orchestrator.time.monotonic", _monotonic)
+    monkeypatch.setattr("asyncio.sleep", _sleep)
+
+
+def _fake_steam() -> MagicMock:
+    """硬重启兜底路径用的假 Steam，避免单测真去 ``start_game`` 空等 60s。"""
+    steam = MagicMock()
+    steam.game_exe = "FakeSTS2GameExeForTests.exe"
+    steam.start_game = MagicMock(return_value=4242)
+    return steam
+
+
 def _make_mock_adapter(
     healthy: bool = True,
     screen: GameScreen = GameScreen.MAIN_MENU,
@@ -426,7 +453,9 @@ class TestCrashHandling:
         result = _run(orch.execute_case("TC-001"))
         assert result.status == "crash"
 
-    def test_crash_goes_through_recovery_not_immediate_terminate(self) -> None:
+    def test_crash_goes_through_recovery_not_immediate_terminate(
+        self, monkeypatch
+    ) -> None:
         """CRASH_ERROR should reach recovery.decide(), not immediately crash.
 
         Beta: crash errors flow through progressive recovery
@@ -435,6 +464,7 @@ class TestCrashHandling:
         """
         from unittest.mock import MagicMock
 
+        _advance_abandon_clock(monkeypatch)
         mock_adapter = MagicMock(spec=GameAdapterProtocol)
         mock_adapter.get_available_actions = AsyncMock(return_value=["probe"])
         mock_adapter.act = AsyncMock(return_value=ActionResult("success", True))
@@ -986,6 +1016,68 @@ class TestAutoReset:
 
         assert result is False
 
+    def test_auto_reset_from_combat_prefers_abandon_run(self, monkeypatch) -> None:
+        """Q9：进行中的一局（COMBAT）先用游戏内放弃回主菜单，而非硬重启。"""
+        monkeypatch.setattr("asyncio.sleep", _no_sleep)
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.side_effect = [
+            GameState(screen=GameScreen.COMBAT),
+            GameState(screen=GameScreen.COMBAT),
+            GameState(screen=GameScreen.MAIN_MENU),
+            GameState(screen=GameScreen.MAIN_MENU),
+        ]
+        mock.get_available_actions.return_value = ["abandon_run"]
+
+        orch = TestOrchestrator(adapter=mock)
+        _run(orch._auto_reset_to_main_menu())
+
+        mock.act.assert_any_call("abandon_run")
+
+    def test_auto_reset_from_combat_falls_back_to_hard_reset_when_abandon_fails(
+        self, monkeypatch
+    ) -> None:
+        """Q9：放弃失败（异常）时仍回退到 Phase 2 硬重启兜底，且不静默吞错。"""
+        monkeypatch.setattr("asyncio.sleep", _no_sleep)
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.return_value = GameState(screen=GameScreen.COMBAT)
+        mock.get_available_actions.return_value = ["abandon_run"]
+        mock.act.side_effect = STS2Error(category=ErrorCategory.ADAPTER_ERROR, message="boom")
+        steam = _fake_steam()
+
+        orch = TestOrchestrator(
+            adapter=mock,
+            recovery=DefaultRecoveryStrategy(steam_controller=steam),
+        )
+        _run(orch._auto_reset_to_main_menu())
+
+        mock.act.assert_any_call("abandon_run")
+        steam.start_game.assert_called_once()
+
+    def test_try_abandon_uses_dismiss_modal_when_confirm_absent(
+        self, monkeypatch
+    ) -> None:
+        """放弃确认框若只暴露 dismiss_modal，应与 start_session 一样点掉后回到主菜单。"""
+        monkeypatch.setattr("asyncio.sleep", _no_sleep)
+        monkeypatch.setattr(
+            "sts2_autotest.core.orchestrator._AUTO_RESET_ABANDON_TIMEOUT", 0.05
+        )
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.get_state.side_effect = [
+            GameState(screen=GameScreen.COMBAT),
+            GameState(screen=GameScreen.MAIN_MENU),
+        ]
+        mock.get_available_actions.return_value = ["dismiss_modal"]
+        mock.act.return_value = ActionResult(status="success", state_changed=True)
+
+        orch = TestOrchestrator(adapter=mock)
+        result = _run(orch._try_abandon_to_main_menu())
+
+        assert result is True
+        mock.act.assert_any_call("abandon_run")
+        mock.act.assert_any_call("dismiss_modal")
+
     def test_auto_reset_success_returns_true(self) -> None:
         """Auto-reset reaches MAIN_MENU → session starts successfully."""
         call_count = 0
@@ -1008,22 +1100,27 @@ class TestAutoReset:
         assert result is True
         assert orch._session_active is True
 
-    def test_auto_reset_combat_skips_soft_nav(self) -> None:
-        """COMBAT state skips soft navigation and goes directly to hard reset."""
-        states = [GameState(screen=GameScreen.COMBAT)] * 10
-        idx = 0
-
-        def state_factory() -> GameState:
-            nonlocal idx
-            s = states[min(idx, len(states) - 1)]
-            idx += 1
-            return s
-
+    def test_auto_reset_combat_falls_back_when_abandon_does_not_reach_menu(
+        self, monkeypatch
+    ) -> None:
+        """COMBAT 放弃后仍停在战斗时，回退硬重启；硬重启失败则会话启动失败。"""
+        monkeypatch.setattr("asyncio.sleep", _no_sleep)
+        monkeypatch.setattr(
+            "sts2_autotest.core.orchestrator._AUTO_RESET_ABANDON_TIMEOUT", 0.0
+        )
         mock = MagicMock(spec=GameAdapterProtocol)
         mock.health_check.return_value = HealthStatus(healthy=True)
-        mock.get_state.side_effect = state_factory
+        mock.get_state.return_value = GameState(screen=GameScreen.COMBAT)
         mock.get_available_actions.return_value = ["probe"]
+        mock.act.side_effect = STS2Error(
+            category=ErrorCategory.ADAPTER_ERROR, message="abandon unavailable"
+        )
+        steam = _fake_steam()
 
-        orch = TestOrchestrator(adapter=mock)
+        orch = TestOrchestrator(
+            adapter=mock,
+            recovery=DefaultRecoveryStrategy(steam_controller=steam),
+        )
         result = _run(orch.start_session())
         assert result is False
+        steam.start_game.assert_called_once()

@@ -6,6 +6,8 @@ DefaultRecoveryStrategy: pure-function decide() + async execute().
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -109,6 +111,72 @@ def is_p0_exception(exc: Exception) -> bool:
             sub_type = str(detail.get("sub_type", ""))
             if sub_type == "version_mismatch":
                 return True
+    return False
+
+
+def _state_info(adapter_state: Any) -> tuple[str, list[str]]:
+    """Extract (upper-cased screen, available_actions list) from an adapter state."""
+    model_dump = getattr(adapter_state, "model_dump", None)
+    if callable(model_dump) and not asyncio.iscoroutinefunction(model_dump):
+        try:
+            payload = model_dump()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            acts = payload.get("available_actions") or []
+            return str(payload.get("screen") or "").upper(), list(acts) if acts else []
+    if isinstance(adapter_state, dict):
+        acts = adapter_state.get("available_actions") or []
+        return str(adapter_state.get("screen") or "").upper(), list(acts) if acts else []
+    return "", []
+
+
+def _abandon_confirm_action(actions: list[str]) -> str | None:
+    """放弃后的确认框动作，与 ``start_session`` 的 modal 处理对齐。"""
+    if "confirm_modal" in actions:
+        return "confirm_modal"
+    if "dismiss_modal" in actions:
+        return "dismiss_modal"
+    return None
+
+
+async def _try_soft_reset_to_main_menu(adapter: GameAdapterProtocol) -> bool:
+    """尝试用游戏内「放弃」回到主菜单，避免硬重启进程（Q10 缓冲）。
+
+    仅在游戏仍可控制、且一局进行中时尝试。任何失败（含游戏已不可控的真崩溃）
+    都返回 False，由调用方正常硬重启。成功回到主菜单返回 True。
+    """
+    try:
+        state = await adapter.get_state()
+    except Exception:
+        return False
+    screen, _ = _state_info(state)
+    # 仅在确有进行中的一局时尝试游戏内放弃；干净主菜单不需要。
+    if screen not in (
+        "MAP", "COMBAT", "EVENT", "SHOP", "REST", "CHEST",
+        "CARD_REWARD", "BOSS_REWARD",
+    ):
+        return False
+    try:
+        await adapter.act("abandon_run")
+    except Exception:
+        return False
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        try:
+            st = await adapter.get_state()
+        except Exception:
+            return False
+        sc, acts = _state_info(st)
+        if sc == "MAIN_MENU":
+            return True
+        confirm = _abandon_confirm_action(acts)
+        if confirm is not None:
+            try:
+                await adapter.act(confirm)
+            except Exception:
+                pass
+        await asyncio.sleep(1.0)
     return False
 
 
@@ -398,6 +466,12 @@ class DefaultRecoveryStrategy:
         """Level 1: restart game → recreate adapter → health check."""
         if not self._prepare_restart_popup("GAME_RESTART"):
             return False, None
+        # 缓冲（Q10）：游戏仍可控制且一局进行中时，优先用游戏内「放弃」回到主菜单，
+        # 而非硬杀进程重启。可避免把「误诊的崩溃/仍在启动」当成真崩溃而重启游戏。
+        # 仅当游戏确不可控（真崩溃）时 get_state/act 失败，本缓冲返回 False，
+        # 正常落入下面的硬重启。绝不掩盖真崩溃。
+        if await _try_soft_reset_to_main_menu(adapter):
+            return await self._execute_recreate(adapter)
         if self._lifecycle_manager is not None:
             try:
                 if await self._lifecycle_manager.relaunch_run(

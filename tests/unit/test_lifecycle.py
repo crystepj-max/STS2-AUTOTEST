@@ -388,7 +388,9 @@ class TestEnsureEnvironmentReady:
         assert mgr._term_calls == 0
         assert "launch" in res.actions_taken
 
-    def test_stale_process_terminates_then_launches(self, monkeypatch):
+    def test_boot_grace_keeps_present_process_when_it_becomes_ready(self, monkeypatch):
+        """Q10 启动宽限期：进程在、但仍在启动（探测先坏后好）时，先等其可控，
+        不应当作崩溃 terminate。"""
         bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
         good = (True, None, {"screen": "MAIN_MENU"})
         mgr = self._mgr_with(
@@ -396,6 +398,22 @@ class TestEnsureEnvironmentReady:
         )
         res = asyncio.run(mgr.ensure_environment_ready())
         assert res.ready is True
+        assert mgr._term_calls == 0
+        assert mgr._launch_calls == 0
+        assert res.recovered is False
+
+    def test_present_process_never_ready_is_terminated_then_relaunched(self, monkeypatch, no_sleep):
+        """启动宽限期耗尽（确属坏掉）后，仍按原契约 terminate+单次重拉。"""
+        bad = (False, EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE, {})
+        mgr = self._mgr_with(
+            monkeypatch, probe_results=[bad, bad, bad, bad, bad, bad], process_present=True
+        )
+        # 缩小启动窗口并跳过进程消失等待，避免长耗时。
+        mgr.api_timeout = 0.05
+        mgr.poll_interval = 0.001
+        monkeypatch.setattr(mgr, "_wait_game_gone", lambda *a, **k: True)
+        res = asyncio.run(mgr.ensure_environment_ready())
+        assert res.ready is False
         assert mgr._term_calls == 1
         assert mgr._launch_calls == 1
         assert res.actions_taken.index("controlled_terminate") < res.actions_taken.index("launch")

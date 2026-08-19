@@ -3,6 +3,7 @@
 import asyncio
 import json
 import signal
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,7 @@ from sts2_autotest.core.recovery import (
     FailureRecord,
     RecoveryAction,
     RecoveryStrategy,
+    _abandon_confirm_action,
     crash_signature,
     failure_signature,
     is_p0_exception,
@@ -33,6 +35,9 @@ from sts2_autotest.core.steam import SteamController
 from sts2_autotest.core.watchdog import Watchdog
 
 logger = get_logger("core.orchestrator")
+
+# 游戏内「放弃」回主菜单的轮询上限（秒）。放弃→死亡/确认→主菜单通常数秒完成。
+_AUTO_RESET_ABANDON_TIMEOUT = 30.0
 
 
 def _is_transient_validation_violation(violations: list[str]) -> bool:
@@ -256,9 +261,12 @@ class TestOrchestrator:
             if screen == GameScreen.MAIN_MENU:
                 return
 
-            # MAP during an active run cannot soft-navigate to MAIN_MENU;
-            # skip directly to hard reset to avoid wasting time in loops.
+            # 进行中的一局本可用游戏内「放弃」（系统设置→放弃游戏→确认）回到
+            # 主菜单，不必硬重启整个游戏进程。先尝试放弃；成功（回到主菜单）则
+            # 继续循环等待；超时/失败才落入 Phase 2 硬重启兜底。
             if screen in {GameScreen.MAP, GameScreen.COMBAT}:
+                if await self._try_abandon_to_main_menu():
+                    continue
                 break
 
             try:
@@ -355,6 +363,37 @@ class TestOrchestrator:
                         continue
             except Exception as exc:
                 logger.warning("Game restart failed: %s", exc)
+
+    async def _try_abandon_to_main_menu(self) -> bool:
+        """尝试用游戏内「放弃」回到主菜单，避免硬重启游戏进程（Q9）。
+
+        对应玩家手动路径：系统设置 → 放弃游戏 → 确认。成功到达 MAIN_MENU 返回
+        True；任意一步失败/超时返回 False，调用方回退到 Phase 2 硬重启兜底。
+        """
+        try:
+            await self.adapter.act("abandon_run")
+        except STS2Error:
+            return False
+        deadline = time.monotonic() + _AUTO_RESET_ABANDON_TIMEOUT
+        while time.monotonic() < deadline:
+            try:
+                state = await self.adapter.get_state()
+            except STS2Error:
+                return False
+            if state.screen == GameScreen.MAIN_MENU:
+                return True
+            try:
+                actions = await self.adapter.get_available_actions()
+            except STS2Error:
+                actions = []
+            confirm = _abandon_confirm_action(actions)
+            if confirm is not None:
+                try:
+                    await self.adapter.act(confirm)
+                except STS2Error:
+                    pass
+            await asyncio.sleep(1.0)
+        return False
 
     async def _record_adapter_result(self, success: bool) -> None:
         """Track adapter call success/failure for degradation detection."""
@@ -484,8 +523,8 @@ class TestOrchestrator:
                     # After abandon_run there may be a confirmation modal
                     try:
                         post_abandon_actions = await self.adapter.get_available_actions()
-                        if "confirm_modal" in post_abandon_actions or "dismiss_modal" in post_abandon_actions:
-                            modal_action = "confirm_modal" if "confirm_modal" in post_abandon_actions else "dismiss_modal"
+                        modal_action = _abandon_confirm_action(list(post_abandon_actions))
+                        if modal_action is not None:
                             logger.info("Modal detected after abandon_run — dismissing via %s", modal_action)
                             await self.adapter.act(modal_action)
                     except Exception:
