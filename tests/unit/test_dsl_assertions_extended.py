@@ -40,6 +40,30 @@ class TestHasTravelableNode:
         assert not ok
         assert "travelable_nodes" in msg
 
+    def test_reads_cli_map_travelable_coords(self) -> None:
+        """CLI 适配器把可达节点放在 map.travelable_coords，断言必须能读到。"""
+        state = GameState(
+            screen=GameScreen.MAP,
+            map={"travelable_coords": [{"col": 1, "row": 1}, {"col": 2, "row": 1}]},
+        )
+        ok, msg = has_travelable_node()(state)
+        assert ok, msg
+
+    def test_reads_agent_map_available_nodes(self) -> None:
+        """Agent 适配器把可达节点放在 map.available_nodes，断言必须能读到。"""
+        state = GameState(
+            screen=GameScreen.MAP,
+            map={"available_nodes": [{"index": 0, "col": 1, "row": 1}]},
+        )
+        ok, msg = has_travelable_node()(state)
+        assert ok, msg
+
+    def test_no_nodes_when_map_lists_empty(self) -> None:
+        """map 存在但 travelable_coords 为空时，应判定为无可达节点。"""
+        state = GameState(screen=GameScreen.MAP, map={"travelable_coords": []})
+        ok, _ = has_travelable_node()(state)
+        assert not ok
+
 
 class TestPlayerBlockIncreasedBy:
     def test_player_block_increased_by_detects_gain(self) -> None:
