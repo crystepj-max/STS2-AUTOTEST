@@ -505,6 +505,18 @@ class CliModAdapter:
                 and event.get("options")
                 and not event.get("is_in_dialogue", False)
             ):
+                # v0.107.1+ 多阶段事件（如 Neow）：对话结束后（is_in_dialogue=False）
+                # 仍残留一个 is_proceed=True 的「Proceed」确认选项（is_finished=True）。
+                # advance_dialogue 必须点击它才能离开事件进 MAP，不能假报成功而不
+                # 动作（真机曾停在 EVENT：Expected MAP, got EVENT）。没有 Proceed
+                # 选项时保持原「待选项选择」短路——此时应由 choose_event 显式选择。
+                proceed_idx = _find_proceed_option_index(event.get("options", []))
+                if proceed_idx is not None:
+                    raw = self._run_cli("choose_event", str(proceed_idx))
+                    self._parse_response(raw)
+                    self._cache_stale = True
+                    self._available_actions_cache = None
+                    return ActionResult(status="success", state_changed=True)
                 return ActionResult(status="success", state_changed=False)
         if action == "choose_event" and self._cached_state is not None:
             if self._cached_state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
@@ -528,8 +540,19 @@ class CliModAdapter:
                         detail=f"Expected MAP after event progression, got {event_result.screen.value}",
                     )
             args = _resolve_map_node_args(self._cached_state, args)
-        if action == "enter_combat" and self._cached_state is not None:
-            if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+        if action == "enter_combat":
+            # enter_combat 是合成动作：游戏已在战斗（COMBAT/CARD_REWARD）时为空
+            # 操作成功。v0.107.1+ 真实战斗状态走降级路径且不缓存（_cache_stale 保持
+            # True），_cached_state 可能仍是旧值（EVENT/None）。此时必须重读真实
+            # 状态再判定，否则会把不存在的 CLI 命令 enter_combat 下发（真机曾报
+            # 「未识别命令或参数"enter_combat"」）。
+            cur = self._cached_state
+            if cur is None or self._cache_stale:
+                try:
+                    cur = self._get_state_sync()
+                except STS2Error:
+                    cur = self._cached_state
+            if cur is not None and cur.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return ActionResult(status="success", state_changed=False)
         if action == "bundle_select":
             # Bundle picker (Scroll Boxes relic) is a two-step CLI flow:
@@ -940,6 +963,23 @@ def _resolve_map_node_args(
         first = travelable_coords[0]
         return {"col": first[0], "row": first[1]}
     return args
+
+
+def _find_proceed_option_index(options: Any) -> int | None:
+    """在事件选项中定位 is_proceed=True 的「Proceed」确认选项下标。
+
+    v0.107.1+ 的多阶段事件（如 Neow）在祝福选择完成后会残留一个
+    ``is_proceed=True`` 的确认选项（此时 ``is_finished=True``），必须点击它
+    才能离开事件。没有该选项时返回 None，表示仍需上层显式选择。
+    """
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        if not isinstance(option, dict) or not option.get("is_proceed"):
+            continue
+        index = option.get("index", 0)
+        return index if isinstance(index, int) else 0
+    return None
 
 
 def _event_progress_cli_args(state: GameState) -> list[str]:

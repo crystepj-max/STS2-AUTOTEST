@@ -334,6 +334,34 @@ class TestAct:
         mock_popen.assert_not_called()
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_clicks_proceed_option(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """v0.107.1 多阶段 Neow：对话结束后残留 is_proceed=True 的 Proceed
+        选项（is_finished=True），advance_dialogue 必须点击它才能离开事件进 MAP，
+        不能假报成功而不动作。"""
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            event={
+                "event_id": "NEOW",
+                "is_finished": True,
+                "is_in_dialogue": False,
+                "options": [
+                    {"index": 0, "title": "Proceed", "is_proceed": True, "was_chosen": False}
+                ],
+            },
+        )
+        adapter._cache_stale = False
+        mock_popen.return_value = _mock_popen_ok({})
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        assert result.state_changed is True
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [["sts2", "choose_event", "0"]]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_advance_dialogue_selects_first_grid_card(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:
@@ -497,6 +525,29 @@ class TestAct:
 
         assert result.status == "success"
         mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_enter_combat_noop_when_degraded_combat_not_cached(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """降级 COMBAT 不缓存（_cache_stale=True）时，enter_combat 必须重读真实
+        状态再判定，不得把不存在的 CLI 命令 enter_combat 下发（真机曾报
+        「未识别命令或参数"enter_combat"」）。"""
+        adapter._cached_state = GameState(screen=GameScreen.EVENT)
+        adapter._cache_stale = True
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+
+        result = _run(adapter.act("enter_combat"))
+
+        assert result.status == "success"
+        assert result.state_changed is False
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [["sts2", "state"]]
 
 
 class TestWaitUntilActionable:
