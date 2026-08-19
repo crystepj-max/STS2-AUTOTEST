@@ -31,6 +31,50 @@ from sts2_autotest.common.state import GameScreen, GameState
 
 logger = get_logger("adapters.cli_mod")
 
+# 游戏 v0.107.1+ 移除了 CombatManager.get_IsPlayPhase()，而 STS2-Cli-Mod 仍会在
+# 查询战斗状态时调用它，导致 CLI 以「Method not found: ... get_IsPlayPhase()」报错。
+# 该错误会以两种形态出现：非零退出（stderr JSON 的 message 字段，经 _handle_nonzero_exit
+# 抛出）与 ok=false 信封（经 _parse_response 抛出）。框架据此识别并降级，避免把游戏
+# 版本演进误判为运行错误。
+_PLAY_PHASE_REMOVED_MARKER = "get_isplayphase"
+
+
+def _is_play_phase_removed_error(exc: STS2Error) -> bool:
+    """判断 STS2Error 是否由「游戏移除 CombatManager.get_IsPlayPhase」引发。
+
+    匹配 message 与 detail 中出现的 ``get_IsPlayPhase``（大小写不敏感），
+    以区别于其它无关的 CLI 错误。
+    """
+    text = str(exc.message or "").lower()
+    for value in (exc.detail or {}).values():
+        text += " " + str(value).lower()
+    return _PLAY_PHASE_REMOVED_MARKER in text
+
+
+# 事件选项按钮尚未渲染就绪时，CLI 会报「Option button at index N not found in UI」。
+# 这是 embark 后 EVENT 屏的 UI 就绪竞态（真机复现 4/18 次），短暂等待重试即可，
+# 不属于确定性失败。
+_UI_NOT_READY_MARKERS = ("not found in ui", "option button")
+
+
+def _is_ui_not_ready_error(exc: STS2Error) -> bool:
+    """判断 STS2Error 是否由「事件选项按钮尚未渲染」的 UI 就绪竞态引发。"""
+    text = str(exc.message or "").lower()
+    return any(marker in text for marker in _UI_NOT_READY_MARKERS)
+
+
+def _is_degraded_combat_state(state: GameState) -> bool:
+    """识别「降级占位」的 COMBAT 状态（空 combat、无真实战斗数据）。
+
+    真实战斗状态总是带非空 combat 载荷（hand/enemies/player 等）；只有
+    ``_degraded_combat_state`` 会构造 ``combat={}`` 的 COMBAT 快照。据此把
+    「查询失败占位」与「真实战斗」区分开，供事件推进循环决定是重读还是返回。
+    """
+    if state.screen != GameScreen.COMBAT:
+        return False
+    combat = getattr(state, "combat", None)
+    return isinstance(combat, dict) and not combat
+
 # CLI 命令返回的 screen 值 → GameScreen 枚举映射
 _SCREEN_MAP: dict[str, GameScreen] = {
     "MENU": GameScreen.MAIN_MENU,
@@ -319,30 +363,15 @@ class CliModAdapter:
         if not self._cache_stale and self._cached_state is not None:
             return self._cached_state
 
-        raw = self._run_cli("state")
+        # _run_cli 也可能因移除 get_IsPlayPhase 非零退出（而非经 _parse_response
+        # 的 ok=false 信封），因此把两者都纳入降级范围。
+        raw: dict[str, Any] | None = None
         try:
+            raw = self._run_cli("state")
             data = self._parse_response(raw)
         except STS2Error as exc:
-            # Game v0.107.1 removed CombatManager.get_IsPlayPhase(), causing
-            # "Method not found" when CLI queries combat state.
-            # Degrade gracefully: return COMBAT with whatever fields we have.
-            error_msg = str(exc.message or "")
-            if "get_IsPlayPhase" in error_msg or "Method not found" in error_msg:
-                combat_hint = {}
-                if isinstance(raw, dict):
-                    raw_data = raw.get("data", {})
-                    if isinstance(raw_data, dict):
-                        combat_hint = {k: v for k, v in raw_data.items() if k != "error"}
-                logger.warning(
-                    "CombatManager method not found (game v0.107.1+) — "
-                    "returning degraded COMBAT state",
-                )
-                state = GameState(screen=GameScreen.COMBAT, **combat_hint)
-                if state.screen != GameScreen.UNKNOWN:
-                    self._cached_state = state
-                    self._cache_stale = False
-                    self._available_actions_cache = None
-                return state
+            if _is_play_phase_removed_error(exc):
+                return self._degraded_combat_state(raw)
             raise  # Re-raise other errors
 
         # Map CLI screen name to GameScreen enum
@@ -388,6 +417,52 @@ class CliModAdapter:
             self._available_actions_cache = None  # screen changed, invalidate actions
         return state
 
+    def _degraded_combat_state(self, raw: dict[str, Any] | None) -> GameState:
+        """把「移除 get_IsPlayPhase」的 CLI 错误降级为 COMBAT 状态快照。
+
+        Game v0.107.1 移除了 CombatManager.get_IsPlayPhase()，CLI 查询战斗状态时
+        报「Method not found」。此时回退到一个「降级占位」COMBAT 快照：带空的
+        ``combat`` 字段，避免 orchestrator 的 lifecycle.is_phantom_combat 把
+        ``COMBAT + combat=None + in_combat=False`` 误判为不可退出的假战斗。
+
+        该占位状态**不缓存**（保持 cache_stale=True）：查询失败只是游戏过渡中的
+        瞬时现象（如 EVENT → MAP 途中短暂进入战斗状态），下一轮 get_state 必须
+        重新查询 CLI 才能拿到真实状态，不能命中陈旧快照。
+        """
+        combat_hint: dict[str, Any] = {}
+        if isinstance(raw, dict):
+            raw_data = raw.get("data", {})
+            if isinstance(raw_data, dict):
+                combat_hint = {
+                    k: v
+                    for k, v in raw_data.items()
+                    if k not in {"error", "screen", "combat"}
+                }
+        logger.warning(
+            "CombatManager.get_IsPlayPhase removed (game v0.107.1+) — "
+            "returning degraded COMBAT state",
+        )
+        # 空 combat 是「降级占位」标记：既避开 is_phantom_combat，也供
+        # _advance_event_until_map_sync 识别为「过渡中、需重读」。
+        combat_hint["combat"] = {}
+        state = GameState(screen=GameScreen.COMBAT, **combat_hint)
+        # 不缓存降级状态；仅失效动作缓存，保证下一次状态读取重新走 CLI。
+        self._cache_stale = True
+        self._available_actions_cache = None
+        return state
+
+    def _action_error_result(self, exc: STS2Error, state_changed: bool) -> ActionResult:
+        """把动作命令的 STS2Error 映射为 ActionResult。
+
+        命中「移除 get_IsPlayPhase」错误时降级为成功（动作已下发、游戏仍在推进，
+        交由上层重读状态确认真实转移）；超时与其余错误保持原有语义。
+        """
+        if _is_play_phase_removed_error(exc):
+            return ActionResult(status="success", state_changed=True, detail=exc.message)
+        if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
+            return ActionResult(status="timeout", state_changed=state_changed, detail=exc.message)
+        return ActionResult(status="failure", state_changed=state_changed, detail=exc.message)
+
     def _get_available_actions_sync(self) -> list[str]:
         """Derive available actions from current game screen state."""
         if self._available_actions_cache is not None:
@@ -421,43 +496,66 @@ class CliModAdapter:
         # reset_to_main_menu 的受控重启兜底处理，不能再假报成功（修复：
         # 「reported success but produced no observable state change」）。
         if action == "advance_dialogue" and self._cached_state is not None:
-            cur = self._cached_state
-            if cur.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+            # 重读真实状态（choose_event 后缓存可能陈旧）：Neow 祝福可能带出 grid
+            # 卡牌选择（新叶→变化 1 张牌）、奖励（失物盒）、三选一（铅制镇纸）等
+            # 多阶段分支，不能基于陈旧快照假报成功。
+            try:
+                cur = self._get_state_sync()
+            except STS2Error:
+                cur = self._cached_state
+            if cur.screen in {GameScreen.MAP, GameScreen.COMBAT}:
                 return ActionResult(status="success", state_changed=False)
-            grid = getattr(cur, "grid_card_select", {})
-            if cur.screen == GameScreen.EVENT and isinstance(grid, dict):
-                cards = grid.get("cards", [])
-                if cards:
-                    first = cards[0]
-                    if isinstance(first, dict) and first.get("card_id"):
-                        raw = self._run_cli("grid_select_card", str(first["card_id"]))
-                        self._parse_response(raw)
-                        self._cache_stale = True
-                        self._available_actions_cache = None
-                        return ActionResult(status="success", state_changed=True)
-            event = getattr(cur, "event", {})
-            if (
-                cur.screen == GameScreen.EVENT
-                and isinstance(event, dict)
-                and event.get("options")
-                and not event.get("is_in_dialogue", False)
-            ):
+            if cur.screen in {
+                GameScreen.CARD_REWARD,
+                GameScreen.TRI_SELECT,
+                GameScreen.EVENT,
+                GameScreen.BUNDLE_SELECTION,
+            }:
+                # 循环跳过奖励/三选一、选 grid 卡、点击 Proceed、选包裹直至 MAP/COMBAT；
+                # 对普通事件选项（非 Proceed、非 grid）保守 no-op，不替上层 choose_event。
+                return self._advance_dialogue_to_map_sync()
+        if action == "choose_event":
+            # 短路：已越过事件屏（MAP/COMBAT/CARD_REWARD）时为空操作成功。
+            if self._cached_state is not None and self._cached_state.screen in {
+                GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD
+            }:
                 return ActionResult(status="success", state_changed=False)
-        if action == "choose_event" and self._cached_state is not None:
-            if self._cached_state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
-                return ActionResult(status="success", state_changed=False)
+            idx = 0
+            if args and args.get("index") is not None:
+                try:
+                    idx = int(args["index"])
+                except (TypeError, ValueError):
+                    idx = 0
+            return self._choose_event_sync(idx)
         if action == "choose_map_node" and self._cached_state is not None:
-            if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+            # 重读真实状态（choose_event 后缓存可能陈旧）：避免把 CARD_REWARD/EVENT
+            # 误判为 COMBAT 短路，或把 Neow 奖励/三选一屏当成可空操作。
+            try:
+                cur = self._get_state_sync()
+            except STS2Error:
+                cur = self._cached_state
+            if cur.screen == GameScreen.COMBAT:
                 return ActionResult(status="success", state_changed=False)
-            if self._cached_state.screen == GameScreen.EVENT:
+            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT}:
+                # Neow 祝福带出奖励/三选一屏时，先推进到 MAP 再选节点（真机曾卡在
+                # CARD_REWARD：choose_map_node 短路为空操作 → 后续 give_card 无法执行）。
+                converge = self._advance_dialogue_to_map_sync()
+                if converge.status != "success":
+                    return converge
+                # 收敛后重读：若已进 COMBAT 则无需再选节点。
+                try:
+                    cur = self._get_state_sync()
+                except STS2Error:
+                    cur = self._cached_state
+                if cur.screen == GameScreen.COMBAT:
+                    return ActionResult(status="success", state_changed=True)
+            elif cur.screen == GameScreen.EVENT:
                 try:
                     event_result = self._advance_event_until_map_sync()
                 except STS2Error as exc:
                     self._cache_stale = True
                     self._available_actions_cache = None
-                    if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                        return ActionResult(status="timeout", state_changed=True, detail=exc.message)
-                    return ActionResult(status="failure", state_changed=True, detail=exc.message)
+                    return self._action_error_result(exc, state_changed=True)
                 if event_result.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                     return ActionResult(status="success", state_changed=True)
                 if event_result.screen != GameScreen.MAP:
@@ -467,8 +565,19 @@ class CliModAdapter:
                         detail=f"Expected MAP after event progression, got {event_result.screen.value}",
                     )
             args = _resolve_map_node_args(self._cached_state, args)
-        if action == "enter_combat" and self._cached_state is not None:
-            if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+        if action == "enter_combat":
+            # enter_combat 是合成动作：游戏已在战斗（COMBAT/CARD_REWARD）时为空
+            # 操作成功。v0.107.1+ 真实战斗状态走降级路径且不缓存（_cache_stale 保持
+            # True），_cached_state 可能仍是旧值（EVENT/None）。此时必须重读真实
+            # 状态再判定，否则会把不存在的 CLI 命令 enter_combat 下发（真机曾报
+            # 「未识别命令或参数"enter_combat"」）。
+            cur = self._cached_state
+            if cur is None or self._cache_stale:
+                try:
+                    cur = self._get_state_sync()
+                except STS2Error:
+                    cur = self._cached_state
+            if cur is not None and cur.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return ActionResult(status="success", state_changed=False)
         if action == "bundle_select":
             # Bundle picker (Scroll Boxes relic) is a two-step CLI flow:
@@ -504,7 +613,7 @@ class CliModAdapter:
                 except STS2Error as exc:
                     self._cache_stale = True
                     self._available_actions_cache = None
-                    return ActionResult(status="failure", state_changed=False, detail=exc.message)
+                    return self._action_error_result(exc, state_changed=False)
         if action == "return_to_menu" and self._cached_state is not None:
             try:
                 cur = self._get_state_sync()
@@ -526,9 +635,30 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error_result(exc, state_changed=False)
+
+    def _choose_event_sync(self, index: int) -> ActionResult:
+        """选择事件选项，并对 UI 就绪竞态做重试。
+
+        embark 后游戏可能短暂处于 UNKNOWN/加载态，EVENT 屏虽已上报但选项按钮
+        尚未渲染，CLI 报「Option button at index N not found in UI」。此时短暂
+        等待后重试，直至成功或超时；其它错误保持原有语义。
+        """
+        deadline = time.monotonic() + min(self.timeout, 10.0)
+        while True:
+            try:
+                raw = self._run_cli("choose_event", str(index))
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                return ActionResult(status="success", state_changed=True)
+            except STS2Error as exc:
+                self._cache_stale = True
+                self._available_actions_cache = None
+                if _is_ui_not_ready_error(exc) and time.monotonic() < deadline:
+                    time.sleep(self.poll_interval)
+                    continue
+                return self._action_error_result(exc, state_changed=False)
 
     def _embark_sync(self) -> ActionResult:
         """Embark and wait for the game to leave character select."""
@@ -556,9 +686,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error_result(exc, state_changed=False)
 
     def _bundle_select_and_confirm_sync(self, index: int) -> ActionResult:
         """Preview then confirm a bundle (Scroll Boxes relic picker).
@@ -584,9 +712,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=True, detail=exc.message)
-            return ActionResult(status="failure", state_changed=True, detail=exc.message)
+            return self._action_error_result(exc, state_changed=True)
 
     def _combat_basic_policy_sync(self) -> ActionResult:
         deadline = time.monotonic() + min(self.timeout, 60.0)
@@ -640,9 +766,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=True, detail=exc.message)
-            return ActionResult(status="failure", state_changed=True, detail=exc.message)
+            return self._action_error_result(exc, state_changed=True)
 
     def _start_new_run_sync(self) -> ActionResult:
         """Execute the semantic new-run flow across menu sub-screens."""
@@ -676,9 +800,7 @@ class CliModAdapter:
         except STS2Error as exc:
             self._cache_stale = True
             self._available_actions_cache = None
-            if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error_result(exc, state_changed=False)
 
     def _poll_state_after_new_run(self) -> GameState:
         deadline = time.monotonic() + min(self.timeout, 5.0)
@@ -698,6 +820,15 @@ class CliModAdapter:
         deadline = time.monotonic() + min(self.timeout, 20.0)
         state = self._cached_state or self._get_state_sync()
         while time.monotonic() < deadline:
+            # 降级占位 COMBAT：state 查询命中「移除 get_IsPlayPhase」，游戏仍在
+            # 过渡（EVENT → MAP）。不能把它当真实战斗返回，否则 choose_map_node
+            # 会提前短路、漏掉真正的地图节点选择；短暂等待后重读直至真实状态。
+            if _is_degraded_combat_state(state):
+                time.sleep(self.poll_interval)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                continue
             if state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return state
             if state.screen != GameScreen.EVENT:
@@ -710,6 +841,135 @@ class CliModAdapter:
             state = self._get_state_sync()
 
         return state
+
+    def _advance_dialogue_to_map_sync(self) -> ActionResult:
+        """从事件后屏推进到 MAP/真实 COMBAT（advance_dialogue 语义）。
+
+        Neow 祝福可能带出多种分支：失物盒→CARD_REWARD、铅制镇纸→TRI_SELECT、
+        新叶→grid 卡牌选择（变化 1 张牌），或直接残留 Proceed 确认。advance_dialogue
+        的语义是「推进事件后流程到地图」，故循环跳过奖励/三选一、选 grid 卡并点击
+        Proceed，直至 MAP/COMBAT 或超时。对普通事件选项（非 Proceed、非 grid）保守
+        返回 no-op——这些选项需由上层 choose_event 显式选择。真机曾卡在
+        ``Expected MAP, got CARD_REWARD``、``Game not actionable before action:
+        advance_dialogue`` 与「新叶」分支停在 EVENT + Proceed 未点击。
+        """
+        deadline = time.monotonic() + min(self.timeout, 20.0)
+        state: GameState | None
+        try:
+            state = self._get_state_sync()
+        except STS2Error:
+            state = self._cached_state
+        while time.monotonic() < deadline:
+            if state is None or _is_degraded_combat_state(state):
+                # 降级占位 COMBAT：游戏仍在过渡，短暂等待后重读。
+                time.sleep(self.poll_interval)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                try:
+                    state = self._get_state_sync()
+                except STS2Error:
+                    state = self._cached_state
+                continue
+            if state.screen in {GameScreen.MAP, GameScreen.COMBAT}:
+                return ActionResult(status="success", state_changed=True)
+            if state.screen == GameScreen.CARD_REWARD:
+                # 万花筒等双卡奖励屏：reward_skip_card 只回 skipped:true、屏不退出
+                # （state.rewards 不变），须 proceed 才能真正离开并跳过奖励。
+                # 先尝试跳过一张（兼容需显式 skip 的奖励类型），重读后若仍卡在
+                # CARD_REWARD 则 proceed 收尾。
+                try:
+                    raw = self._run_cli("reward_skip_card")
+                    self._parse_response(raw)
+                except STS2Error:
+                    pass
+                self._cache_stale = True
+                self._available_actions_cache = None
+                try:
+                    state = self._get_state_sync()
+                except STS2Error:
+                    state = self._cached_state
+                if state is not None and state.screen == GameScreen.CARD_REWARD:
+                    try:
+                        raw = self._run_cli("proceed")
+                        self._parse_response(raw)
+                    except STS2Error:
+                        pass
+                    self._cache_stale = True
+                    self._available_actions_cache = None
+                    try:
+                        state = self._get_state_sync()
+                    except STS2Error:
+                        state = self._cached_state
+                continue
+            if state.screen == GameScreen.TRI_SELECT:
+                try:
+                    raw = self._run_cli("tri_select_skip")
+                    self._parse_response(raw)
+                except STS2Error:
+                    raw = self._run_cli("proceed")
+                    self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                continue
+            if state.screen == GameScreen.BUNDLE_SELECTION:
+                # 卷轴箱等包裹选择屏：bundle_select+bundle_confirm 选定后推进。
+                result = self._bundle_select_and_confirm_sync(0)
+                if result.status != "success":
+                    return result
+                try:
+                    state = self._get_state_sync()
+                except STS2Error:
+                    state = self._cached_state
+                continue
+            if state.screen == GameScreen.EVENT:
+                # grid 卡牌选择（新叶→变化 1 张牌）：选首张卡后继续循环。
+                grid = getattr(state, "grid_card_select", {})
+                cards = grid.get("cards", []) if isinstance(grid, dict) else []
+                if cards:
+                    first = cards[0]
+                    if isinstance(first, dict) and first.get("card_id"):
+                        raw = self._run_cli("grid_select_card", str(first["card_id"]))
+                        self._parse_response(raw)
+                        self._cache_stale = True
+                        self._available_actions_cache = None
+                        state = self._get_state_sync()
+                        continue
+                # 残留 Proceed 确认（is_finished=True）：点击它收尾进 MAP。
+                event = getattr(state, "event", None)
+                if isinstance(event, dict):
+                    options = event.get("options", [])
+                    proceed_idx = _find_proceed_option_index(options)
+                    if proceed_idx is not None:
+                        raw = self._run_cli("choose_event", str(proceed_idx))
+                        self._parse_response(raw)
+                        self._cache_stale = True
+                        self._available_actions_cache = None
+                        state = self._get_state_sync()
+                        continue
+                    if options and not event.get("is_in_dialogue", False):
+                        # 有待选事件选项：advance_dialogue 不替选，保守 no-op。
+                        return ActionResult(status="success", state_changed=False)
+                # 对话中（is_in_dialogue=True）或无选项：下发 advance_dialogue 推进。
+                raw = self._run_cli("advance_dialogue")
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                state = self._get_state_sync()
+                continue
+            # 其它过渡态（UNKNOWN 加载中等）：短暂等待后重读。
+            time.sleep(self.poll_interval)
+            self._cache_stale = True
+            self._available_actions_cache = None
+            try:
+                state = self._get_state_sync()
+            except STS2Error:
+                state = self._cached_state
+        return ActionResult(
+            status="failure",
+            state_changed=True,
+            detail="advance_dialogue did not reach MAP before timeout",
+        )
 
     def _wait_until_actionable_sync(self, timeout: float) -> bool:
         """Poll until health_check passes and actions are available."""
@@ -808,8 +1068,8 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
         GameScreen.REST: ["choose_rest_option", "probe"],
         GameScreen.EVENT: ["start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
         GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
-        GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "probe"],
-        GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "probe"],
+        GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "advance_dialogue", "probe"],
+        GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "advance_dialogue", "probe"],
         GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
         GameScreen.CARD_REWARD: ["start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],
         GameScreen.RELIC_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
@@ -880,6 +1140,23 @@ def _resolve_map_node_args(
         first = travelable_coords[0]
         return {"col": first[0], "row": first[1]}
     return args
+
+
+def _find_proceed_option_index(options: Any) -> int | None:
+    """在事件选项中定位 is_proceed=True 的「Proceed」确认选项下标。
+
+    v0.107.1+ 的多阶段事件（如 Neow）在祝福选择完成后会残留一个
+    ``is_proceed=True`` 的确认选项（此时 ``is_finished=True``），必须点击它
+    才能离开事件。没有该选项时返回 None，表示仍需上层显式选择。
+    """
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        if not isinstance(option, dict) or not option.get("is_proceed"):
+            continue
+        index = option.get("index", 0)
+        return index if isinstance(index, int) else 0
+    return None
 
 
 def _event_progress_cli_args(state: GameState) -> list[str]:

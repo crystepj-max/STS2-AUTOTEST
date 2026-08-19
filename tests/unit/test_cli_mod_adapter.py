@@ -334,21 +334,136 @@ class TestAct:
         mock_popen.assert_not_called()
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_clicks_proceed_option(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """v0.107.1 多阶段 Neow：对话结束后残留 is_proceed=True 的 Proceed
+        选项（is_finished=True），advance_dialogue 必须点击它才能离开事件进 MAP，
+        不能假报成功而不动作。"""
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            event={
+                "event_id": "NEOW",
+                "is_finished": True,
+                "is_in_dialogue": False,
+                "options": [
+                    {"index": 0, "title": "Proceed", "is_proceed": True, "was_chosen": False}
+                ],
+            },
+        )
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # choose_event 0（点击 Proceed）
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        assert result.state_changed is True
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_advance_dialogue_selects_first_grid_card(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:
+        """grid 卡牌选择屏（新叶→变化 1 张牌）：advance_dialogue 选首张卡后必须
+        继续循环收敛到 MAP，不能只选一张卡就返回。"""
         adapter._cached_state = GameState(
             screen=GameScreen.EVENT,
             grid_card_select={"cards": [{"card_id": "STRIKE_IRONCLAD"}]},
         )
         adapter._cache_stale = False
-        mock_popen.return_value = _mock_popen_ok({})
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # grid_select_card
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
 
         result = _run(adapter.act("advance_dialogue"))
 
         assert result.status == "success"
         commands = [call.args[0] for call in mock_popen.call_args_list]
-        assert commands == [["sts2", "grid_select_card", "STRIKE_IRONCLAD"]]
+        assert commands == [
+            ["sts2", "grid_select_card", "STRIKE_IRONCLAD"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_converges_grid_then_proceed_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """Neow「新叶」带出 grid 卡牌选择：advance_dialogue 必须选 grid 卡、再点击
+        残留的 Proceed 确认收敛到 MAP（真机曾停在 EVENT + Proceed 未点击）。"""
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            grid_card_select={"cards": [{"card_id": "STRIKE_IRONCLAD"}]},
+        )
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # grid_select_card
+            _mock_popen_ok(  # state → EVENT（Neow Proceed 残留）
+                {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_in_dialogue": False,
+                        "options": [{"index": 0, "is_proceed": True}],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_event 0（点击 Proceed）
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "grid_select_card", "STRIKE_IRONCLAD"],
+            ["sts2", "state"],
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_rereads_stale_state_after_choose_event(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """choose_event 后缓存陈旧：advance_dialogue 必须重读真实状态而非基于
+        陈旧快照假成功（真机「新叶」分支曾停在 EVENT + Proceed 未点击）。"""
+        adapter._cached_state = GameState(  # 陈旧：仍显示 Neow 祝福选项
+            screen=GameScreen.EVENT,
+            event={"is_in_dialogue": False, "options": [{"index": 0}, {"index": 1}]},
+        )
+        adapter._cache_stale = True  # choose_event 已下发，缓存失效
+        mock_popen.side_effect = [
+            _mock_popen_ok(  # state → 真实 EVENT（Proceed 残留）
+                {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_in_dialogue": False,
+                        "options": [{"index": 0, "is_proceed": True}],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_event 0（点击 Proceed）
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        assert result.state_changed is True
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "state"],
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+        ]
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_advance_dialogue_is_noop_on_map(
@@ -375,6 +490,114 @@ class TestAct:
         mock_popen.assert_not_called()
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_skips_card_reward_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """Neow 祝福「失物盒」带出 CARD_REWARD 时，advance_dialogue 必须跳过奖励
+        并点击 Proceed 收尾到 MAP，不能再无操作返回（真机曾卡 Expected MAP, got
+        CARD_REWARD）。"""
+        adapter._cached_state = GameState(screen=GameScreen.CARD_REWARD)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # reward_skip_card
+            _mock_popen_ok(  # state → EVENT（Neow Proceed 残留）
+                {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_in_dialogue": False,
+                        "options": [{"index": 0, "is_proceed": True}],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_event 0（点击 Proceed）
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "reward_skip_card"],
+            ["sts2", "state"],
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_skips_tri_select_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """Neow 祝福「铅制镇纸」带出 TRI_SELECT 时，advance_dialogue 必须跳过三选一
+        推进到 MAP（真机曾报 Game not actionable before action: advance_dialogue）。"""
+        adapter._cached_state = GameState(screen=GameScreen.TRI_SELECT)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # tri_select_skip
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "tri_select_skip"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_proceeds_when_card_reward_stays(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """万花筒→双卡 CARD_REWARD：reward_skip_card 回 skipped:true 但屏不退出
+        （state.rewards 不变），须 proceed 才能真正离开进 MAP。"""
+        adapter._cached_state = GameState(screen=GameScreen.CARD_REWARD)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # reward_skip_card（skipped:true，屏仍 CARD_REWARD）
+            _mock_popen_ok({"screen": "CARD_REWARD"}),  # state → 仍在 CARD_REWARD
+            _mock_popen_ok({}),  # proceed
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "reward_skip_card"],
+            ["sts2", "state"],
+            ["sts2", "proceed"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.time.sleep")
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_converges_bundle_selection_to_map(
+        self, mock_popen: MagicMock, mock_sleep: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """卷轴箱→BUNDLE_SELECTION：advance_dialogue 必须 bundle_select+bundle_confirm
+        选包裹后推进到 MAP（真机曾报 Game not actionable）。"""
+        adapter._cached_state = GameState(screen=GameScreen.BUNDLE_SELECTION)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # bundle_select 0
+            _mock_popen_ok({}),  # bundle_confirm
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "bundle_select", "0"],
+            ["sts2", "bundle_confirm"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_choose_event_is_noop_on_map(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:
@@ -397,6 +620,35 @@ class TestAct:
 
         assert result.status == "success"
         mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.time.sleep")
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_event_retries_when_option_not_found_in_ui(
+        self, mock_popen: MagicMock, mock_sleep: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """embark 后 EVENT 屏选项按钮尚未渲染：CLI 报 Option button not found in UI
+        时 choose_event 短暂等待重试，直至成功（UI 就绪竞态 4/18 真机复现）。"""
+        adapter._cached_state = GameState(screen=GameScreen.EVENT)
+        adapter._cache_stale = False
+        not_ready = json.dumps({
+            "ok": False,
+            "error": "OPTION_NOT_FOUND",
+            "message": "Option button at index 0 not found in UI",
+        })
+        mock_popen.side_effect = [
+            _mock_popen_error(returncode=1, stderr=not_ready),  # 首次失败
+            _mock_popen_ok({}),  # 重试成功
+        ]
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "choose_event", "0"],
+            ["sts2", "choose_event", "0"],
+        ]
+        mock_sleep.assert_called_once()
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_choose_map_node_falls_back_to_travelable_monster(
@@ -487,6 +739,96 @@ class TestAct:
         mock_popen.assert_not_called()
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_converges_card_reward_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """Neow「失物盒」带出 CARD_REWARD 时，choose_map_node 必须先推进到 MAP 再
+        选节点，不能短路为空操作（真机曾卡 CARD_REWARD → give_card 无法执行）。"""
+        adapter._cached_state = GameState(screen=GameScreen.CARD_REWARD)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # reward_skip_card
+            _mock_popen_ok(  # state → EVENT（Neow Proceed 残留）
+                {
+                    "screen": "EVENT",
+                    "event": {
+                        "is_in_dialogue": False,
+                        "options": [{"index": 0, "is_proceed": True}],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_event 0（点击 Proceed）
+            _mock_popen_ok(  # state → MAP
+                {
+                    "screen": "MAP",
+                    "map": {
+                        "travelable_coords": [{"col": 3, "row": 0}],
+                        "nodes": [
+                            {
+                                "col": 3,
+                                "row": 0,
+                                "type": "MONSTER",
+                                "state": "TRAVELABLE",
+                            }
+                        ],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_map_node 3 0
+        ]
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "reward_skip_card"],
+            ["sts2", "state"],
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+            ["sts2", "choose_map_node", "3", "0"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_converges_tri_select_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """Neow「铅制镇纸」带出 TRI_SELECT 时，choose_map_node 必须先跳过三选一
+        推进到 MAP 再选节点。"""
+        adapter._cached_state = GameState(screen=GameScreen.TRI_SELECT)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # tri_select_skip
+            _mock_popen_ok(  # state → MAP
+                {
+                    "screen": "MAP",
+                    "map": {
+                        "travelable_coords": [{"col": 3, "row": 0}],
+                        "nodes": [
+                            {
+                                "col": 3,
+                                "row": 0,
+                                "type": "MONSTER",
+                                "state": "TRAVELABLE",
+                            }
+                        ],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_map_node 3 0
+        ]
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "tri_select_skip"],
+            ["sts2", "state"],
+            ["sts2", "choose_map_node", "3", "0"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_enter_combat_is_noop_in_combat(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:
@@ -497,6 +839,29 @@ class TestAct:
 
         assert result.status == "success"
         mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_enter_combat_noop_when_degraded_combat_not_cached(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """降级 COMBAT 不缓存（_cache_stale=True）时，enter_combat 必须重读真实
+        状态再判定，不得把不存在的 CLI 命令 enter_combat 下发（真机曾报
+        「未识别命令或参数"enter_combat"」）。"""
+        adapter._cached_state = GameState(screen=GameScreen.EVENT)
+        adapter._cache_stale = True
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+
+        result = _run(adapter.act("enter_combat"))
+
+        assert result.status == "success"
+        assert result.state_changed is False
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [["sts2", "state"]]
 
 
 class TestWaitUntilActionable:
@@ -868,3 +1233,144 @@ class TestCombatWaitBackoff:
         )
         assert result.status == "success"
         assert fake_time.sleeps == [1.0, 2.0]
+
+
+# ── 游戏 v0.107.1+ 移除 CombatManager.get_IsPlayPhase() 的降级兜底 ──
+
+_PLAY_PHASE_METHOD_NOT_FOUND = (
+    "Method not found: 'Boolean MegaCrit.Sts2.Core.Combat."
+    "CombatManager.get_IsPlayPhase()'."
+)
+
+
+class TestPlayPhaseRemovedDegradation:
+    """命令层对「移除 get_IsPlayPhase」的降级兜底。
+
+    CLI 以两种形态上报该错误，都必须被识别并降级为 COMBAT / 成功，
+    而不是把游戏版本演进误判为运行错误：
+    1) 非零退出 + stderr JSON message（走 _run_cli → _handle_nonzero_exit）
+    2) ok=false 信封（走 _parse_response）
+    """
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_get_state_degrades_to_combat_on_run_cli_method_not_found(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """_run_cli 因移除 get_IsPlayPhase 非零退出时，get_state 降级为 COMBAT。"""
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_get_state_degrades_to_combat_on_parse_response_method_not_found(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """ok=false 信封携带移除方法错误时，get_state 降级为 COMBAT。"""
+        mock_proc = MagicMock()
+        mock_proc.communicate.return_value = (
+            json.dumps({
+                "ok": False,
+                "error": "METHOD_NOT_FOUND",
+                "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+            }).encode("utf-8"),
+            b"",
+        )
+        mock_proc.returncode = 0
+        mock_popen.return_value = mock_proc
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_act_degrades_to_success_on_method_not_found(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """动作命令命中移除方法错误时，act 降级为 success（交由上层重读状态）。"""
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+        result = _run(adapter.act("end_turn"))
+        assert result.status == "success"
+        assert result.state_changed is True
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_get_state_still_raises_on_unrelated_error(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """非移除方法错误仍按原样抛出，不误降级。"""
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr="boom")
+        with pytest.raises(STS2Error):
+            _run(adapter.get_state())
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_degraded_state_carries_empty_combat_and_stays_stale(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """降级 COMBAT 带空 combat 标记（避开 phantom 误判）且不缓存（保持 stale）。"""
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.return_value = _mock_popen_error(returncode=1, stderr=stderr)
+        result = _run(adapter.get_state())
+        assert result.screen == GameScreen.COMBAT
+        # 空 combat（而非 None）是「降级占位」标记：is_phantom_combat 据此
+        # 不再把 COMBAT + combat=None 误判为不可退出的假战斗。
+        assert getattr(result, "combat", None) == {}
+        # 降级状态不得缓存，否则下一轮 get_state 命中陈旧快照，掩盖真实过渡。
+        assert adapter._cache_stale is True
+
+    @patch("sts2_autotest.adapters.cli_mod.time.sleep")
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_retries_after_degraded_combat_in_event_resolution(
+        self, mock_popen: MagicMock, mock_sleep: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """事件推进途中命中降级 COMBAT 时，choose_map_node 重读直至真实 MAP。"""
+        adapter._cached_state = GameState(
+            screen=GameScreen.EVENT,
+            event={"is_in_dialogue": False, "options": [{"index": 0}]},
+        )
+        adapter._cache_stale = False
+        stderr = json.dumps({
+            "ok": False,
+            "error": "METHOD_NOT_FOUND",
+            "message": _PLAY_PHASE_METHOD_NOT_FOUND,
+        })
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),          # choose_event 0（推进事件）
+            _mock_popen_error(returncode=1, stderr=stderr),  # state → 降级 COMBAT
+            _mock_popen_ok({             # state（重读）→ 真实 MAP
+                "screen": "MAP",
+                "map": {
+                    "travelable_coords": [{"col": 3, "row": 0}],
+                    "nodes": [
+                        {
+                            "col": 3,
+                            "row": 0,
+                            "type": "MONSTER",
+                            "state": "TRAVELABLE",
+                        }
+                    ],
+                },
+            }),
+            _mock_popen_ok({}),          # choose_map_node 3 0
+        ]
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "choose_event", "0"],
+            ["sts2", "state"],
+            ["sts2", "state"],
+            ["sts2", "choose_map_node", "3", "0"],
+        ]

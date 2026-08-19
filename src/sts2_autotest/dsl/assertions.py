@@ -330,11 +330,31 @@ def no_crash_detected() -> AssertionFn:
     return check
 
 
+def _resolve_travelable_nodes(state: GameState) -> Any:
+    """Read the travelable map nodes across adapter state shapes.
+
+    真实适配器把可达节点放在 ``map`` 下：CLI 适配器为
+    ``map.travelable_coords``，Agent 适配器为 ``map.available_nodes``。
+    单元测试与旧夹具可能仍设置扁平的顶层 ``travelable_nodes``，其优先
+    以保持既有测试不变。
+    """
+    flat = getattr(state, "travelable_nodes", None)
+    if flat is not None:
+        return flat
+    map_payload = getattr(state, "map", None)
+    if isinstance(map_payload, dict):
+        for key in ("travelable_coords", "available_nodes"):
+            nodes = map_payload.get(key)
+            if nodes is not None:
+                return nodes
+    return None
+
+
 def has_travelable_node() -> AssertionFn:
     """Assert there is at least one travelable map node."""
 
     def check(state: GameState) -> tuple[bool, str]:
-        nodes = getattr(state, "travelable_nodes", None)
+        nodes = _resolve_travelable_nodes(state)
         if nodes is None:
             return False, "travelable_nodes not in state"
         ok = len(nodes) > 0

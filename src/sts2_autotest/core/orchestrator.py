@@ -43,6 +43,16 @@ def _is_transient_validation_violation(violations: list[str]) -> bool:
     return bool(violations) and all(item in transient for item in violations)
 
 
+def _is_play_phase_glitch(detail: str) -> bool:
+    """Detect the game v0.107.1+ get_IsPlayPhase removal glitch in a detail string.
+
+    Game v0.107.1 removed CombatManager.get_IsPlayPhase(); any CLI command/action
+    that triggers it surfaces as ``Method not found: ... get_IsPlayPhase()``. This
+    is a known, expected condition on newer game versions, not a framework error.
+    """
+    return "get_isplayphase" in detail.lower()
+
+
 @dataclass
 class SessionSummary:
     """Aggregate results for a completed test session."""
@@ -1272,7 +1282,7 @@ class TestOrchestrator:
         result: ActionResult,
     ) -> GameState | None:
         detail = str(result.detail or "")
-        if action.action_type != "choose_map_node" or "get_IsPlayPhase" not in detail:
+        if not _is_play_phase_glitch(detail):
             return None
 
         try:
@@ -1280,7 +1290,7 @@ class TestOrchestrator:
         except STS2Error:
             return None
 
-        if pre_state.screen == GameScreen.MAP and candidate.screen != GameScreen.MAP:
+        if candidate.screen != pre_state.screen:
             return candidate
         return None
 
@@ -1298,12 +1308,8 @@ class TestOrchestrator:
                 return await self._get_state_validated()
             except STS2Error as exc:
                 detail = str(exc)
-                is_known_map_transition_glitch = (
-                    action.action_type == "choose_map_node"
-                    and pre_state.screen == GameScreen.MAP
-                    and "get_IsPlayPhase" in detail
-                )
-                if not is_known_map_transition_glitch or time.monotonic() >= deadline:
+                is_play_phase_glitch = _is_play_phase_glitch(detail)
+                if not is_play_phase_glitch or time.monotonic() >= deadline:
                     raise
                 await asyncio.sleep(0.5)
 
