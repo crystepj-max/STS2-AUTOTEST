@@ -51,6 +51,18 @@ def _is_play_phase_removed_error(exc: STS2Error) -> bool:
     return _PLAY_PHASE_REMOVED_MARKER in text
 
 
+# 事件选项按钮尚未渲染就绪时，CLI 会报「Option button at index N not found in UI」。
+# 这是 embark 后 EVENT 屏的 UI 就绪竞态（真机复现 4/18 次），短暂等待重试即可，
+# 不属于确定性失败。
+_UI_NOT_READY_MARKERS = ("not found in ui", "option button")
+
+
+def _is_ui_not_ready_error(exc: STS2Error) -> bool:
+    """判断 STS2Error 是否由「事件选项按钮尚未渲染」的 UI 就绪竞态引发。"""
+    text = str(exc.message or "").lower()
+    return any(marker in text for marker in _UI_NOT_READY_MARKERS)
+
+
 def _is_degraded_combat_state(state: GameState) -> bool:
     """识别「降级占位」的 COMBAT 状态（空 combat、无真实战斗数据）。
 
@@ -493,13 +505,28 @@ class CliModAdapter:
                 cur = self._cached_state
             if cur.screen in {GameScreen.MAP, GameScreen.COMBAT}:
                 return ActionResult(status="success", state_changed=False)
-            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT, GameScreen.EVENT}:
-                # 循环跳过奖励/三选一、选 grid 卡、点击 Proceed 直至 MAP/COMBAT；
+            if cur.screen in {
+                GameScreen.CARD_REWARD,
+                GameScreen.TRI_SELECT,
+                GameScreen.EVENT,
+                GameScreen.BUNDLE_SELECTION,
+            }:
+                # 循环跳过奖励/三选一、选 grid 卡、点击 Proceed、选包裹直至 MAP/COMBAT；
                 # 对普通事件选项（非 Proceed、非 grid）保守 no-op，不替上层 choose_event。
                 return self._advance_dialogue_to_map_sync()
-        if action == "choose_event" and self._cached_state is not None:
-            if self._cached_state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+        if action == "choose_event":
+            # 短路：已越过事件屏（MAP/COMBAT/CARD_REWARD）时为空操作成功。
+            if self._cached_state is not None and self._cached_state.screen in {
+                GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD
+            }:
                 return ActionResult(status="success", state_changed=False)
+            idx = 0
+            if args and args.get("index") is not None:
+                try:
+                    idx = int(args["index"])
+                except (TypeError, ValueError):
+                    idx = 0
+            return self._choose_event_sync(idx)
         if action == "choose_map_node" and self._cached_state is not None:
             # 重读真实状态（choose_event 后缓存可能陈旧）：避免把 CARD_REWARD/EVENT
             # 误判为 COMBAT 短路，或把 Neow 奖励/三选一屏当成可空操作。
@@ -609,6 +636,29 @@ class CliModAdapter:
             self._cache_stale = True
             self._available_actions_cache = None
             return self._action_error_result(exc, state_changed=False)
+
+    def _choose_event_sync(self, index: int) -> ActionResult:
+        """选择事件选项，并对 UI 就绪竞态做重试。
+
+        embark 后游戏可能短暂处于 UNKNOWN/加载态，EVENT 屏虽已上报但选项按钮
+        尚未渲染，CLI 报「Option button at index N not found in UI」。此时短暂
+        等待后重试，直至成功或超时；其它错误保持原有语义。
+        """
+        deadline = time.monotonic() + min(self.timeout, 10.0)
+        while True:
+            try:
+                raw = self._run_cli("choose_event", str(index))
+                self._parse_response(raw)
+                self._cache_stale = True
+                self._available_actions_cache = None
+                return ActionResult(status="success", state_changed=True)
+            except STS2Error as exc:
+                self._cache_stale = True
+                self._available_actions_cache = None
+                if _is_ui_not_ready_error(exc) and time.monotonic() < deadline:
+                    time.sleep(self.poll_interval)
+                    continue
+                return self._action_error_result(exc, state_changed=False)
 
     def _embark_sync(self) -> ActionResult:
         """Embark and wait for the game to leave character select."""
@@ -823,15 +873,33 @@ class CliModAdapter:
             if state.screen in {GameScreen.MAP, GameScreen.COMBAT}:
                 return ActionResult(status="success", state_changed=True)
             if state.screen == GameScreen.CARD_REWARD:
+                # 万花筒等双卡奖励屏：reward_skip_card 只回 skipped:true、屏不退出
+                # （state.rewards 不变），须 proceed 才能真正离开并跳过奖励。
+                # 先尝试跳过一张（兼容需显式 skip 的奖励类型），重读后若仍卡在
+                # CARD_REWARD 则 proceed 收尾。
                 try:
                     raw = self._run_cli("reward_skip_card")
                     self._parse_response(raw)
                 except STS2Error:
-                    raw = self._run_cli("proceed")
-                    self._parse_response(raw)
+                    pass
                 self._cache_stale = True
                 self._available_actions_cache = None
-                state = self._get_state_sync()
+                try:
+                    state = self._get_state_sync()
+                except STS2Error:
+                    state = self._cached_state
+                if state is not None and state.screen == GameScreen.CARD_REWARD:
+                    try:
+                        raw = self._run_cli("proceed")
+                        self._parse_response(raw)
+                    except STS2Error:
+                        pass
+                    self._cache_stale = True
+                    self._available_actions_cache = None
+                    try:
+                        state = self._get_state_sync()
+                    except STS2Error:
+                        state = self._cached_state
                 continue
             if state.screen == GameScreen.TRI_SELECT:
                 try:
@@ -843,6 +911,16 @@ class CliModAdapter:
                 self._cache_stale = True
                 self._available_actions_cache = None
                 state = self._get_state_sync()
+                continue
+            if state.screen == GameScreen.BUNDLE_SELECTION:
+                # 卷轴箱等包裹选择屏：bundle_select+bundle_confirm 选定后推进。
+                result = self._bundle_select_and_confirm_sync(0)
+                if result.status != "success":
+                    return result
+                try:
+                    state = self._get_state_sync()
+                except STS2Error:
+                    state = self._cached_state
                 continue
             if state.screen == GameScreen.EVENT:
                 # grid 卡牌选择（新叶→变化 1 张牌）：选首张卡后继续循环。
@@ -990,7 +1068,7 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
         GameScreen.REST: ["choose_rest_option", "probe"],
         GameScreen.EVENT: ["start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
         GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
-        GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "probe"],
+        GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "advance_dialogue", "probe"],
         GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "advance_dialogue", "probe"],
         GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
         GameScreen.CARD_REWARD: ["start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],

@@ -165,6 +165,15 @@ class TestScreenToActions:
         # 「Game not actionable before action: advance_dialogue」。
         assert "advance_dialogue" in actions
 
+    def test_bundle_selection_has_advance_dialogue_action(self) -> None:
+        actions = _screen_to_actions(GameScreen.BUNDLE_SELECTION)
+        assert "bundle_select" in actions
+        assert "bundle_confirm" in actions
+        # Neow 祝福「卷轴箱」带出的包裹选择屏：advance_dialogue 必须可用，
+        # 否则编排器会在 action-availability 检查时报
+        # 「Game not actionable before action: advance_dialogue」。
+        assert "advance_dialogue" in actions
+
     def test_card_reward_actions(self) -> None:
         actions = _screen_to_actions(GameScreen.CARD_REWARD)
         assert "reward_choose_card" in actions

@@ -547,6 +547,57 @@ class TestAct:
         ]
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_proceeds_when_card_reward_stays(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """万花筒→双卡 CARD_REWARD：reward_skip_card 回 skipped:true 但屏不退出
+        （state.rewards 不变），须 proceed 才能真正离开进 MAP。"""
+        adapter._cached_state = GameState(screen=GameScreen.CARD_REWARD)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # reward_skip_card（skipped:true，屏仍 CARD_REWARD）
+            _mock_popen_ok({"screen": "CARD_REWARD"}),  # state → 仍在 CARD_REWARD
+            _mock_popen_ok({}),  # proceed
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "reward_skip_card"],
+            ["sts2", "state"],
+            ["sts2", "proceed"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.time.sleep")
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_advance_dialogue_converges_bundle_selection_to_map(
+        self, mock_popen: MagicMock, mock_sleep: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """卷轴箱→BUNDLE_SELECTION：advance_dialogue 必须 bundle_select+bundle_confirm
+        选包裹后推进到 MAP（真机曾报 Game not actionable）。"""
+        adapter._cached_state = GameState(screen=GameScreen.BUNDLE_SELECTION)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # bundle_select 0
+            _mock_popen_ok({}),  # bundle_confirm
+            _mock_popen_ok({"screen": "MAP"}),  # state → MAP
+        ]
+
+        result = _run(adapter.act("advance_dialogue"))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "bundle_select", "0"],
+            ["sts2", "bundle_confirm"],
+            ["sts2", "state"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_choose_event_is_noop_on_map(
         self, mock_popen: MagicMock, adapter: CliModAdapter
     ) -> None:
@@ -569,6 +620,35 @@ class TestAct:
 
         assert result.status == "success"
         mock_popen.assert_not_called()
+
+    @patch("sts2_autotest.adapters.cli_mod.time.sleep")
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_event_retries_when_option_not_found_in_ui(
+        self, mock_popen: MagicMock, mock_sleep: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """embark 后 EVENT 屏选项按钮尚未渲染：CLI 报 Option button not found in UI
+        时 choose_event 短暂等待重试，直至成功（UI 就绪竞态 4/18 真机复现）。"""
+        adapter._cached_state = GameState(screen=GameScreen.EVENT)
+        adapter._cache_stale = False
+        not_ready = json.dumps({
+            "ok": False,
+            "error": "OPTION_NOT_FOUND",
+            "message": "Option button at index 0 not found in UI",
+        })
+        mock_popen.side_effect = [
+            _mock_popen_error(returncode=1, stderr=not_ready),  # 首次失败
+            _mock_popen_ok({}),  # 重试成功
+        ]
+
+        result = _run(adapter.act("choose_event", {"index": 0}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "choose_event", "0"],
+            ["sts2", "choose_event", "0"],
+        ]
+        mock_sleep.assert_called_once()
 
     @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
     def test_choose_map_node_falls_back_to_travelable_monster(
