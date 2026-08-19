@@ -484,52 +484,45 @@ class CliModAdapter:
         # reset_to_main_menu 的受控重启兜底处理，不能再假报成功（修复：
         # 「reported success but produced no observable state change」）。
         if action == "advance_dialogue" and self._cached_state is not None:
-            cur = self._cached_state
+            # 重读真实状态（choose_event 后缓存可能陈旧）：Neow 祝福可能带出 grid
+            # 卡牌选择（新叶→变化 1 张牌）、奖励（失物盒）、三选一（铅制镇纸）等
+            # 多阶段分支，不能基于陈旧快照假报成功。
+            try:
+                cur = self._get_state_sync()
+            except STS2Error:
+                cur = self._cached_state
             if cur.screen in {GameScreen.MAP, GameScreen.COMBAT}:
                 return ActionResult(status="success", state_changed=False)
-            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT}:
-                # Neow 祝福可能带出奖励/三选一屏（失物盒→CARD_REWARD、铅制镇纸→
-                # TRI_SELECT）而非直接 Proceed→MAP。advance_dialogue 语义为「推进
-                # 事件后流程到地图」，故跳过奖励/三选一并循环点击 Proceed 直至 MAP。
-                return self._advance_reward_to_map_sync()
-            grid = getattr(cur, "grid_card_select", {})
-            if cur.screen == GameScreen.EVENT and isinstance(grid, dict):
-                cards = grid.get("cards", [])
-                if cards:
-                    first = cards[0]
-                    if isinstance(first, dict) and first.get("card_id"):
-                        raw = self._run_cli("grid_select_card", str(first["card_id"]))
-                        self._parse_response(raw)
-                        self._cache_stale = True
-                        self._available_actions_cache = None
-                        return ActionResult(status="success", state_changed=True)
-            event = getattr(cur, "event", {})
-            if (
-                cur.screen == GameScreen.EVENT
-                and isinstance(event, dict)
-                and event.get("options")
-                and not event.get("is_in_dialogue", False)
-            ):
-                # v0.107.1+ 多阶段事件（如 Neow）：对话结束后（is_in_dialogue=False）
-                # 仍残留一个 is_proceed=True 的「Proceed」确认选项（is_finished=True）。
-                # advance_dialogue 必须点击它才能离开事件进 MAP，不能假报成功而不
-                # 动作（真机曾停在 EVENT：Expected MAP, got EVENT）。没有 Proceed
-                # 选项时保持原「待选项选择」短路——此时应由 choose_event 显式选择。
-                proceed_idx = _find_proceed_option_index(event.get("options", []))
-                if proceed_idx is not None:
-                    raw = self._run_cli("choose_event", str(proceed_idx))
-                    self._parse_response(raw)
-                    self._cache_stale = True
-                    self._available_actions_cache = None
-                    return ActionResult(status="success", state_changed=True)
-                return ActionResult(status="success", state_changed=False)
+            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT, GameScreen.EVENT}:
+                # 循环跳过奖励/三选一、选 grid 卡、点击 Proceed 直至 MAP/COMBAT；
+                # 对普通事件选项（非 Proceed、非 grid）保守 no-op，不替上层 choose_event。
+                return self._advance_dialogue_to_map_sync()
         if action == "choose_event" and self._cached_state is not None:
             if self._cached_state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                 return ActionResult(status="success", state_changed=False)
         if action == "choose_map_node" and self._cached_state is not None:
-            if self._cached_state.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
+            # 重读真实状态（choose_event 后缓存可能陈旧）：避免把 CARD_REWARD/EVENT
+            # 误判为 COMBAT 短路，或把 Neow 奖励/三选一屏当成可空操作。
+            try:
+                cur = self._get_state_sync()
+            except STS2Error:
+                cur = self._cached_state
+            if cur.screen == GameScreen.COMBAT:
                 return ActionResult(status="success", state_changed=False)
-            if self._cached_state.screen == GameScreen.EVENT:
+            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT}:
+                # Neow 祝福带出奖励/三选一屏时，先推进到 MAP 再选节点（真机曾卡在
+                # CARD_REWARD：choose_map_node 短路为空操作 → 后续 give_card 无法执行）。
+                converge = self._advance_dialogue_to_map_sync()
+                if converge.status != "success":
+                    return converge
+                # 收敛后重读：若已进 COMBAT 则无需再选节点。
+                try:
+                    cur = self._get_state_sync()
+                except STS2Error:
+                    cur = self._cached_state
+                if cur.screen == GameScreen.COMBAT:
+                    return ActionResult(status="success", state_changed=True)
+            elif cur.screen == GameScreen.EVENT:
                 try:
                     event_result = self._advance_event_until_map_sync()
                 except STS2Error as exc:
@@ -799,17 +792,23 @@ class CliModAdapter:
 
         return state
 
-    def _advance_reward_to_map_sync(self) -> ActionResult:
-        """从 Neow 事件后的奖励/三选一屏推进到 MAP。
+    def _advance_dialogue_to_map_sync(self) -> ActionResult:
+        """从事件后屏推进到 MAP/真实 COMBAT（advance_dialogue 语义）。
 
-        Neow 祝福可能把游戏带进 CARD_REWARD（失物盒）或 TRI_SELECT（铅制镇纸）
-        而不是直接 Proceed→MAP。advance_dialogue 的语义是「推进事件后的流程到
-        地图」，因此这里跳过奖励/三选一并循环点击 Proceed，直至到达 MAP/COMBAT
-        或超时。真机曾卡在 ``Expected MAP, got CARD_REWARD`` 与
-        ``Game not actionable before action: advance_dialogue``。
+        Neow 祝福可能带出多种分支：失物盒→CARD_REWARD、铅制镇纸→TRI_SELECT、
+        新叶→grid 卡牌选择（变化 1 张牌），或直接残留 Proceed 确认。advance_dialogue
+        的语义是「推进事件后流程到地图」，故循环跳过奖励/三选一、选 grid 卡并点击
+        Proceed，直至 MAP/COMBAT 或超时。对普通事件选项（非 Proceed、非 grid）保守
+        返回 no-op——这些选项需由上层 choose_event 显式选择。真机曾卡在
+        ``Expected MAP, got CARD_REWARD``、``Game not actionable before action:
+        advance_dialogue`` 与「新叶」分支停在 EVENT + Proceed 未点击。
         """
         deadline = time.monotonic() + min(self.timeout, 20.0)
-        state = self._cached_state
+        state: GameState | None
+        try:
+            state = self._get_state_sync()
+        except STS2Error:
+            state = self._cached_state
         while time.monotonic() < deadline:
             if state is None or _is_degraded_combat_state(state):
                 # 降级占位 COMBAT：游戏仍在过渡，短暂等待后重读。
@@ -846,14 +845,35 @@ class CliModAdapter:
                 state = self._get_state_sync()
                 continue
             if state.screen == GameScreen.EVENT:
-                # 跳过后回到 Neow 事件：点击 Proceed 收尾进 MAP。
+                # grid 卡牌选择（新叶→变化 1 张牌）：选首张卡后继续循环。
+                grid = getattr(state, "grid_card_select", {})
+                cards = grid.get("cards", []) if isinstance(grid, dict) else []
+                if cards:
+                    first = cards[0]
+                    if isinstance(first, dict) and first.get("card_id"):
+                        raw = self._run_cli("grid_select_card", str(first["card_id"]))
+                        self._parse_response(raw)
+                        self._cache_stale = True
+                        self._available_actions_cache = None
+                        state = self._get_state_sync()
+                        continue
+                # 残留 Proceed 确认（is_finished=True）：点击它收尾进 MAP。
                 event = getattr(state, "event", None)
-                options = event.get("options", []) if isinstance(event, dict) else []
-                proceed_idx = _find_proceed_option_index(options)
-                if proceed_idx is not None:
-                    raw = self._run_cli("choose_event", str(proceed_idx))
-                else:
-                    raw = self._run_cli(*_event_progress_cli_args(state))
+                if isinstance(event, dict):
+                    options = event.get("options", [])
+                    proceed_idx = _find_proceed_option_index(options)
+                    if proceed_idx is not None:
+                        raw = self._run_cli("choose_event", str(proceed_idx))
+                        self._parse_response(raw)
+                        self._cache_stale = True
+                        self._available_actions_cache = None
+                        state = self._get_state_sync()
+                        continue
+                    if options and not event.get("is_in_dialogue", False):
+                        # 有待选事件选项：advance_dialogue 不替选，保守 no-op。
+                        return ActionResult(status="success", state_changed=False)
+                # 对话中（is_in_dialogue=True）或无选项：下发 advance_dialogue 推进。
+                raw = self._run_cli("advance_dialogue")
                 self._parse_response(raw)
                 self._cache_stale = True
                 self._available_actions_cache = None
