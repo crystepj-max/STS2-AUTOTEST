@@ -6,14 +6,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sts2_autotest.adapters.base import HealthStatus
+from sts2_autotest.adapters.base import ActionResult, HealthStatus
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
+from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.popup_disposal import PopupDisposition
 from sts2_autotest.core.recovery import (
     DefaultRecoveryStrategy,
     FailureRecord,
     RecoveryAction,
     StubRecoveryStrategy,
+    _try_soft_reset_to_main_menu,
     crash_signature,
     is_p0_exception,
 )
@@ -583,6 +585,134 @@ class TestExecuteGameRestart:
         assert success is False
         assert result_adapter is None
         popup_handler.assert_called_once()
+        mock_steam.restart_game.assert_not_called()
+
+
+async def _no_sleep(*_a: Any, **_k: Any) -> None:
+    return None
+
+
+def _advance_clock(monkeypatch: pytest.MonkeyPatch, module: str) -> None:
+    """让软放弃轮询不空等墙钟：sleep 推进 monotonic。"""
+    clock = {"now": 0.0}
+
+    def _monotonic() -> float:
+        return clock["now"]
+
+    async def _sleep(seconds: float, *_a: Any, **_k: Any) -> None:
+        clock["now"] += float(seconds)
+
+    monkeypatch.setattr(f"{module}.time.monotonic", _monotonic)
+    monkeypatch.setattr("asyncio.sleep", _sleep)
+
+
+class TestTrySoftResetToMainMenu:
+    """Q10：GAME_RESTART 前的游戏内放弃缓冲。"""
+
+    def test_skips_when_already_at_main_menu(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _advance_clock(monkeypatch, "sts2_autotest.core.recovery")
+        adapter = AsyncMock()
+        adapter.get_state.return_value = GameState(screen=GameScreen.MAIN_MENU)
+
+        ok = _run(_try_soft_reset_to_main_menu(adapter))
+
+        assert ok is False
+        adapter.act.assert_not_awaited()
+
+    def test_skips_when_get_state_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _advance_clock(monkeypatch, "sts2_autotest.core.recovery")
+        adapter = AsyncMock()
+        adapter.get_state.side_effect = RuntimeError("dead")
+
+        ok = _run(_try_soft_reset_to_main_menu(adapter))
+
+        assert ok is False
+        adapter.act.assert_not_awaited()
+
+    def test_combat_abandon_reaches_main_menu(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _advance_clock(monkeypatch, "sts2_autotest.core.recovery")
+        adapter = AsyncMock()
+        adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.COMBAT),
+            GameState(screen=GameScreen.MAIN_MENU),
+        ]
+        adapter.act.return_value = ActionResult(status="success", state_changed=True)
+
+        ok = _run(_try_soft_reset_to_main_menu(adapter))
+
+        assert ok is True
+        adapter.act.assert_any_await("abandon_run")
+
+    def test_uses_dismiss_modal_when_confirm_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """确认框若只暴露 dismiss_modal（与 start_session 对齐），仍应点掉后回到主菜单。"""
+        _advance_clock(monkeypatch, "sts2_autotest.core.recovery")
+        adapter = AsyncMock()
+        adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.MAP),
+            GameState(
+                screen=GameScreen.MAP,
+                available_actions=["dismiss_modal"],
+            ),
+            GameState(screen=GameScreen.MAIN_MENU),
+        ]
+        adapter.act.return_value = ActionResult(status="success", state_changed=True)
+
+        ok = _run(_try_soft_reset_to_main_menu(adapter))
+
+        assert ok is True
+        adapter.act.assert_any_await("abandon_run")
+        adapter.act.assert_any_await("dismiss_modal")
+
+    def test_abandon_failure_does_not_mask_crash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _advance_clock(monkeypatch, "sts2_autotest.core.recovery")
+        adapter = AsyncMock()
+        adapter.get_state.return_value = GameState(screen=GameScreen.COMBAT)
+        adapter.act.side_effect = RuntimeError("uncontrollable")
+
+        ok = _run(_try_soft_reset_to_main_menu(adapter))
+
+        assert ok is False
+
+
+class TestExecuteGameRestartSoftBuffer:
+    """GAME_RESTART 在硬杀进程前优先走软放弃。"""
+
+    @staticmethod
+    def _make_healthy_adapter() -> Any:
+        adapter = AsyncMock()
+        adapter.health_check.return_value = HealthStatus(healthy=True)
+        adapter.cleanup.return_value = None
+        return adapter
+
+    def test_soft_reset_success_skips_steam_restart(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _advance_clock(monkeypatch, "sts2_autotest.core.recovery")
+        mock_steam = MagicMock()
+        mock_steam.restart_game = MagicMock(return_value=12345)
+        new_adapter = self._make_healthy_adapter()
+        old_adapter = self._make_healthy_adapter()
+        old_adapter.get_state.side_effect = [
+            GameState(screen=GameScreen.MAP),
+            GameState(screen=GameScreen.MAIN_MENU),
+        ]
+        old_adapter.act.return_value = ActionResult(status="success", state_changed=True)
+        strategy = DefaultRecoveryStrategy(
+            adapter_factory=lambda: new_adapter,
+            steam_controller=mock_steam,
+        )
+
+        success, result_adapter = _run(
+            strategy.execute(RecoveryAction.GAME_RESTART, old_adapter)
+        )
+
+        assert success is True
+        assert result_adapter is new_adapter
+        old_adapter.act.assert_any_await("abandon_run")
         mock_steam.restart_game.assert_not_called()
 
 

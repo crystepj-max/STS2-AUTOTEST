@@ -545,6 +545,24 @@ class GameLifecycleManager:
             pass
         return False
 
+    async def _wait_until_ready(self, timeout: float) -> bool:
+        """Wait for ``_probe_ready`` to succeed (boot grace period).
+
+        A freshly launched game often sits at ``UNKNOWN`` and the main menu may
+        render before the control mod finishes loading (empty action list).
+        Treating that as a stale/crashed process and restarting it wastes a full
+        game reboot and is the root cause of "launched, then relaunched <1min
+        later" during integration/regression runs. Poll until the three control
+        checks pass or the boot window elapses.
+        """
+        t0 = time.time()
+        while time.time() - t0 < float(timeout):
+            ok, _, _ = await self._probe_ready()
+            if ok:
+                return True
+            await asyncio.sleep(self.poll_interval)
+        return False
+
     async def _probe_ready(self) -> tuple[bool, EnvironmentBlockReason | None, dict[str, Any]]:
         """Run the three control checks: health, state, actions + screen sanity."""
         checks: dict[str, Any] = {
@@ -642,6 +660,25 @@ class GameLifecycleManager:
                 actions_taken=actions_taken,
                 duration_ms=int((time.time() - t0) * 1000),
             )
+
+        # 启动宽限期（Q10）：进程在、但当前不可控，极可能仍在启动（首帧 UNKNOWN；
+        # 主菜单可能先于模组加载完成而显示、动作列表为空）。此时直接 terminate 会
+        # 把慢启动误判为崩溃，触发一次无谓的硬重启。先给足完整启动窗口等其可控，
+        # 超时（确属坏掉）才落入有界恢复终止+单次重拉。
+        if pre_process:
+            if await self._wait_until_ready(self.api_timeout):
+                ok, reason, checks = await self._probe_ready()
+                pre_process = self._game_process_present()
+                if ok:
+                    return EnvironmentReadiness(
+                        ready=True,
+                        recovered=False,
+                        pre_process_present=pre_process,
+                        pre_control_ready=True,
+                        checks=checks,
+                        actions_taken=actions_taken,
+                        duration_ms=int((time.time() - t0) * 1000),
+                    )
 
         attempts = 0
         while attempts < max_recoveries:
