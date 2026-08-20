@@ -12,6 +12,8 @@ POLICY_PATHS = [
     ".github/scripts/check_ruff_baseline.py",
     ".github/scripts/check_mypy_baseline.py",
     ".github/scripts/check_pytest_baseline.py",
+    ".github/scripts/check_workflow_artifact_order.py",
+    ".github/workflow-artifact-manifest.yaml",
     ".github/pytest-baseline.json",
     ".github/requirements-lint.txt",
     ".github/mypy-policy.ini",
@@ -23,6 +25,8 @@ POLICY_PATHS = [
 CODEOWNER_PATTERNS = [
     ".github/workflows/",
     ".github/scripts/check_*_baseline.py",
+    ".github/scripts/check_workflow_artifact_order.py",
+    ".github/workflow-artifact-manifest.yaml",
     ".github/pytest-baseline.json",
     ".github/requirements-lint.txt",
     ".github/mypy-policy.ini",
