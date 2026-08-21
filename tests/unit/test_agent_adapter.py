@@ -417,7 +417,28 @@ class TestAgentAdapterAvailableActions:
 
         actions = _run(adapter.get_available_actions())
 
-        assert actions == ["play_card", "end_turn"]
+        # 局内不合成 return_to_menu，但 COMBAT 会合成 enter_combat（issue-56）。
+        assert actions == ["play_card", "end_turn", "enter_combat"]
+
+    def test_combat_synthesizes_enter_combat(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": ["play_card", "end_turn"]})
+        mock.add_response(200, {"screen": "COMBAT"})
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert "enter_combat" in actions
+
+    def test_card_reward_synthesizes_enter_combat(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": ["reward_choose_card"]})
+        mock.add_response(200, {"screen": "CARD_REWARD"})
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert "enter_combat" in actions
 
 
 class TestAgentAdapterAct:
@@ -1585,6 +1606,25 @@ class TestAgentAdapterAct:
                 "ok": True,
                 "data": {
                     "screen": "COMBAT",
+                },
+            },
+        )
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("enter_combat"))
+
+        assert result.status == "success"
+        assert result.state_changed is False
+        assert len(mock._requests) == 1
+
+    def test_enter_combat_is_noop_when_already_in_card_reward(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(
+            200,
+            {
+                "ok": True,
+                "data": {
+                    "screen": "CARD_REWARD",
                 },
             },
         )

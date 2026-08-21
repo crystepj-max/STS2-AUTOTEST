@@ -324,6 +324,19 @@ class TestCodeGenerator:
 
         assert 'ActionDescriptor(action_type="choose_map_node_by_type", params={"node_type": "RestSite"})' in code
 
+    def test_generate_case_test_maps_choose_first_combat_node_step(self) -> None:
+        # issue-56：固定坐标随随机地图漂移，「选择首个普通战斗节点」按类型选可达怪物节点。
+        spec = TestSpec(
+            id="TC-IRONCLAD-TWIN-STRIKE-DAMAGE",
+            title="Twin strike damage",
+            steps=["选择首个普通战斗节点", "进入首次战斗"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert 'ActionDescriptor(action_type="choose_map_node_by_type", params={"node_type": "Monster"})' in code
+        assert "choose_map_node(" not in code
+
     def test_generate_case_test_maps_exact_hit_assertion(self) -> None:
         spec = TestSpec(
             id="TC-IRONCLAD-TWIN-STRIKE",

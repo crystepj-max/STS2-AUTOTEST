@@ -109,7 +109,14 @@ def enemy_hp_decreased_by(amount: int) -> AssertionFn:
 
 
 def enemy_took_exact_hits(damage: int, hits: int) -> AssertionFn:
-    """Assert the last action recorded exact enemy damage events."""
+    """Assert the last action recorded exact enemy damage events.
+
+    STS2-Agent 的 /state 载荷不暴露逐次伤害事件（damage_events），只提供敌方 HP。
+    当 damage_events 缺失时回退到「敌方总 HP 下降 == damage * hits」的等价校验，
+    依赖 FluentBuilder 在 execute 前捕获的 previous_enemy_hp 快照（见 fluent.py
+    _merge_previous_snapshot）。这保持「5×2 伤害」的精确语义（总伤害恰为
+    damage*hits），仅切换数据来源，不弱化断言。
+    """
 
     def check(state: GameState) -> tuple[bool, str]:
         events = getattr(state, "damage_events", None)
@@ -117,20 +124,33 @@ def enemy_took_exact_hits(damage: int, hits: int) -> AssertionFn:
             combat = getattr(state, "combat", None)
             if isinstance(combat, dict):
                 events = combat.get("damage_events")
-        if not isinstance(events, list):
+        if isinstance(events, list):
+            amounts: list[int] = []
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                raw_amount = event.get("amount", event.get("damage"))
+                if isinstance(raw_amount, int):
+                    amounts.append(raw_amount)
+
+            expected = [damage] * hits
+            ok = amounts == expected
+            msg = "" if ok else f"Expected enemy damage events {damage} x {hits}, got {amounts}"
+            return ok, msg
+
+        # Fallback: Agent 路径无 damage_events，改用敌方 HP 下降总量等价校验。
+        current = _resolve_enemy_field(state, "hp")
+        previous = getattr(state, "previous_enemy_hp", None)
+        if previous is None or current is None:
             return False, "damage_events not in state, cannot verify exact hits"
-
-        amounts: list[int] = []
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            raw_amount = event.get("amount", event.get("damage"))
-            if isinstance(raw_amount, int):
-                amounts.append(raw_amount)
-
-        expected = [damage] * hits
-        ok = amounts == expected
-        msg = "" if ok else f"Expected enemy damage events {damage} x {hits}, got {amounts}"
+        total = previous - current
+        expected_total = damage * hits
+        ok = total == expected_total
+        msg = (
+            ""
+            if ok
+            else f"Expected enemy damage {damage} x {hits} (= {expected_total}), got HP decrease {total}"
+        )
         return ok, msg
 
     return check

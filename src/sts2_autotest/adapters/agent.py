@@ -437,6 +437,14 @@ class AgentAdapter:
         if screen in (GameScreen.MAIN_MENU, GameScreen.GAME_OVER, GameScreen.VICTORY):
             if "return_to_menu" not in actions_result:
                 actions_result.append("return_to_menu")
+        # enter_combat 合成（issue-56）：Agent 的 actions/available 在 COMBAT/CARD_REWARD
+        # 界面不返回 enter_combat，而生成用例 setup 的「进入首次战斗」步骤依赖该动作
+        # 出现在可用集合，否则确定性超时「Game not actionable before action N:
+        # enter_combat」。与 CliMod 的 _screen_to_actions 语义一致——已处于战斗内/战后
+        # 时 enter_combat 为空操作成功（见 act() 的短路分支），故在此广告。
+        if screen in (GameScreen.COMBAT, GameScreen.CARD_REWARD):
+            if "enter_combat" not in actions_result:
+                actions_result.append("enter_combat")
         return actions_result
 
     async def act(self, action: str, args: dict[str, Any] | None = None) -> ActionResult:
@@ -686,7 +694,8 @@ class AgentAdapter:
                 state = _unwrap_data_envelope(await self._request("GET", self._state_path))
             except STS2Error as exc:
                 return self._action_error(exc)
-            if str(state.get("screen", "")).upper() == "COMBAT":
+            screen = _map_screen(str(state.get("screen", "")).upper())
+            if screen in (GameScreen.COMBAT, GameScreen.CARD_REWARD):
                 return ActionResult(status="success", state_changed=False)
 
         payload: dict[str, Any] = {"action": action}
@@ -1090,6 +1099,10 @@ class AgentAdapter:
                             "give_block",
                             "win_combat",
                             "enable_travel",
+                            # 合成导航动作（适配器内部按状态合成，非 Agent 上报的真实游戏动作）：
+                            # 在对应界面下为空操作，不构成「游戏可交互」信号（issue-56）。
+                            "return_to_menu",
+                            "enter_combat",
                         }
                     ]
                     if executable:
