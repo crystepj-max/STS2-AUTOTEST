@@ -1,4 +1,4 @@
-# upload-artifact 与 producer 步骤顺序声明（issue #51）
+# upload-artifact 与 producer 步骤顺序声明（issue #51 / #61）
 # 校验器：.github/scripts/check_workflow_artifact_order.py
 #
 # 规则：同一 job 内，引用 artifact 路径的 upload-artifact 步骤下标必须严格大于
@@ -26,3 +26,36 @@ workflows:
       - artifact: junit-integration.xml
         producers:
           - id: cli_tests
+
+  - file: ci-main.yml
+    job: quick-checks
+    rules:
+      - artifact: junit-unit.xml
+        producers:
+          - name: "Run ${{ matrix.check }}"
+
+  - file: ci-nightly.yml
+    job: nightly
+    rules:
+      - artifact: junit-unit.xml
+        producers:
+          - id: unit_tests
+      - artifact: junit-integration.xml
+        producers:
+          - id: cli_tests
+      - artifact: junit-game.xml
+        producers:
+          - id: game_tests
+      - artifact: tests/output/
+        producers:
+          - id: package
+
+  - file: ci-game.yml
+    job: game-test
+    rules:
+      - artifact: junit-game.xml
+        producers:
+          - name: Run game integration tests
+      - artifact: tests/output/
+        producers:
+          - name: Run game integration tests

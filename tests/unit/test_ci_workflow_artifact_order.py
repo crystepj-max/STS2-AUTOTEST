@@ -190,6 +190,151 @@ def test_real_ci_pr_yml_passes(repo_root: Path) -> None:
     assert violations == []
 
 
+def test_fail_when_upload_before_producer_by_name(tmp_path: Path) -> None:
+    """ci-main 风格：producer 仅有 name（无 id）时，upload 在前必须失败。"""
+    workflows_dir = _write_workflow(
+        tmp_path,
+        {
+            "jobs": {
+                "quick-checks": {
+                    "steps": [
+                        {
+                            "name": "Upload JUnit",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {"path": "junit-unit.xml"},
+                        },
+                        {
+                            "name": "Run ${{ matrix.check }}",
+                            "run": "echo unit",
+                        },
+                    ]
+                }
+            }
+        },
+    )
+    manifest = {
+        "workflows": [
+            {
+                "file": "sample.yml",
+                "job": "quick-checks",
+                "rules": [
+                    {
+                        "artifact": "junit-unit.xml",
+                        "producers": [{"name": "Run ${{ matrix.check }}"}],
+                    }
+                ],
+            }
+        ]
+    }
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(yaml.dump(manifest), encoding="utf-8")
+
+    violations = validate_manifest(manifest_path, workflows_dir)
+    assert len(violations) == 1
+    assert violations[0].artifact == "junit-unit.xml"
+    assert violations[0].upload.index < violations[0].producer.index
+
+
+def test_glob_upload_path_requires_all_producers(tmp_path: Path) -> None:
+    """ci-nightly 风格：upload path 为 junit-*.xml 时，须晚于各匹配 artifact 的 producer。"""
+    workflows_dir = _write_workflow(
+        tmp_path,
+        {
+            "jobs": {
+                "nightly": {
+                    "steps": [
+                        {"id": "unit_tests", "run": "echo unit"},
+                        {
+                            "name": "Upload JUnit results",
+                            "uses": "actions/upload-artifact@v4",
+                            "with": {"path": "junit-*.xml"},
+                        },
+                        {"id": "game_tests", "run": "echo game"},
+                    ]
+                }
+            }
+        },
+    )
+    manifest = {
+        "workflows": [
+            {
+                "file": "sample.yml",
+                "job": "nightly",
+                "rules": [
+                    {"artifact": "junit-unit.xml", "producers": [{"id": "unit_tests"}]},
+                    {"artifact": "junit-game.xml", "producers": [{"id": "game_tests"}]},
+                ],
+            }
+        ]
+    }
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(yaml.dump(manifest), encoding="utf-8")
+
+    violations = validate_manifest(manifest_path, workflows_dir)
+    assert len(violations) == 1
+    assert violations[0].artifact == "junit-game.xml"
+
+
+def test_real_manifest_covers_extended_workflows(repo_root: Path) -> None:
+    """issue #61：manifest 须声明 ci-main / ci-nightly / ci-game，且真实 YAML 全部通过。"""
+    manifest_path = repo_root / ".github" / "workflow-artifact-manifest.yaml"
+    workflows_dir = repo_root / ".github" / "workflows"
+    if not manifest_path.is_file():
+        pytest.skip("manifest 尚未合入当前分支")
+
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    declared = {entry["file"] for entry in manifest["workflows"]}
+    assert {"ci-pr.yml", "ci-main.yml", "ci-nightly.yml", "ci-game.yml"} <= declared
+
+    violations = validate_manifest(manifest_path, workflows_dir)
+    assert violations == []
+
+
+def test_disordered_extended_workflows_fail(tmp_path: Path, repo_root: Path) -> None:
+    """对各扩展 workflow 故意把 upload 挪到 producer 之前时，校验必须非零退出。"""
+    src_dir = repo_root / ".github" / "workflows"
+    workflows_dir = tmp_path / "workflows"
+    workflows_dir.mkdir()
+    for name in ("ci-pr.yml", "ci-main.yml", "ci-nightly.yml", "ci-game.yml"):
+        data = yaml.safe_load((src_dir / name).read_text(encoding="utf-8"))
+        if name != "ci-pr.yml":
+            for job in data.get("jobs", {}).values():
+                if not isinstance(job, dict):
+                    continue
+                steps = job.get("steps")
+                if not isinstance(steps, list):
+                    continue
+                uploads = [
+                    step
+                    for step in steps
+                    if isinstance(step, dict)
+                    and "upload-artifact" in str(step.get("uses", ""))
+                ]
+                rest = [step for step in steps if step not in uploads]
+                if uploads:
+                    job["steps"] = uploads + rest
+        (workflows_dir / name).write_text(yaml.dump(data), encoding="utf-8")
+
+    rc = main(
+        [
+            "--manifest",
+            str(repo_root / ".github" / "workflow-artifact-manifest.yaml"),
+            "--workflows-dir",
+            str(workflows_dir),
+        ]
+    )
+    assert rc == 1
+
+
+def test_verify_sh_runs_artifact_order_without_baseline(repo_root: Path) -> None:
+    """verify.sh 在无 BASELINE_DIR 时也必须跑 artifact 顺序校验（硬门槛）。"""
+    text = (repo_root / "scripts" / "verify.sh").read_text(encoding="utf-8")
+    assert "check_workflow_artifact_order.py" in text
+    checker_pos = text.index("check_workflow_artifact_order.py")
+    baseline_gate = text.index('if [[ -n "$BASELINE_DIR" ]]')
+    assert checker_pos < baseline_gate, "artifact 顺序校验不得放进 BASELINE_DIR 增量门禁"
+
+
 def test_main_exit_code_on_violation(tmp_path: Path) -> None:
     workflows_dir = _write_workflow(
         tmp_path,

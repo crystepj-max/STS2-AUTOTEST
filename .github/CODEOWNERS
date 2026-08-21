@@ -3,6 +3,8 @@
 # 且必须走独立政策变更 PR（.github/PULL_REQUEST_TEMPLATE/policy_change.md）。
 .github/workflows/ @crystepj-max
 .github/scripts/check_*_baseline.py @crystepj-max
+.github/scripts/check_workflow_artifact_order.py @crystepj-max
+.github/workflow-artifact-manifest.yaml @crystepj-max
 .github/pytest-baseline.json @crystepj-max
 .github/requirements-lint.txt @crystepj-max
 .github/mypy-policy.ini @crystepj-max
