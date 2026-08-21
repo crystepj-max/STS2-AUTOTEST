@@ -1,5 +1,6 @@
 import json
-from sts2_autotest.dsl.fluent import define
+
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.dsl.assertions import (
     choose_event,
     choose_map_node,
@@ -14,9 +15,11 @@ from sts2_autotest.dsl.assertions import (
     select_character,
     start_new_run,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
 
-# Given: 已安装并可连接 STS2-Cli-Mod
+
+# Given: 已安装并可连接 STS2-Agent（HTTP `http://127.0.0.1:8080`），且调试动作已启用（`STS2_ADAPTER__AGENT__DEBUG_ACTIONS=true`）
+# Given: 本用例权威运行路径为 Agent + debug：`give_card` 注入依赖适配器调试能力，STS2-Cli-Mod（`sts2` CLI）无该命令通道，不作为本用例通过路径
 # Given: 游戏可被启动并加载到主菜单
 # Given: 使用原游戏角色 Ironclad（战士）
 # Given: 双重打击的原版卡牌 ID 为 TWIN_STRIKE

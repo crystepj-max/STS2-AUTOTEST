@@ -39,6 +39,34 @@ logger = get_logger("core.orchestrator")
 # 游戏内「放弃」回主菜单的轮询上限（秒）。放弃→死亡/确认→主菜单通常数秒完成。
 _AUTO_RESET_ABANDON_TIMEOUT = 30.0
 
+# 依赖适配器「调试能力」才能下发的动作集合。CliMod 走 sts2 CLI 子进程，没有调试
+# 控制台通道（give_card 命令不存在）；AgentAdapter 也仅在 debug_actions=True 时才
+# 暴露这些动作。在无能力适配器上直接下发会命中「未识别命令」结构性失败，故在动作
+# 下发前用能力门闸拦截。当前 issue-56 只门闸 give_card；后续新增调试动作可在此扩展。
+_DEBUG_GATED_ACTIONS = frozenset({"give_card"})
+
+
+def _require_debug_capability(adapter: GameAdapterProtocol, action_type: str) -> None:
+    """拦截依赖调试能力的动作在无能力适配器上下发（issue-56 give_card 门闸）。
+
+    与 ``journeys.card_test`` 的既有能力门闸语义一致：无 ``supports_debug_actions``
+    时抛出带可机读 reason（DEBUG_ACTIONS_UNAVAILABLE）的失败，而不是把命令打到不存在
+    的 CLI 子命令上。
+    """
+    if action_type not in _DEBUG_GATED_ACTIONS:
+        return
+    capabilities = getattr(adapter, "capabilities", None)
+    if bool(getattr(capabilities, "supports_debug_actions", False)):
+        return
+    raise STS2Error(
+        category=ErrorCategory.ADAPTER_ERROR,
+        message=(
+            f"Action '{action_type}' requires adapter debug actions "
+            f"(如 give_card)，当前适配器未启用调试能力"
+        ),
+        detail={"action": action_type, "reason_code": "DEBUG_ACTIONS_UNAVAILABLE"},
+    )
+
 
 def _is_transient_validation_violation(violations: list[str]) -> bool:
     transient = {
@@ -1012,6 +1040,10 @@ class TestOrchestrator:
         on_pre_state, if given, receives the pre-action state snapshot —
         lets callers capture a "before" baseline without an extra get_state call.
         """
+        # 调试能力门闸（issue-56）：give_card 等在无 debug 能力的适配器上下发前即
+        # 阻断，避免把命令打到不存在的 CLI 子命令上（「未识别命令 give_card」）。
+        _require_debug_capability(self.adapter, action.action_type)
+
         if action.action_type == "choose_neow_blessing":
             return await self._execute_choose_neow_blessing(action, on_pre_state)
 
@@ -1364,6 +1396,10 @@ class TestOrchestrator:
         """
         results: list[ActionResult] = []
         for i, action in enumerate(actions):
+            # 调试能力门闸（issue-56）：先于 _wait_until_action_available 拦截
+            # give_card，避免 AgentAdapter(debug_actions=False) 下因动作永不出现在
+            # available 集合而在轮询超时后才失败；此处给出明确的 DEBUG_ACTIONS_UNAVAILABLE。
+            _require_debug_capability(self.adapter, action.action_type)
             if action.action_type != "nav_to_screen":
                 actionable = await self._wait_until_action_available(
                     action.action_type,
