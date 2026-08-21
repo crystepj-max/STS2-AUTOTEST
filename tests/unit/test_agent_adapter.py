@@ -389,6 +389,36 @@ class TestAgentAdapterAvailableActions:
 
         assert actions == ["play_card", "give_card", "set_seed", "set_hp", "give_block", "win_combat", "enable_travel"]
 
+    def test_main_menu_synthesizes_return_to_menu(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": ["open_character_select", "open_timeline"]})
+        mock.add_response(200, {"screen": "MAIN_MENU"})
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["open_character_select", "open_timeline", "start_new_run", "return_to_menu"]
+
+    def test_victory_synthesizes_return_to_menu(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": []})
+        mock.add_response(200, {"screen": "VICTORY"})
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["return_to_menu"]
+
+    def test_in_run_does_not_synthesize_return_to_menu(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"actions": ["play_card", "end_turn"]})
+        mock.add_response(200, {"screen": "COMBAT"})
+        adapter = AgentAdapter(client=mock)
+
+        actions = _run(adapter.get_available_actions())
+
+        assert actions == ["play_card", "end_turn"]
+
 
 class TestAgentAdapterAct:
     """act() maps to POST {endpoint}/action"""
@@ -438,13 +468,14 @@ class TestAgentAdapterAct:
                 },
             },
         )
+        mock.add_response(200, {"screen": "MAIN_MENU"})
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock)
 
         result = _run(adapter.act("start_new_run"))
 
         assert result.status == "success"
-        assert mock._requests[1]["kwargs"]["json"] == {
+        assert mock._requests[2]["kwargs"]["json"] == {
             "action": "open_character_select",
         }
 
@@ -463,6 +494,7 @@ class TestAgentAdapterAct:
                 },
             },
         )
+        mock.add_response(200, {"screen": "MAIN_MENU"})
         mock.add_response(200, {"ok": True})
         mock.add_response(
             200,
@@ -476,6 +508,7 @@ class TestAgentAdapterAct:
                 },
             },
         )
+        mock.add_response(200, {"screen": "MAIN_MENU"})
         mock.add_response(200, {"ok": True})
         mock.add_response(
             200,
@@ -489,15 +522,16 @@ class TestAgentAdapterAct:
                 },
             },
         )
+        mock.add_response(200, {"screen": "MAIN_MENU"})
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock)
 
         result = _run(adapter.act("start_new_run"))
 
         assert result.status == "success"
-        assert mock._requests[1]["kwargs"]["json"] == {"action": "abandon_run"}
-        assert mock._requests[3]["kwargs"]["json"] == {"action": "confirm_modal"}
-        assert mock._requests[5]["kwargs"]["json"] == {"action": "open_character_select"}
+        assert mock._requests[2]["kwargs"]["json"] == {"action": "abandon_run"}
+        assert mock._requests[5]["kwargs"]["json"] == {"action": "confirm_modal"}
+        assert mock._requests[8]["kwargs"]["json"] == {"action": "open_character_select"}
 
     def test_debug_start_new_run_uses_menu_abandon_not_console_die(self) -> None:
         mock = MockAsyncClient()
@@ -514,6 +548,7 @@ class TestAgentAdapterAct:
                 },
             },
         )
+        mock.add_response(200, {"screen": "MAIN_MENU"})
         mock.add_response(200, {"ok": True})
         mock.add_response(
             200,
@@ -527,6 +562,7 @@ class TestAgentAdapterAct:
                 },
             },
         )
+        mock.add_response(200, {"screen": "MAIN_MENU"})
         mock.add_response(200, {"ok": True})
         mock.add_response(
             200,
@@ -540,16 +576,41 @@ class TestAgentAdapterAct:
                 },
             },
         )
+        mock.add_response(200, {"screen": "MAIN_MENU"})
         mock.add_response(200, {"ok": True})
         adapter = AgentAdapter(client=mock, debug_actions=True)
 
         result = _run(adapter.act("start_new_run"))
 
         assert result.status == "success"
-        assert mock._requests[1]["kwargs"]["json"] == {"action": "abandon_run"}
-        assert mock._requests[1]["kwargs"]["json"].get("command") is None
-        assert mock._requests[3]["kwargs"]["json"] == {"action": "confirm_modal"}
-        assert mock._requests[5]["kwargs"]["json"] == {"action": "open_character_select"}
+        assert mock._requests[2]["kwargs"]["json"] == {"action": "abandon_run"}
+        assert mock._requests[2]["kwargs"]["json"].get("command") is None
+        assert mock._requests[5]["kwargs"]["json"] == {"action": "confirm_modal"}
+        assert mock._requests[8]["kwargs"]["json"] == {"action": "open_character_select"}
+
+    def test_return_to_menu_noop_at_main_menu(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"screen": "MAIN_MENU"})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("return_to_menu"))
+
+        assert result.status == "success"
+        assert result.state_changed is False
+        assert len(mock._requests) == 1
+        assert mock._requests[0]["method"] == "GET"
+
+    def test_return_to_menu_forwards_at_victory(self) -> None:
+        mock = MockAsyncClient()
+        mock.add_response(200, {"screen": "VICTORY"})
+        mock.add_response(200, {"ok": True})
+        adapter = AgentAdapter(client=mock)
+
+        result = _run(adapter.act("return_to_menu"))
+
+        assert result.status == "success"
+        assert result.state_changed is True
+        assert mock._requests[1]["kwargs"]["json"] == {"action": "return_to_menu"}
 
     def test_choose_event_maps_to_choose_event_option(self) -> None:
         mock = MockAsyncClient()
@@ -1553,19 +1614,22 @@ class TestAgentAdapterWaitUntilActionable:
                 },
             },
         )
+        mock.add_response(200, {"screen": "COMBAT"})
         adapter = AgentAdapter(client=mock)
 
         result = _run(adapter.wait_until_actionable(10.0))
 
         assert result is True
-        assert [request["method"] for request in mock._requests] == ["GET", "GET"]
+        assert [request["method"] for request in mock._requests] == ["GET", "GET", "GET"]
         assert mock._requests[0]["url"] == "http://127.0.0.1:8080/health"
         assert mock._requests[1]["url"] == "http://127.0.0.1:8080/actions/available"
+        assert mock._requests[2]["url"] == "http://127.0.0.1:8080/state"
 
     def test_ignores_debug_only_actions_until_real_action_is_available(self) -> None:
         mock = MockAsyncClient()
         mock.add_response(200, {"ok": True, "data": {"status": "ready"}})
         mock.add_response(200, {"ok": True, "data": {"actions": []}})
+        mock.add_response(200, {"screen": "COMBAT"})
         mock.add_response(200, {"ok": True, "data": {"status": "ready"}})
         mock.add_response(
             200,
@@ -1578,6 +1642,7 @@ class TestAgentAdapterWaitUntilActionable:
                 },
             },
         )
+        mock.add_response(200, {"screen": "COMBAT"})
         adapter = AgentAdapter(client=mock, debug_actions=True)
 
         result = _run(adapter.wait_until_actionable(1.0))
@@ -1586,8 +1651,10 @@ class TestAgentAdapterWaitUntilActionable:
         assert [request["url"] for request in mock._requests] == [
             "http://127.0.0.1:8080/health",
             "http://127.0.0.1:8080/actions/available",
+            "http://127.0.0.1:8080/state",
             "http://127.0.0.1:8080/health",
             "http://127.0.0.1:8080/actions/available",
+            "http://127.0.0.1:8080/state",
         ]
 
     def test_returns_false_on_timeout(self) -> None:

@@ -86,3 +86,17 @@ autotest run --all --adapter cli
 以可机读原因 `DEBUG_ACTIONS_UNAVAILABLE` 明确失败/阻断，而不会把 `give_card` 打到不存在的
 CLI 子命令上（避免「未识别命令 give_card」）。含 `give_card` 的用例（如
 TC-IRONCLAD-TWIN-STRIKE-DAMAGE）应以 Agent + debug 为权威运行路径。
+
+注意区分两个不同层面的调试开关：
+
+1. **框架侧** `STS2_ADAPTER__AGENT__DEBUG_ACTIONS=true`：让 AgentAdapter 暴露并下发调试动作；
+2. **游戏进程侧** `STS2_ENABLE_DEBUG_ACTIONS=1`：让游戏本体启用调试控制台（`run_console_command`）。
+
+二者缺一不可：框架侧开启但游戏进程未启用时，`give_card` 真机直发会返回
+`run_console_command is disabled. Set STS2_ENABLE_DEBUG_ACTIONS=1`。框架的
+`GameLifecycleManager` / Steam 启动路径会自动注入游戏侧开关；若游戏进程是**手动启动**
+或由前序会话遗留，必须带 `STS2_ENABLE_DEBUG_ACTIONS=1` 重启游戏后重验：
+
+```bash
+env STS2_ENABLE_DEBUG_ACTIONS=1 open -b com.megacrit.SlayTheSpire2
+```
