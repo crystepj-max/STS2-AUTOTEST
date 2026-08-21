@@ -95,8 +95,15 @@ TC-IRONCLAD-TWIN-STRIKE-DAMAGE）应以 Agent + debug 为权威运行路径。
 二者缺一不可：框架侧开启但游戏进程未启用时，`give_card` 真机直发会返回
 `run_console_command is disabled. Set STS2_ENABLE_DEBUG_ACTIONS=1`。框架的
 `GameLifecycleManager` / Steam 启动路径会自动注入游戏侧开关；若游戏进程是**手动启动**
-或由前序会话遗留，必须带 `STS2_ENABLE_DEBUG_ACTIONS=1` 重启游戏后重验：
+或由前序会话遗留，必须带 `STS2_ENABLE_DEBUG_ACTIONS=1` 重启游戏后重验。
+
+⚠️ macOS 注意：`env STS2_ENABLE_DEBUG_ACTIONS=1 open -b com.megacrit.SlayTheSpire2`
+**无效**——`open` 经 LaunchServices 启动 .app 时不向其传递环境变量，命令静默失效。
+须直接执行应用内层二进制，让游戏进程真实继承 env（路径按实际 Steam 库位置调整；
+等价做法见开发工作流 run 目录的 `restart_game_debug_direct.sh`）：
 
 ```bash
-env STS2_ENABLE_DEBUG_ACTIONS=1 open -b com.megacrit.SlayTheSpire2
+GAME_DIR="$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2"
+cd "$GAME_DIR"
+STS2_ENABLE_DEBUG_ACTIONS=1 "$GAME_DIR/SlayTheSpire2.app/Contents/MacOS/Slay the Spire 2" &
 ```
