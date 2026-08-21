@@ -220,6 +220,10 @@ jobs:
           echo "::group::Result classification"
           EVID_DIR="${RUNNER_TEMP}/nightly-early-evidence"
           mkdir -p "$EVID_DIR" tests/output || mkdir -p "$EVID_DIR"
+          # 分类必须读 raw outcome，禁止 conclusion：continue-on-error 会把
+          # conclusion 改写成 success，从而把真实游戏失败误报为 PASSED。
+          GAME_OUTCOME="${{ steps.game_tests.outcome }}"
+          echo "game_tests.outcome=$GAME_OUTCOME"
           SCRIPT=".github/scripts/classify_nightly.py"
           if [ -f "$SCRIPT" ] && command -v python3 >/dev/null 2>&1; then
             python3 "$SCRIPT" \
@@ -228,12 +232,34 @@ jobs:
               --write "$EVID_DIR/classification.json" \
               --write tests/output/classification.json
           else
-            echo "classification=BLOCKED" >> "$GITHUB_OUTPUT"
-            echo "reason=classifier unavailable after checkout/environment failure" >> "$GITHUB_OUTPUT"
-            echo "failed_phase=checkout" >> "$GITHUB_OUTPUT"
+            TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            CLASSIFICATION="BLOCKED"
+            REASON="classifier unavailable after checkout/environment failure"
+            FAILED_PHASE="checkout"
+            if [ "$NIGHTLY_STEP_CHECKOUT" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_ENV_CHECK" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_SETUP_PYTHON" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_INSTALL" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_LINT" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_TYPECHECK" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_IMPORT_CHECK" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_UNIT_TESTS" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_CLI_TESTS" = "cancelled" ] \
+              || [ "$GAME_OUTCOME" = "cancelled" ]; then
+              CLASSIFICATION="CANCELLED"
+              REASON="a nightly step was cancelled"
+              FAILED_PHASE="cancelled"
+            elif [ "$GAME_OUTCOME" = "failure" ]; then
+              CLASSIFICATION="FAILED"
+              REASON="Game integration tests failed"
+              FAILED_PHASE="game_tests"
+            fi
+            echo "classification=$CLASSIFICATION" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+            echo "failed_phase=$FAILED_PHASE" >> "$GITHUB_OUTPUT"
             echo "diagnosable=true" >> "$GITHUB_OUTPUT"
             echo "closeout_eligible=true" >> "$GITHUB_OUTPUT"
-            echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+            echo "timestamp=$TS" >> "$GITHUB_OUTPUT"
           fi
           echo "::endgroup::"
 
