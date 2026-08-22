@@ -1,8 +1,9 @@
 import json
-from sts2_autotest.dsl.fluent import define
+
+from sts2_autotest.common.state import GameScreen
+from sts2_autotest.core.action_model import ActionDescriptor
 from sts2_autotest.dsl.assertions import (
     choose_event,
-    choose_map_node,
     embark,
     enemy_took_exact_hits,
     enter_combat,
@@ -14,9 +15,11 @@ from sts2_autotest.dsl.assertions import (
     select_character,
     start_new_run,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
 
-# Given: 已安装并可连接 STS2-Cli-Mod
+
+# Given: 已安装并可连接 STS2-Agent（HTTP `http://127.0.0.1:8080`），且调试动作已启用（`STS2_ADAPTER__AGENT__DEBUG_ACTIONS=true`）
+# Given: 本用例权威运行路径为 Agent + debug：`give_card` 注入依赖适配器调试能力，STS2-Cli-Mod（`sts2` CLI）无该命令通道，不作为本用例通过路径
 # Given: 游戏可被启动并加载到主菜单
 # Given: 使用原游戏角色 Ironclad（战士）
 # Given: 双重打击的原版卡牌 ID 为 TWIN_STRIKE
@@ -33,7 +36,7 @@ def test_tc_ironclad_twin_strike_damage(autotest, _session_loop):
             select_character("IRONCLAD"),
             embark(),
             choose_event(0),
-            choose_map_node(2, 1),
+            ActionDescriptor(action_type="choose_map_node_by_type", params={"node_type": "Monster"}),
             enter_combat(),
             give_card("TWIN_STRIKE"),
         )
@@ -51,7 +54,7 @@ def test_tc_ironclad_twin_strike_damage(autotest, _session_loop):
         "title": "战士双重打击伤害验证",
         "start_state": "- 任意可恢复状态\n- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN",
         "end_state": "- 当前位于战斗界面\n- 已尝试打出 TWIN_STRIKE\n- 伤害事件应记录为 5 点伤害 2 次",
-        "steps": ["返回主菜单", "开始新 run", "选择战士", "开始冒险", "选择开局事件的第 0 个选项", "选择地图节点 (2, 1)", "进入首次战斗", "添加 TWIN_STRIKE 到手牌", "使用 TWIN_STRIKE"],
+        "steps": ["返回主菜单", "开始新 run", "选择战士", "开始冒险", "选择开局事件的第 0 个选项", "选择首个普通战斗节点", "进入首次战斗", "添加 TWIN_STRIKE 到手牌", "使用 TWIN_STRIKE"],
         "failures": result.failures,
         "detail": result.detail,
     }

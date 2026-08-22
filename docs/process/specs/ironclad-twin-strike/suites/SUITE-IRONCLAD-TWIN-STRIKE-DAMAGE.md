@@ -8,6 +8,7 @@
 
 ## Goal
 - 验证从启动游戏、进入战士首战、添加双重打击到手牌、打出卡牌，到校验 5 点伤害 2 次的完整自动化链路。
+- 本套件权威运行路径为 STS2-Agent + debug（`STS2_ADAPTER__AGENT__DEBUG_ACTIONS=true`）；`give_card` 注入依赖适配器调试能力，STS2-Cli-Mod 无该命令通道，不作为通过路径。
 
 ## Mode
 - execution: sequential_shared_session

@@ -489,7 +489,7 @@ def test_card_flow():
 | `play_card(card_id, target=0)` | 打出指定卡牌。 |
 | `end_turn()` | 结束当前回合。 |
 | `set_seed(seed)` | 设置随机种子。 |
-| `give_card(card_id)` | 给玩家添加卡牌。 |
+| `give_card(card_id)` | 给玩家添加卡牌（依赖适配器调试能力；需 Agent + `STS2_ADAPTER__AGENT__DEBUG_ACTIONS=true`，否则以 `DEBUG_ACTIONS_UNAVAILABLE` 明确阻断）。 |
 | `set_hp(hp)` | 设置玩家 HP。 |
 
 当 Agent 返回 4xx/5xx，且响应体里包含 `error.message` 时，失败详情会直接显示这条原因，便于定位“命令不存在”之类的接口或配置问题。
