@@ -12,60 +12,102 @@ jobs:
   nightly:
     name: Nightly Full Regression
     runs-on: ["self-hosted", "macos", "autotest"]
-    timeout-minutes: 360  # 6 hour max
+    timeout-minutes: 360  # 6 hour max（PR #54 已定，本轮不改整体上限）
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        id: checkout
+        continue-on-error: true
+        uses: actions/checkout@v4
+
+      - name: Checkout retry
+        id: checkout_retry
+        if: steps.checkout.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/checkout@v4
+
+      - name: Write early diagnosis
+        id: early_diagnosis
+        if: always()
+        env:
+          NIGHTLY_RUN_ID: ${{ github.run_id }}
+          CHECKOUT_1: ${{ steps.checkout.outcome }}
+          CHECKOUT_2: ${{ steps.checkout_retry.outcome }}
+        run: |
+          EVID_DIR="${RUNNER_TEMP}/nightly-early-evidence"
+          mkdir -p "$EVID_DIR"
+          TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          LAST_STATUS="$CHECKOUT_1"
+          FAILED_PHASE=""
+          CLASSIFICATION="UNKNOWN"
+          REASON="run in progress"
+          if [ "$CHECKOUT_1" != "success" ] && [ "$CHECKOUT_2" != "success" ]; then
+            CLASSIFICATION="BLOCKED"
+            FAILED_PHASE="checkout"
+            LAST_STATUS="failure"
+            REASON="checkout failed"
+          fi
+          cat > "$EVID_DIR/early-diagnosis.json" <<EOF
+          {
+            "run_id": "${NIGHTLY_RUN_ID}",
+            "classification": "${CLASSIFICATION}",
+            "reason": "${REASON}",
+            "failed_phase": "${FAILED_PHASE}",
+            "last_status": "${LAST_STATUS}",
+            "timestamp": "${TS}",
+            "screenshots": {
+              "count": 0,
+              "available": false,
+              "reason": "0 张/不可用：尚未进入截图采集或工作区不可用"
+            },
+            "attempts": [
+              {"phase": "checkout", "attempt": 1, "outcome": "${CHECKOUT_1}"},
+              {"phase": "checkout", "attempt": 2, "outcome": "${CHECKOUT_2}"}
+            ]
+          }
+          EOF
+          echo "path=$EVID_DIR/early-diagnosis.json" >> "$GITHUB_OUTPUT"
+          echo "timestamp=$TS" >> "$GITHUB_OUTPUT"
+          echo "Wrote early diagnosis at $TS"
+
+      - name: Upload early diagnosis
+        id: upload_early
+        if: always() && steps.checkout.outcome != 'success' && steps.checkout_retry.outcome != 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: early-diagnosis-${{ github.run_id }}
+          path: ${{ runner.temp }}/nightly-early-evidence/
+          if-no-files-found: error
 
       # ---------- Phase 0: Environment readiness probe ----------
       - name: Environment readiness check
         id: env_check
+        if: steps.checkout.outcome == 'success' || steps.checkout_retry.outcome == 'success'
+        continue-on-error: true
         timeout-minutes: 2
-        run: |
-          echo "::group::Environment readiness probe"
-          FAIL=0
+        run: bash scripts/nightly-env-check.sh
 
-          # 1. Python availability
-          if ! command -v python3 &> /dev/null; then
-            echo "❌ python3 not found in PATH"
-            FAIL=1
-          else
-            PYTHON_VER=$(python3 --version 2>&1)
-            echo "✅ Python: $PYTHON_VER"
-          fi
-
-          # 2. pip availability
-          if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
-            echo "❌ pip not found"
-            FAIL=1
-          else
-            echo "✅ pip available"
-          fi
-
-          # 3. sts2 CLI availability (optional but logged)
-          if command -v sts2 &> /dev/null; then
-            echo "✅ sts2 CLI: $(sts2 --version 2>&1 || echo 'version unknown')"
-          else
-            echo "⚠️ sts2 CLI not in PATH (game tests will be skipped)"
-          fi
-
-          # 4. Disk space check (>5GB free)
-          FREE_GB=$(df -g . 2>/dev/null | awk 'NR==2{print $4}' || df -h . | awk 'NR==2{print $4}' | sed 's/G//')
-          echo "💾 Disk free: ${FREE_GB}"
-
-          # 5. Runner health marker
-          echo "runner_ready=true" >> "$GITHUB_OUTPUT"
-          echo "::endgroup::"
-
-          if [ "$FAIL" -eq 1 ]; then
-            echo "::error::Environment readiness check FAILED — marking run as BLOCKED"
-            echo "blocked_reason=environment_not_ready" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-          echo "✅ Environment readiness check passed"
+      - name: Environment readiness retry
+        id: env_check_retry
+        if: steps.env_check.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 2
+        run: bash scripts/nightly-env-check.sh
 
       # ---------- Phase 1: Setup (with fallback) ----------
       - name: Setup Python
         id: setup_python
+        if: steps.env_check.outcome == 'success' || steps.env_check_retry.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Python retry
+        id: setup_python_retry
+        if: steps.setup_python.outcome == 'failure'
+        continue-on-error: true
         timeout-minutes: 5
         uses: actions/setup-python@v5
         with:
@@ -73,40 +115,83 @@ jobs:
 
       - name: Install project
         id: install
+        if: steps.setup_python.outcome == 'success' || steps.setup_python_retry.outcome == 'success'
+        continue-on-error: true
         timeout-minutes: 5
         run: pip install -e ".[dev]"
+
+      - name: Install project retry
+        id: install_retry
+        if: steps.install.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: pip install -e ".[dev]"
+
+      - name: Resolve environment gate
+        id: env_gate
+        if: always()
+        run: |
+          checkout_ok=false
+          env_ok=false
+          python_ok=false
+          install_ok=false
+          ready=false
+          if [ "${{ steps.checkout.outcome }}" = "success" ] || [ "${{ steps.checkout_retry.outcome }}" = "success" ]; then
+            checkout_ok=true
+          fi
+          if [ "${{ steps.env_check.outcome }}" = "success" ] || [ "${{ steps.env_check_retry.outcome }}" = "success" ]; then
+            env_ok=true
+          fi
+          if [ "${{ steps.setup_python.outcome }}" = "success" ] || [ "${{ steps.setup_python_retry.outcome }}" = "success" ]; then
+            python_ok=true
+          fi
+          if [ "${{ steps.install.outcome }}" = "success" ] || [ "${{ steps.install_retry.outcome }}" = "success" ]; then
+            install_ok=true
+          fi
+          if [ "$checkout_ok" = true ] && [ "$env_ok" = true ] && [ "$python_ok" = true ] && [ "$install_ok" = true ]; then
+            ready=true
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "checkout_ok=$checkout_ok" >> "$GITHUB_OUTPUT"
+          echo "Environment gate ready=$ready checkout=$checkout_ok env=$env_ok python=$python_ok install=$install_ok"
 
       # ---------- Phase 2: Static quality gates ----------
       - name: Lint
         id: lint
+        if: steps.env_gate.outputs.ready == 'true'
         timeout-minutes: 3
         run: ruff check src/ tests/
 
       - name: Type check
         id: typecheck
+        if: steps.env_gate.outputs.ready == 'true'
         timeout-minutes: 5
         run: mypy src/sts2_autotest --strict
 
       - name: Import layer check
         id: import_check
+        if: steps.env_gate.outputs.ready == 'true'
         timeout-minutes: 2
         run: lint-imports
 
       # ---------- Phase 3: Unit tests ----------
       - name: Unit tests
         id: unit_tests
+        if: steps.env_gate.outputs.ready == 'true'
         timeout-minutes: 15
         run: python -m pytest tests/unit/ -v --junitxml=junit-unit.xml
 
       # ---------- Phase 4: CLI integration tests ----------
       - name: CLI integration tests
         id: cli_tests
+        if: steps.env_gate.outputs.ready == 'true'
         timeout-minutes: 10
         run: python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
 
       # ---------- Phase 5: Game integration tests (real game required) ----------
       - name: Game integration tests
         id: game_tests
+        if: steps.env_gate.outputs.ready == 'true'
         timeout-minutes: 120
         continue-on-error: true
         run: python -m pytest tests/integration/ -v -m requires_game --timeout=300 --junitxml=junit-game.xml
@@ -115,90 +200,159 @@ jobs:
       - name: Classify results
         id: classify
         if: always()
+        env:
+          NIGHTLY_RUN_ID: ${{ github.run_id }}
+          NIGHTLY_STEP_CHECKOUT: ${{ steps.checkout.outcome }}
+          NIGHTLY_STEP_CHECKOUT_RETRY: ${{ steps.checkout_retry.outcome }}
+          NIGHTLY_STEP_ENV_CHECK: ${{ steps.env_check.outcome }}
+          NIGHTLY_STEP_ENV_CHECK_RETRY: ${{ steps.env_check_retry.outcome }}
+          NIGHTLY_STEP_SETUP_PYTHON: ${{ steps.setup_python.outcome }}
+          NIGHTLY_STEP_SETUP_PYTHON_RETRY: ${{ steps.setup_python_retry.outcome }}
+          NIGHTLY_STEP_INSTALL: ${{ steps.install.outcome }}
+          NIGHTLY_STEP_INSTALL_RETRY: ${{ steps.install_retry.outcome }}
+          NIGHTLY_STEP_LINT: ${{ steps.lint.outcome }}
+          NIGHTLY_STEP_TYPECHECK: ${{ steps.typecheck.outcome }}
+          NIGHTLY_STEP_IMPORT_CHECK: ${{ steps.import_check.outcome }}
+          NIGHTLY_STEP_UNIT_TESTS: ${{ steps.unit_tests.outcome }}
+          NIGHTLY_STEP_CLI_TESTS: ${{ steps.cli_tests.outcome }}
+          NIGHTLY_STEP_GAME_TESTS: ${{ steps.game_tests.outcome }}
         run: |
           echo "::group::Result classification"
-
-          # Determine overall classification
-          ENV_READY="${{ steps.env_check.outputs.runner_ready }}"
-          CLASSIFICATION="UNKNOWN"
-
-          if [ "$ENV_READY" != "true" ]; then
-            CLASSIFICATION="BLOCKED"
-            REASON="Environment not ready (runner setup failed)"
-          elif [ "${{ steps.setup_python.conclusion }}" == "failure" ]; then
-            CLASSIFICATION="BLOCKED"
-            REASON="Python setup failed"
-          elif [ "${{ steps.install.conclusion }}" == "failure" ]; then
-            CLASSIFICATION="BLOCKED"
-            REASON="Project installation failed"
-          elif [ "${{ steps.lint.conclusion }}" == "failure" ] || [ "${{ steps.typecheck.conclusion }}" == "failure" ] || [ "${{ steps.import_check.conclusion }}" == "failure" ]; then
-            CLASSIFICATION="FAILED"
-            REASON="Static quality gate failure"
-          elif [ "${{ steps.unit_tests.conclusion }}" == "failure" ]; then
-            CLASSIFICATION="FAILED"
-            REASON="Unit tests failed"
-          elif [ "${{ steps.cli_tests.conclusion }}" == "failure" ]; then
-            CLASSIFICATION="FAILED"
-            REASON="CLI integration tests failed"
-          elif [ "${{ steps.game_tests.conclusion }}" == "failure" ]; then
-            CLASSIFICATION="FAILED"
-            REASON="Game integration tests failed (may be environment-related)"
+          EVID_DIR="${RUNNER_TEMP}/nightly-early-evidence"
+          mkdir -p "$EVID_DIR" tests/output || mkdir -p "$EVID_DIR"
+          # 分类必须读 raw outcome，禁止 conclusion：continue-on-error 会把
+          # conclusion 改写成 success，从而把真实游戏失败误报为 PASSED。
+          GAME_OUTCOME="${{ steps.game_tests.outcome }}"
+          echo "game_tests.outcome=$GAME_OUTCOME"
+          SCRIPT=".github/scripts/classify_nightly.py"
+          if [ -f "$SCRIPT" ] && command -v python3 >/dev/null 2>&1; then
+            python3 "$SCRIPT" \
+              --run-id "$NIGHTLY_RUN_ID" \
+              --evidence-dir tests/output \
+              --write "$EVID_DIR/classification.json" \
+              --write tests/output/classification.json
           else
-            CLASSIFICATION="PASSED"
-            REASON="All stages completed successfully"
+            TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            CLASSIFICATION="BLOCKED"
+            REASON="classifier unavailable after checkout/environment failure"
+            FAILED_PHASE="checkout"
+            if [ "$NIGHTLY_STEP_CHECKOUT" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_ENV_CHECK" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_SETUP_PYTHON" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_INSTALL" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_LINT" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_TYPECHECK" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_IMPORT_CHECK" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_UNIT_TESTS" = "cancelled" ] \
+              || [ "$NIGHTLY_STEP_CLI_TESTS" = "cancelled" ] \
+              || [ "$GAME_OUTCOME" = "cancelled" ]; then
+              CLASSIFICATION="CANCELLED"
+              REASON="a nightly step was cancelled"
+              FAILED_PHASE="cancelled"
+            elif [ "$GAME_OUTCOME" = "failure" ]; then
+              CLASSIFICATION="FAILED"
+              REASON="Game integration tests failed"
+              FAILED_PHASE="game_tests"
+            fi
+            echo "classification=$CLASSIFICATION" >> "$GITHUB_OUTPUT"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+            echo "failed_phase=$FAILED_PHASE" >> "$GITHUB_OUTPUT"
+            echo "diagnosable=true" >> "$GITHUB_OUTPUT"
+            echo "closeout_eligible=true" >> "$GITHUB_OUTPUT"
+            echo "timestamp=$TS" >> "$GITHUB_OUTPUT"
           fi
-
-          echo "classification=$CLASSIFICATION" >> "$GITHUB_OUTPUT"
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
           echo "::endgroup::"
-          echo "🏷️ Classification: $CLASSIFICATION — $REASON"
 
       # ---------- Phase 7: Evidence packaging ----------
       - name: Package evidence
         id: package
         if: always()
+        continue-on-error: true
         timeout-minutes: 10
         run: |
-          # Create classification marker for downstream consumers
-          mkdir -p tests/output/
-          cat > tests/output/classification.json << 'CLASS_EOF'
-          {
-            "run_id": "${{ github.run_id }}",
-            "classification": "${{ steps.classify.outputs.classification }}",
-            "reason": "${{ steps.classify.outputs.reason }}",
-            "timestamp": "$(date -u +%FT%TZ)",
-            "stages": {
-              "env_ready": "${{ steps.env_check.conclusion }}",
-              "setup_python": "${{ steps.setup_python.conclusion }}",
-              "install": "${{ steps.install.conclusion }}",
-              "lint": "${{ steps.lint.conclusion }}",
-              "typecheck": "${{ steps.typecheck.conclusion }}",
-              "import_check": "${{ steps.import_check.conclusion }}",
-              "unit_tests": "${{ steps.unit_tests.conclusion }}",
-              "cli_tests": "${{ steps.cli_tests.conclusion }}",
-              "game_tests": "${{ steps.game_tests.conclusion }}"
-            }
-          }
-          CLASS_EOF
-          autotest report --evidence-dir tests/output/ --coverage || echo "⚠️ Evidence packaging had issues but continuing"
+          mkdir -p tests/output || true
+          EVID_DIR="${RUNNER_TEMP}/nightly-early-evidence"
+          if [ -d "$EVID_DIR" ]; then
+            cp -f "$EVID_DIR"/*.json tests/output/ 2>/dev/null || true
+          fi
+          if command -v autotest >/dev/null 2>&1; then
+            autotest report --evidence-dir tests/output/ --coverage || echo "⚠️ Evidence packaging had issues but continuing"
+          else
+            echo "⚠️ autotest CLI unavailable; kept minimal diagnosis files"
+          fi
 
       # ---------- Phase 8: Cleanup ----------
       - name: Clean old evidence (>7 days)
         if: always()
+        continue-on-error: true
         run: |
-          find tests/output/ -type d -name "run-*" -mtime +$EVIDENCE_RETENTION_DAYS -exec rm -rf {} + 2>/dev/null || true
+          if [ -d tests/output ]; then
+            find tests/output/ -type d -name "run-*" -mtime +$EVIDENCE_RETENTION_DAYS -exec rm -rf {} + 2>/dev/null || true
+          fi
           echo "Evidence cleanup complete"
 
       # ---------- Phase 9: Upload artifacts ----------
       - name: Upload JUnit results
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: junit-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
+          name: junit-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification || 'UNKNOWN' }}
           path: junit-*.xml
+          if-no-files-found: ignore
+
       - name: Upload evidence pack
+        id: upload_evidence
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
-          path: tests/output/
+          name: evidence-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification || 'UNKNOWN' }}
+          path: |
+            tests/output/
+            ${{ runner.temp }}/nightly-early-evidence/
+          if-no-files-found: error
+
+      - name: Record evidence upload result
+        id: record_upload
+        if: always()
+        env:
+          UPLOAD_OUTCOME: ${{ steps.upload_evidence.outcome }}
+        run: |
+          echo "upload_outcome=$UPLOAD_OUTCOME" >> "$GITHUB_OUTPUT"
+          echo "## Nightly classification" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- classification: \`${{ steps.classify.outputs.classification }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- reason: ${{ steps.classify.outputs.reason }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- failed_phase: \`${{ steps.classify.outputs.failed_phase }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- timestamp: \`${{ steps.classify.outputs.timestamp }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- evidence upload: \`$UPLOAD_OUTCOME\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$UPLOAD_OUTCOME" != "success" ]; then
+            echo "diagnosable=false" >> "$GITHUB_OUTPUT"
+            echo "- diagnosable: false（证据上传失败，不能算可诊断结果）" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Evidence upload failed — result is not diagnosable"
+            if command -v python3 >/dev/null 2>&1 && [ -f .github/scripts/classify_nightly.py ]; then
+              python3 .github/scripts/classify_nightly.py \
+                --mark-not-diagnosable "${RUNNER_TEMP}/nightly-early-evidence/classification.json" \
+                --mark-not-diagnosable tests/output/classification.json
+            fi
+          else
+            echo "diagnosable=true" >> "$GITHUB_OUTPUT"
+            echo "- diagnosable: true" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Enforce nightly classification
+        if: always()
+        run: |
+          CLASS="${{ steps.classify.outputs.classification }}"
+          UPLOAD="${{ steps.upload_evidence.outcome }}"
+          failed=0
+          if [ "$UPLOAD" != "success" ]; then
+            echo "::error::Evidence upload outcome=$UPLOAD; not a diagnosable result"
+            failed=1
+          fi
+          if [ "$CLASS" != "PASSED" ]; then
+            echo "::error::Nightly classification=$CLASS (${{ steps.classify.outputs.reason }})"
+            failed=1
+          fi
+          exit "$failed"

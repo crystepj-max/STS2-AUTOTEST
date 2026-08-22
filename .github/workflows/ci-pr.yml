@@ -208,6 +208,12 @@ jobs:
         if: always() && steps.install.outcome == 'success'
         run: .venv-ci/bin/python .github/scripts/check_workflow_artifact_order.py
 
+      - name: Check nightly regression contract (issue-15)
+        # 分类用 outcome、真实时间、早期证据、环境一次重试、证据上传失败可见。
+        id: nightly_contract
+        if: always() && steps.install.outcome == 'success'
+        run: .venv-ci/bin/python .github/scripts/check_nightly_regression.py
+
       - name: Generate summary
         if: always()
         run: |
@@ -244,6 +250,8 @@ jobs:
           fi
           echo "| Real STS2 CLI discovery | ${{ steps.cli_check.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| CLI integration | ${{ steps.cli_tests.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Workflow artifact order | ${{ steps.workflow_artifact_order.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Nightly regression contract | ${{ steps.nightly_contract.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce validation result
         if: always()
@@ -283,5 +291,6 @@ jobs:
           check "Real STS2 CLI discovery" "${{ steps.cli_check.outcome }}"
           check "CLI integration" "${{ steps.cli_tests.outcome }}"
           check "Workflow artifact order" "${{ steps.workflow_artifact_order.outcome }}"
+          check "Nightly regression contract" "${{ steps.nightly_contract.outcome }}"
 
           exit "$failed"
