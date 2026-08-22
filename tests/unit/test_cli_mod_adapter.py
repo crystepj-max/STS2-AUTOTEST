@@ -205,6 +205,31 @@ class TestGetAvailableActions:
         assert "grid_select_card" in result
         assert "advance_dialogue" in result
 
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    @pytest.mark.parametrize(
+        "state_payload",
+        [
+            # 卷轴箱：CLI 可能直接以 BUNDLE_SELECTION 上报，或 UNKNOWN + bundle_select
+            # 载荷（数据驱动重映射兜底路径）。
+            {"screen": "BUNDLE_SELECTION"},
+            {"screen": "UNMAPPED_BUNDLE", "bundle_select": {"bundles": [{"index": 0}]}},
+            {"screen": "TRI_SELECT"},
+            {"screen": "CARD_REWARD"},
+        ],
+    )
+    def test_neow_blessing_branches_offer_choose_map_node(
+        self,
+        mock_popen: MagicMock,
+        adapter: CliModAdapter,
+        state_payload: dict[str, Any],
+    ) -> None:
+        """非 MAP 祝福分支（BUNDLE_SELECTION/TRI_SELECT/CARD_REWARD）必须产出
+        choose_map_node 可推进动作（issue #57 缺口 2），否则复合动作序列卡在
+        ``Game not actionable`` 等待直至超时。"""
+        mock_popen.return_value = _mock_popen_ok(state_payload)
+        result = _run(adapter.get_available_actions())
+        assert "choose_map_node" in result
+
 
 class TestAct:
     """act() tests."""
@@ -824,6 +849,48 @@ class TestAct:
         commands = [call.args[0] for call in mock_popen.call_args_list]
         assert commands == [
             ["sts2", "tri_select_skip"],
+            ["sts2", "state"],
+            ["sts2", "choose_map_node", "3", "0"],
+        ]
+
+    @patch("sts2_autotest.adapters.cli_mod.subprocess.Popen")
+    def test_choose_map_node_converges_bundle_selection_to_map(
+        self, mock_popen: MagicMock, adapter: CliModAdapter
+    ) -> None:
+        """卷轴箱祝福带出 BUNDLE_SELECTION 时，choose_map_node 必须先
+        bundle_select+confirm 收敛推进到 MAP 再选节点，不能把选节点命令直接
+        下发到非 MAP 屏（真机报 ``Game not actionable``，issue #57）。"""
+        adapter._cached_state = GameState(screen=GameScreen.BUNDLE_SELECTION)
+        adapter._cache_stale = False
+        mock_popen.side_effect = [
+            _mock_popen_ok({}),  # bundle_select 0
+            _mock_popen_ok({}),  # bundle_confirm
+            _mock_popen_ok(  # state → MAP
+                {
+                    "screen": "MAP",
+                    "map": {
+                        "travelable_coords": [{"col": 3, "row": 0}],
+                        "nodes": [
+                            {
+                                "col": 3,
+                                "row": 0,
+                                "type": "MONSTER",
+                                "state": "TRAVELABLE",
+                            }
+                        ],
+                    },
+                }
+            ),
+            _mock_popen_ok({}),  # choose_map_node 3 0
+        ]
+
+        result = _run(adapter.act("choose_map_node", {"col": 2, "row": 1}))
+
+        assert result.status == "success"
+        commands = [call.args[0] for call in mock_popen.call_args_list]
+        assert commands == [
+            ["sts2", "bundle_select", "0"],
+            ["sts2", "bundle_confirm"],
             ["sts2", "state"],
             ["sts2", "choose_map_node", "3", "0"],
         ]

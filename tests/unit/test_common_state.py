@@ -111,11 +111,30 @@ class TestAllowedTransitions:
 
     def test_reward_states_return_to_map(self) -> None:
         for state in (
-            GameScreen.CARD_REWARD,
             GameScreen.RELIC_REWARD,
             GameScreen.CHEST,
         ):
             assert state.allowed_transitions == frozenset({GameScreen.MAP})
+
+    def test_card_reward_returns_to_map_or_combat(self) -> None:
+        """失物盒等 Neow 奖励收敛后回 MAP，也可能直接进第一场战斗（issue #57）。"""
+        transitions = GameScreen.CARD_REWARD.allowed_transitions
+        assert transitions == frozenset({GameScreen.MAP, GameScreen.COMBAT})
+
+    def test_neow_blessing_branches_can_converge_to_combat(self) -> None:
+        """Neow 非 MAP 祝福分支收敛后可直接进第一场战斗（issue #57）。
+
+        卷轴箱（BUNDLE_SELECTION）/铅制镇纸（TRI_SELECT）/失物盒（CARD_REWARD）
+        的复合推进收敛时游戏可能已进入 COMBAT，转移表必须放行，否则复合动作
+        序列被 state_engine 以 ``Illegal state transition: CARD_REWARD → COMBAT``
+        拒绝（真机 case-r8t 证据）。
+        """
+        for source in (
+            GameScreen.BUNDLE_SELECTION,
+            GameScreen.TRI_SELECT,
+            GameScreen.CARD_REWARD,
+        ):
+            assert GameScreen.COMBAT in source.allowed_transitions
 
     def test_boss_reward_can_go_to_map_or_victory(self) -> None:
         transitions = GameScreen.BOSS_REWARD.allowed_transitions

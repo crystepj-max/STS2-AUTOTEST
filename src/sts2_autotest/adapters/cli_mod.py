@@ -536,9 +536,11 @@ class CliModAdapter:
                 cur = self._cached_state
             if cur.screen == GameScreen.COMBAT:
                 return ActionResult(status="success", state_changed=False)
-            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT}:
-                # Neow 祝福带出奖励/三选一屏时，先推进到 MAP 再选节点（真机曾卡在
-                # CARD_REWARD：choose_map_node 短路为空操作 → 后续 give_card 无法执行）。
+            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT, GameScreen.BUNDLE_SELECTION}:
+                # Neow 祝福带出奖励/三选一/包裹选择屏时，先推进到 MAP 再选节点
+                # （真机曾卡在 CARD_REWARD：choose_map_node 短路为空操作 → 后续
+                # give_card 无法执行；BUNDLE_SELECTION 下发选节点报 Game not
+                # actionable，issue #57）。
                 converge = self._advance_dialogue_to_map_sync()
                 if converge.status != "success":
                     return converge
@@ -1068,8 +1070,10 @@ def _screen_to_actions(screen: GameScreen) -> list[str]:
         GameScreen.REST: ["choose_rest_option", "probe"],
         GameScreen.EVENT: ["start_new_run", "select_character", "embark", "choose_event", "advance_dialogue", "choose_map_node", "probe"],
         GameScreen.CHEST: ["open_chest", "pick_relic", "probe"],
-        GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "advance_dialogue", "probe"],
-        GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "advance_dialogue", "probe"],
+        # 非 MAP 祝福分支（issue #57）：choose_map_node 是复合推进动作——先收敛
+        # 包裹/三选一/奖励屏再选节点（见 _act_sync 的 choose_map_node 分支）。
+        GameScreen.BUNDLE_SELECTION: ["bundle_select", "bundle_confirm", "bundle_cancel", "advance_dialogue", "choose_map_node", "probe"],
+        GameScreen.TRI_SELECT: ["tri_select_card", "tri_select_skip", "advance_dialogue", "choose_map_node", "probe"],
         GameScreen.BOSS_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],
         GameScreen.CARD_REWARD: ["start_new_run", "select_character", "embark", "choose_map_node", "enter_combat", "choose_event", "advance_dialogue", "combat_basic_policy", "reward_choose_card", "reward_skip_card", "skip_card_reward", "reward_claim", "probe"],
         GameScreen.RELIC_REWARD: ["reward_claim", "relic_select", "relic_skip", "probe"],

@@ -29,6 +29,29 @@ class TestTransitionValidation:
     ) -> None:
         assert engine.validate_transition(GameScreen.EVENT, GameScreen.COMBAT) is True
 
+    def test_neow_blessing_branches_can_converge_into_combat(
+        self, engine: StateEngine
+    ) -> None:
+        """Neow 非 MAP 祝福分支的复合动作收敛可直接进战斗（issue #57）。
+
+        真机 case-r8t 曾报 ``Illegal state transition: CARD_REWARD → COMBAT``：
+        失物盒奖励跳过时游戏已进入第一场战斗，state_engine 不得拒绝。
+        """
+        assert engine.validate_transition(GameScreen.CARD_REWARD, GameScreen.COMBAT) is True
+        assert engine.validate_transition(GameScreen.BUNDLE_SELECTION, GameScreen.COMBAT) is True
+        assert engine.validate_transition(GameScreen.TRI_SELECT, GameScreen.COMBAT) is True
+
+    def test_neow_blessing_branches_update_state_without_error(
+        self, engine: StateEngine
+    ) -> None:
+        """复合动作序列经 update_state 推进 CARD_REWARD → COMBAT 不抛异常。"""
+        result = engine.update_state(
+            GameScreen.CARD_REWARD,
+            GameState(screen=GameScreen.COMBAT),
+            event="choose_map_node",
+        )
+        assert result == GameScreen.COMBAT
+
     def test_illegal_transition(self, engine: StateEngine) -> None:
         assert engine.validate_transition(
             GameScreen.MAIN_MENU, GameScreen.COMBAT
