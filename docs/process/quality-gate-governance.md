@@ -25,6 +25,8 @@
 - `.github/scripts/check_ruff_baseline.py`
 - `.github/scripts/check_mypy_baseline.py`
 - `.github/scripts/check_pytest_baseline.py`
+- `.github/scripts/check_workflow_artifact_order.py`（issue #51 / #61）
+- `.github/workflow-artifact-manifest.yaml`（issue #51 / #61）
 - `.github/pytest-baseline.json`
 - `.github/requirements-lint.txt`
 - `.github/mypy-policy.ini`
@@ -44,6 +46,7 @@
 3. **mypy 参数固定（决策 03）**：`.github/mypy-policy.ini` 固定 `strict` / `show_error_codes` / `no_error_summary`；`check_mypy_baseline.py --config-file` 显式引用。
 4. **基线独立环境（决策 04）**：CI 为基线创建独立 `.venv-baseline`（安装基线 dev 依赖 + 固定 lint 工具），隔离 PR 依赖变化对比较结果的污染。
 5. **Ruff 规则固定（决策 02）**：无显式配置文件，使用固定版本默认规则集；`ruff.toml` / `.ruff.toml` 路径受保护（新增即触发审批）。
+6. **Workflow artifact 步骤顺序（issue #51 / #61）**：`check_workflow_artifact_order.py` + `workflow-artifact-manifest.yaml` 静态校验 upload-artifact 必须晚于 producer；`ci-pr.yml` 门禁强制，本地 `scripts/verify.sh` 硬门槛同步执行。
 
 ### 3.2 流程层
 
@@ -74,6 +77,7 @@
 | `tests/unit/test_ci_pytest_baseline.py` | `--baseline-json` 从 base 读取；fail-closed；#42 已清偿强制失效 |
 | `tests/unit/test_ci_ruff_baseline.py` | `--ruff-bin` / `--baseline-ruff-bin` 显式路径；相对路径转绝对 |
 | `tests/unit/test_ci_mypy_baseline.py` | `--config-file` / `--mypy-bin` 参数透传 |
+| `tests/unit/test_ci_workflow_artifact_order.py` | upload 晚于 producer；ci-pr/main/nightly/game 真实 YAML 通过 |
 | `tests/unit/test_policy_files.py` | CODEOWNERS 覆盖政策文件清单（防保护被悄然移除） |
 
 ### 真实探针 PR（一次性建立，之后每季度或政策变更后复跑）
