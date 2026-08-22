@@ -326,6 +326,27 @@ class TestAssertionFunctions:
         assert ok is False
         assert "5 x 2" in msg
 
+    def test_enemy_took_exact_hits_falls_back_to_hp_delta(self) -> None:
+        # Agent 路径无 damage_events：回退到 previous_enemy_hp 差值等价校验（5×2=10）。
+        fn = enemy_took_exact_hits(5, 2)
+        state = GameState(screen=GameScreen.COMBAT, enemy_hp=29, previous_enemy_hp=39)
+        ok, _ = fn(state)
+        assert ok is True
+
+    def test_enemy_took_exact_hits_fallback_insufficient_delta(self) -> None:
+        fn = enemy_took_exact_hits(5, 2)
+        state = GameState(screen=GameScreen.COMBAT, enemy_hp=35, previous_enemy_hp=39)
+        ok, msg = fn(state)
+        assert ok is False
+        assert "HP decrease" in msg
+
+    def test_enemy_took_exact_hits_fallback_without_previous_hp_fails(self) -> None:
+        fn = enemy_took_exact_hits(5, 2)
+        state = GameState(screen=GameScreen.COMBAT, enemy_hp=29)
+        ok, msg = fn(state)
+        assert ok is False
+        assert "damage_events not in state" in msg
+
     def test_player_energy_decreased_by(self) -> None:
         fn = player_energy_decreased_by(1)
         state = GameState(screen=GameScreen.COMBAT, energy=2, previous_energy=3)

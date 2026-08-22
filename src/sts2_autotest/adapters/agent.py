@@ -425,6 +425,26 @@ class AgentAdapter:
             for da in ("give_card", "set_seed", "set_hp", "give_block", "win_combat", "enable_travel"):
                 if da not in actions_result:
                     actions_result.append(da)
+        # return_to_menu 合成（issue-56）：Agent 的 actions/available 不返回该动作，
+        # 但 9/9 生成用例 setup 首步均依赖它做「回到主菜单」的恢复动作。与 CliMod
+        # 的 _screen_to_actions 语义保持一致——仅在主菜单（已满足，空操作）与终局
+        # （GAME_OVER/VICTORY，真实返回）广告；局内（MAP/COMBAT/EVENT 等）不广告，
+        # 交由上层 reset_to_main_menu 的受控重启/abandon_run 兜底。
+        try:
+            screen = (await self.get_state()).screen
+        except STS2Error:
+            screen = None
+        if screen in (GameScreen.MAIN_MENU, GameScreen.GAME_OVER, GameScreen.VICTORY):
+            if "return_to_menu" not in actions_result:
+                actions_result.append("return_to_menu")
+        # enter_combat 合成（issue-56）：Agent 的 actions/available 在 COMBAT/CARD_REWARD
+        # 界面不返回 enter_combat，而生成用例 setup 的「进入首次战斗」步骤依赖该动作
+        # 出现在可用集合，否则确定性超时「Game not actionable before action N:
+        # enter_combat」。与 CliMod 的 _screen_to_actions 语义一致——已处于战斗内/战后
+        # 时 enter_combat 为空操作成功（见 act() 的短路分支），故在此广告。
+        if screen in (GameScreen.COMBAT, GameScreen.CARD_REWARD):
+            if "enter_combat" not in actions_result:
+                actions_result.append("enter_combat")
         return actions_result
 
     async def act(self, action: str, args: dict[str, Any] | None = None) -> ActionResult:
@@ -436,6 +456,28 @@ class AgentAdapter:
           other   → ActionResult(status="failure")
         """
         requested_action = action
+        if action == "return_to_menu":
+            # setup 恢复动作：已在主菜单则空操作成功（与 CliMod 的 setup 恢复语义
+            # 一致）；终局（GAME_OVER/VICTORY）下发 agent 的 return_to_menu 动作。
+            try:
+                cur = await self.get_state()
+            except STS2Error as exc:
+                return self._action_error(exc)
+            if cur.screen == GameScreen.MAIN_MENU:
+                return ActionResult(status="success", state_changed=False)
+            try:
+                data = await self._request(
+                    "POST", self._act_path, {"action": "return_to_menu"}
+                )
+            except STS2Error as exc:
+                return self._action_error(exc)
+            if data.get("ok", False):
+                return ActionResult(status="success", state_changed=True)
+            return ActionResult(
+                status="failure",
+                state_changed=False,
+                detail=data.get("error", "Unknown error"),
+            )
         if action in {"choose_event", "choose_neow_blessing"}:
             try:
                 state_data = _unwrap_data_envelope(
@@ -652,7 +694,8 @@ class AgentAdapter:
                 state = _unwrap_data_envelope(await self._request("GET", self._state_path))
             except STS2Error as exc:
                 return self._action_error(exc)
-            if str(state.get("screen", "")).upper() == "COMBAT":
+            screen = _map_screen(str(state.get("screen", "")).upper())
+            if screen in (GameScreen.COMBAT, GameScreen.CARD_REWARD):
                 return ActionResult(status="success", state_changed=False)
 
         payload: dict[str, Any] = {"action": action}
@@ -1056,6 +1099,10 @@ class AgentAdapter:
                             "give_block",
                             "win_combat",
                             "enable_travel",
+                            # 合成导航动作（适配器内部按状态合成，非 Agent 上报的真实游戏动作）：
+                            # 在对应界面下为空操作，不构成「游戏可交互」信号（issue-56）。
+                            "return_to_menu",
+                            "enter_combat",
                         }
                     ]
                     if executable:

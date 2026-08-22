@@ -204,7 +204,10 @@ def _step_to_action_call(step: str, character_ids: dict[str, str] | None = None)
     if step == "选择首个营火节点":
         return 'ActionDescriptor(action_type="choose_map_node_by_type", params={"node_type": "RestSite"})'
     if step == "选择首个普通战斗节点" or step == "选择首个战斗节点":
-        return 'ActionDescriptor(action_type="nav_to_screen", params={"target": "COMBAT"})'
+        # issue-56：固定坐标 (col,row) 随随机地图漂移，改用按节点类型选第一个可达
+        # 怪物节点（AgentAdapter.act 的 choose_map_node_by_type 已在真机验证可用），
+        # 避免「choose_map_node requires option_index / 坐标不可达」式跨局不稳定。
+        return 'ActionDescriptor(action_type="choose_map_node_by_type", params={"node_type": "Monster"})'
     if step == "选择涅奥祝福":
         return 'ActionDescriptor(action_type="choose_neow_blessing")'
     if step in {"点击 Proceed", "点击继续前进", "选择 Proceed"}:
