@@ -68,7 +68,7 @@ def test_pass_when_upload_after_producer(tmp_path: Path) -> None:
                         {"id": "mypy", "name": "Check no new mypy debt", "run": "echo mypy"},
                         {
                             "name": "Upload check logs",
-                            "uses": "actions/upload-artifact@v4",
+                            "uses": "actions/upload-artifact@v7",
                             "with": {"path": "mypy-check.log"},
                         },
                     ]
@@ -97,7 +97,7 @@ def test_fail_when_upload_before_producer(tmp_path: Path) -> None:
                     "steps": [
                         {
                             "name": "Upload check logs",
-                            "uses": "actions/upload-artifact@v4",
+                            "uses": "actions/upload-artifact@v7",
                             "with": {"path": "mypy-check.log"},
                         },
                         {"id": "mypy", "name": "Check no new mypy debt", "run": "echo mypy"},
@@ -130,7 +130,7 @@ def test_multiline_upload_path_matches_artifact(tmp_path: Path) -> None:
                     "steps": [
                         {"id": "mypy", "run": "echo"},
                         {
-                            "uses": "actions/upload-artifact@v4",
+                            "uses": "actions/upload-artifact@v7",
                             "with": {
                                 "path": "ruff-check.log\nmypy-check.log\npytest-check.log",
                             },
@@ -159,7 +159,7 @@ def test_fail_closed_when_producer_missing(tmp_path: Path) -> None:
                 "validation": {
                     "steps": [
                         {
-                            "uses": "actions/upload-artifact@v4",
+                            "uses": "actions/upload-artifact@v7",
                             "with": {"path": "mypy-check.log"},
                         },
                     ]
@@ -200,7 +200,7 @@ def test_fail_when_upload_before_producer_by_name(tmp_path: Path) -> None:
                     "steps": [
                         {
                             "name": "Upload JUnit",
-                            "uses": "actions/upload-artifact@v4",
+                            "uses": "actions/upload-artifact@v7",
                             "with": {"path": "junit-unit.xml"},
                         },
                         {
@@ -246,7 +246,7 @@ def test_glob_upload_path_requires_all_producers(tmp_path: Path) -> None:
                         {"id": "unit_tests", "run": "echo unit"},
                         {
                             "name": "Upload JUnit results",
-                            "uses": "actions/upload-artifact@v4",
+                            "uses": "actions/upload-artifact@v7",
                             "with": {"path": "junit-*.xml"},
                         },
                         {"id": "game_tests", "run": "echo game"},
@@ -343,7 +343,7 @@ def test_main_exit_code_on_violation(tmp_path: Path) -> None:
                 "validation": {
                     "steps": [
                         {
-                            "uses": "actions/upload-artifact@v4",
+                            "uses": "actions/upload-artifact@v7",
                             "with": {"path": "mypy-check.log"},
                         },
                         {"id": "mypy", "run": "echo"},

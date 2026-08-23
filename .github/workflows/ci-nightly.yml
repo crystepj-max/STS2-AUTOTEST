@@ -14,7 +14,7 @@ jobs:
     runs-on: ["self-hosted", "macos", "autotest"]
     timeout-minutes: 360  # 6 hour max
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ---------- Phase 0: Environment readiness probe ----------
       - name: Environment readiness check
@@ -67,7 +67,7 @@ jobs:
       - name: Setup Python
         id: setup_python
         timeout-minutes: 5
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -192,13 +192,13 @@ jobs:
       # ---------- Phase 9: Upload artifacts ----------
       - name: Upload JUnit results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
           path: junit-*.xml
       - name: Upload evidence pack
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: evidence-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
           path: tests/output/

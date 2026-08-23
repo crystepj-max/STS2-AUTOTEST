@@ -21,7 +21,7 @@ jobs:
     # summary 与 check-logs 上传均不执行，Timeout 呈现和输出保留同时失效
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Runner health precheck (issue-24 T4)
         # 业务验收开始前判定 runner 是否可用（服务状态 + GitHub 网络链路），
@@ -32,7 +32,7 @@ jobs:
           bash scripts/check-runner-health.sh --json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout historical baseline
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .ci-baseline
@@ -159,14 +159,14 @@ jobs:
 
       - name: Upload unit JUnit artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-unit-macos-self-hosted
           path: junit-unit.xml
 
       - name: Upload integration JUnit artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-integration
           path: junit-integration.xml
@@ -193,7 +193,7 @@ jobs:
         # mypy 之前会导致 mypy-check.log 永不进入 artifact，mypy 超时诊断输出完全丢失。
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: check-logs
           path: |

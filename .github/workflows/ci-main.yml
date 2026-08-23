@@ -23,16 +23,16 @@ jobs:
     runs-on: ["self-hosted", "macos", "autotest"]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # issue-13 修复（2026-08-13）：main push 检查此前全量直跑 ruff/mypy，
       # 规则/依赖演化后存量债务必然失败；对齐 ci-pr.yml 的 baseline 机制
       # （PR #10「新代码不增债」设计），以 push 前一个提交为基线，只拦截新增债务。
       - name: Checkout historical baseline
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.before || github.sha }}
           path: .ci-baseline
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Install project
@@ -50,7 +50,7 @@ jobs:
           esac
       - name: Upload JUnit
         if: matrix.check == 'unit-test' && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-unit-main
           path: junit-unit.xml
@@ -63,8 +63,8 @@ jobs:
     runs-on: ["self-hosted", "macos", "autotest"]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - name: Install project
@@ -80,7 +80,7 @@ jobs:
     runs-on: ["self-hosted", "macos", "autotest"]
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '9.0'
       # issue-13 修复（2026-08-14 attempt-004）：STS2-GAWAIN 为私有仓库，
@@ -94,7 +94,7 @@ jobs:
             exit 1
           fi
       - name: Checkout Gawain
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: crystepj-max/STS2-GAWAIN
           path: gawain-src
