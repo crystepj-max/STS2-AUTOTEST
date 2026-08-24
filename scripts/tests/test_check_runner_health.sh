@@ -39,6 +39,9 @@ if [[ "$*" == *"-eo"* || "$*" == *"args"* ]]; then
         '  1 1 /sbin/launchd' \
         "40231 80357 ${RUNNER_DIR:-/Users/chris/actions-runner}/bin/Runner.Listener run --startuptype service" \
         '40235 40231 /Users/chris/actions-runner/bin/Runner.Worker'
+elif [[ "$*" == *"eww"* && "$*" == *"-p"* ]]; then
+    printf '%s\n' "  PID   TT  STAT      TIME COMMAND"
+    printf '%s\n' "40231   ??  S      0:00.01 ${RUNNER_DIR:-/Users/chris/actions-runner}/bin/Runner.Listener run --startuptype service"
 else
     /bin/ps "$@"
 fi
@@ -209,8 +212,8 @@ BIN="$(new_health_bin 200)"
 RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" CODEBUDDY_SESSION_ID=sess-1 bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
 RC="${RC:-0}"
 assert_eq "$RC" "1" "会话变量非空时应 UNHEALTHY(1)"
-if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID" in d.get("safe_delete_session_env","")' 2>/dev/null; then
-    pass "JSON 含 safe_delete_session_env=CODEBUDDY_SESSION_ID"
+if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID(env)" in d.get("safe_delete_session_env","")' 2>/dev/null; then
+    pass "JSON 含 safe_delete_session_env=CODEBUDDY_SESSION_ID(env)"
 else
     fail "JSON 未正确报告 SAFE_DELETE 风险：$OUT"
 fi
@@ -228,18 +231,41 @@ else
     fail "置空后仍误报 SAFE_DELETE：$OUT"
 fi
 
-# --- 用例 12：Runner .env 含会话变量 → UNHEALTHY ---
-test_begin "health: Runner .env 含 CODEBUDDY_SESSION_ID → exit 1 UNHEALTHY"
-FAKE="$(new_fake_runner running)"
-BIN="$(new_health_bin 200)"
-printf 'HTTP_PROXY=http://127.0.0.1:7890\nCODEBUDDY_SESSION_ID=from-env\n' > "$FAKE/.env"
-RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" env -u CODEBUDDY_SESSION_ID -u CLAUDE_SESSION_ID bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
-RC="${RC:-0}"
-assert_eq "$RC" "1" ".env 含会话变量时应 UNHEALTHY(1)"
-if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID" in d.get("safe_delete_session_env","")' 2>/dev/null; then
-    pass "JSON 报告 .env 中的 SAFE_DELETE 风险"
+# --- 用例 12：launchd plist EnvironmentVariables 含会话变量 → UNHEALTHY ---
+test_begin "health: launchd plist 含 CODEBUDDY_SESSION_ID → exit 1 UNHEALTHY"
+if [[ ! -x /usr/libexec/PlistBuddy ]]; then
+    pass "跳过：非 macOS 或无 PlistBuddy"
 else
-    fail "未检测到 .env 会话变量：$OUT"
+    FAKE="$(new_fake_runner running)"
+    BIN="$(new_health_bin 200)"
+    FAKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/health-home.XXXXXX")"
+    RUNNER_NAME="test-mac-runner"
+    printf '{"agentName": "%s"}\n' "$RUNNER_NAME" > "$FAKE/.runner"
+    REPO_SLUG="crystepj-max-STS2-AUTOTEST"
+    PLIST_DIR="$FAKE_HOME/Library/LaunchAgents"
+    mkdir -p "$PLIST_DIR"
+    PLIST="$PLIST_DIR/actions.runner.${REPO_SLUG}.${RUNNER_NAME}.plist"
+    cat > "$PLIST" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>CODEBUDDY_SESSION_ID</key>
+    <string>from-plist</string>
+  </dict>
+</dict>
+</plist>
+PLIST_EOF
+    RC=0; OUT="$(cd /tmp && HOME="$FAKE_HOME" RUNNER_DIR="$FAKE" REPO="crystepj-max/STS2-AUTOTEST" PATH="$BIN:/usr/bin:/bin" env -u CODEBUDDY_SESSION_ID -u CLAUDE_SESSION_ID bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
+    RC="${RC:-0}"
+    assert_eq "$RC" "1" "plist 含会话变量时应 UNHEALTHY(1)"
+    if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID(plist)" in d.get("safe_delete_session_env","")' 2>/dev/null; then
+        pass "JSON 报告 plist 中的 SAFE_DELETE 风险"
+    else
+        fail "未检测到 plist 会话变量：$OUT"
+    fi
 fi
 
 echo
