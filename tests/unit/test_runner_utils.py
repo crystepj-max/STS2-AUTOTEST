@@ -108,6 +108,48 @@ def test_run_timed_terminates_grandchild_process_group_on_posix(tmp_path: Path) 
         assert not psutil.pid_exists(pid), f"process {pid} still alive after timeout"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="进程组清理行为在 POSIX 上验证")
+def test_run_timed_kills_sigterm_ignoring_grandchild_after_parent_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """父进程收到 SIGTERM 后立即退出，忽略 SIGTERM 的孙子仍须被 SIGKILL 清掉。"""
+    monkeypatch.setattr(runner_utils, "GRACE_PERIOD", 0.5)
+    parent_pid = tmp_path / "parent.pid"
+    child_pid = tmp_path / "child.pid"
+    # 孙子：写 PID 后忽略 SIGTERM，只认 SIGKILL
+    grandchild_code = (
+        "import os, signal, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"open({str(child_pid)!r}, 'w').write(str(os.getpid())); "
+        "time.sleep(300)"
+    )
+    # 父进程：拉起孙子后写 PID；默认 SIGTERM 会终止父进程（不等待孙子）
+    parent_code = (
+        "import subprocess, sys, time, os; "
+        f"subprocess.Popen([sys.executable, '-c', {grandchild_code!r}]); "
+        f"open({str(parent_pid)!r}, 'w').write(str(os.getpid())); "
+        "time.sleep(300)"
+    )
+    log = tmp_path / "check.log"
+    result = runner_utils.run_timed(
+        "demo",
+        [sys.executable, "-c", parent_code],
+        log,
+        timeout=1,
+    )
+
+    assert result.timed_out is True
+    for pid_file in (parent_pid, child_pid):
+        deadline = time.monotonic() + 15
+        while (not pid_file.exists()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        pid = int(pid_file.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 10
+        while psutil.pid_exists(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not psutil.pid_exists(pid), f"process {pid} still alive after timeout"
+
+
 def test_run_timed_raises_file_not_found_for_missing_command(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         runner_utils.run_timed(
@@ -198,9 +240,9 @@ def test_run_timed_cleans_up_and_rethrows_on_keyboard_interrupt(
     real_kill_tree = runner_utils._kill_tree
     kill_calls: list[object] = []
 
-    def spy_kill_tree(proc: object) -> None:
+    def spy_kill_tree(proc: object, pgid: int | None = None) -> None:
         kill_calls.append(proc)
-        real_kill_tree(proc)  # type: ignore[arg-type]
+        real_kill_tree(proc, pgid)  # type: ignore[arg-type]
 
     monkeypatch.setattr(runner_utils, "_kill_tree", spy_kill_tree)
     # 轮询约 1s（10 次 POLL_INTERVAL）后抛 KeyboardInterrupt，此时子进程已写入
