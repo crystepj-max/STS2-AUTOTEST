@@ -78,8 +78,9 @@ jobs:
     name: Deploy Gawain Mod
     needs: [cli-integration]
     runs-on: ["self-hosted", "macos", "autotest"]
-    timeout-minutes: 20
+    timeout-minutes: 30
     # 同一自托管机上禁止并行 Godot --export-pack（EditorSettings 间歇失败）
+    # 30min ≥ 最坏路径 2×(warmup 90s + publish 480s)≈19min + checkout/setup
     concurrency:
       group: deploy-gawain-${{ github.repository }}
       cancel-in-progress: false

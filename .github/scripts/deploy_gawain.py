@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
+
+from runner_utils import TIMEOUT_EXIT_CODE, run_timed
 
 DEFAULT_ARTIFACTS: tuple[str, ...] = (
     "Gawain.dll",
@@ -25,6 +26,11 @@ DEFAULT_ARTIFACTS: tuple[str, ...] = (
     "Gawain.pdb",
     "gawain.pck",
 )
+
+# 与 ci-main deploy-gawain job timeout-minutes: 30 对齐：
+# 最坏路径 2×(warmup 90s + publish 480s) ≈ 19min，剩余给 checkout/setup。
+WARMUP_TIMEOUT_DEFAULT = 90.0
+PUBLISH_TIMEOUT_DEFAULT = 480.0
 
 
 def resolve_godot_bin(explicit: str | None = None) -> Path | None:
@@ -85,9 +91,12 @@ def warmup_godot(
     project_dir: Path,
     *,
     log_path: Path,
-    timeout: float = 120.0,
+    timeout: float = WARMUP_TIMEOUT_DEFAULT,
 ) -> int:
-    """Headless 预热：拉起编辑器路径一次以初始化 EditorSettings。"""
+    """Headless 预热：拉起编辑器路径一次以初始化 EditorSettings。
+
+    使用独立进程组；超时后终止整个树，避免 Godot 残留占用自托管 runner。
+    """
     cmd = [
         str(godot),
         "--headless",
@@ -96,24 +105,15 @@ def warmup_godot(
         "--quit-after",
         "1",
     ]
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n## warmup: {' '.join(cmd)}\n")
-        handle.flush()
-        try:
-            completed = subprocess.run(
-                cmd,
-                cwd=str(project_dir),
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            handle.write("## warmup: TIMEOUT\n")
-            return 124
-        handle.write(f"## warmup: exit={completed.returncode}\n")
-        return completed.returncode
+    result = run_timed(
+        "godot-warmup",
+        cmd,
+        log_path,
+        timeout=timeout,
+        cwd=project_dir,
+        echo=True,
+    )
+    return TIMEOUT_EXIT_CODE if result.timed_out else result.returncode
 
 
 def publish_gawain(
@@ -123,9 +123,12 @@ def publish_gawain(
     game_dir: Path,
     mods_dir: Path,
     log_path: Path,
-    timeout: float = 600.0,
+    timeout: float = PUBLISH_TIMEOUT_DEFAULT,
 ) -> int:
-    """执行 ``dotnet publish`` 并追加日志。"""
+    """执行 ``dotnet publish`` 并追加日志。
+
+    使用独立进程组；超时后终止 MSBuild/Godot 整棵子树，避免与重试并发。
+    """
     cmd = [
         "dotnet",
         "publish",
@@ -136,24 +139,15 @@ def publish_gawain(
         f"-p:ModsPath={mods_dir}/",
         f"-p:GodotPath={godot}",
     ]
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n## publish: {' '.join(cmd)}\n")
-        handle.flush()
-        try:
-            completed = subprocess.run(
-                cmd,
-                cwd=str(project_dir),
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            handle.write("## publish: TIMEOUT\n")
-            return 124
-        handle.write(f"## publish: exit={completed.returncode}\n")
-        return completed.returncode
+    result = run_timed(
+        "dotnet-publish",
+        cmd,
+        log_path,
+        timeout=timeout,
+        cwd=project_dir,
+        echo=True,
+    )
+    return TIMEOUT_EXIT_CODE if result.timed_out else result.returncode
 
 
 def verify_deploy_artifacts(
