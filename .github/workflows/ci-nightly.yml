@@ -7,6 +7,10 @@ on:
 
 env:
   EVIDENCE_RETENTION_DAYS: 7
+  # 剥离 IDE/代理会话变量，避免 safe-delete 钩子拦截 checkout 清理临时目录
+  # （SAFE_DELETE_BULK_CONFIRM_REQUIRED）。与 run_service.spawn_worker 同源。
+  CODEBUDDY_SESSION_ID: ""
+  CLAUDE_SESSION_ID: ""
 
 jobs:
   nightly:
@@ -140,7 +144,9 @@ jobs:
           elif [ "${{ steps.cli_tests.conclusion }}" == "failure" ]; then
             CLASSIFICATION="FAILED"
             REASON="CLI integration tests failed"
-          elif [ "${{ steps.game_tests.conclusion }}" == "failure" ]; then
+          # continue-on-error 步骤必须读 outcome（失败仍可能 conclusion=success），
+          # 否则 --timeout 插件缺失等硬错误会被误判为 PASSED（假绿）。
+          elif [ "${{ steps.game_tests.outcome }}" == "failure" ]; then
             CLASSIFICATION="FAILED"
             REASON="Game integration tests failed (may be environment-related)"
           else
@@ -176,7 +182,7 @@ jobs:
               "import_check": "${{ steps.import_check.conclusion }}",
               "unit_tests": "${{ steps.unit_tests.conclusion }}",
               "cli_tests": "${{ steps.cli_tests.conclusion }}",
-              "game_tests": "${{ steps.game_tests.conclusion }}"
+              "game_tests": "${{ steps.game_tests.outcome }}"
             }
           }
           CLASS_EOF
@@ -202,3 +208,24 @@ jobs:
         with:
           name: evidence-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
           path: tests/output/
+
+      # ---------- Phase 10: Enforce classification (证据上传之后再失败，避免假绿) ----------
+      - name: Enforce classification
+        if: always()
+        run: |
+          CLASSIFICATION="${{ steps.classify.outputs.classification }}"
+          REASON="${{ steps.classify.outputs.reason }}"
+          echo "Classification=$CLASSIFICATION reason=$REASON"
+          case "$CLASSIFICATION" in
+            PASSED)
+              echo "Nightly PASSED"
+              ;;
+            FAILED|BLOCKED)
+              echo "::error::Nightly $CLASSIFICATION: $REASON"
+              exit 1
+              ;;
+            *)
+              echo "::error::Nightly UNKNOWN classification='$CLASSIFICATION' (classify step missing or incomplete)"
+              exit 1
+              ;;
+          esac
