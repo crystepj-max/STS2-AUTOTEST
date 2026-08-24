@@ -205,17 +205,46 @@ else
     fail "gh 挂起时未限时（用时 ${ELAPSED}s）"
 fi
 
-# --- 用例 10：IDE 会话变量触发 SAFE_DELETE 风险 → UNHEALTHY ---
-test_begin "health: CODEBUDDY_SESSION_ID 非空 → exit 1 UNHEALTHY"
+# --- 用例 10：调用方 shell 有会话变量但服务侧干净 → 不误报 UNHEALTHY ---
+test_begin "health: 调用方 shell 有会话变量但 plist/listener 干净 → 仍 HEALTHY"
 FAKE="$(new_fake_runner running)"
 BIN="$(new_health_bin 200)"
 RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" CODEBUDDY_SESSION_ID=sess-1 bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
 RC="${RC:-0}"
-assert_eq "$RC" "1" "会话变量非空时应 UNHEALTHY(1)"
-if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID(env)" in d.get("safe_delete_session_env","")' 2>/dev/null; then
-    pass "JSON 含 safe_delete_session_env=CODEBUDDY_SESSION_ID(env)"
+assert_eq "$RC" "0" "仅调用方 shell 有会话变量时不应 UNHEALTHY"
+if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is True; assert d.get("safe_delete_session_env","") == ""' 2>/dev/null; then
+    pass "未误报 SAFE_DELETE"
 else
-    fail "JSON 未正确报告 SAFE_DELETE 风险：$OUT"
+    fail "调用方 shell 变量导致误报：$OUT"
+fi
+
+# --- 用例 10b：Runner.Listener 进程环境含会话变量 → UNHEALTHY ---
+test_begin "health: Listener 进程环境含 CODEBUDDY_SESSION_ID → exit 1 UNHEALTHY"
+FAKE="$(new_fake_runner running)"
+BIN="$(new_health_bin 200)"
+cat > "$BIN/ps" <<'FAKE_PS_LISTENER_ENV'
+#!/usr/bin/env bash
+if [[ "$*" == *"-eo"* || "$*" == *"args"* ]]; then
+    printf '%s\n' \
+        '  1 1 /sbin/launchd' \
+        "40231 80357 ${RUNNER_DIR:-/Users/chris/actions-runner}/bin/Runner.Listener run --startuptype service" \
+        '40235 40231 /Users/chris/actions-runner/bin/Runner.Worker'
+elif [[ "$*" == *"eww"* && "$*" == *"-p"* ]]; then
+    printf '%s\n' "  PID   TT  STAT      TIME COMMAND"
+    printf '%s\n' "40231   ??  S      0:00.01 ${RUNNER_DIR:-/Users/chris/actions-runner}/bin/Runner.Listener run CODEBUDDY_SESSION_ID=from-listener"
+else
+    /bin/ps "$@"
+fi
+exit 0
+FAKE_PS_LISTENER_ENV
+chmod +x "$BIN/ps"
+RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" env -u CODEBUDDY_SESSION_ID -u CLAUDE_SESSION_ID bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "1" "Listener 进程含会话变量时应 UNHEALTHY(1)"
+if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID(listener)" in d.get("safe_delete_session_env","")' 2>/dev/null; then
+    pass "JSON 含 safe_delete_session_env=CODEBUDDY_SESSION_ID(listener)"
+else
+    fail "未检测到 Listener 进程会话变量：$OUT"
 fi
 
 # --- 用例 11：会话变量为空字符串不触发 ---

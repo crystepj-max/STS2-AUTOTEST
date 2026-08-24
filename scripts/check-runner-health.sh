@@ -119,10 +119,9 @@ code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -x "$PROXY_URL" http
 # --- SAFE_DELETE 风险（IDE/代理会话变量）---
 # CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID 非空时，本机 safe-delete 钩子会拦截
 # checkout 清理 _work/_temp，触发 SAFE_DELETE_BULK_CONFIRM_REQUIRED 并整批红。
-# CI workflow 已显式置空；本检查覆盖（与 setup-mac-runner 一致：服务模式读 plist，不读 .env）：
-#   1) 当前进程环境（CI job 内调用时即作业环境）
-#   2) launchd plist 的 EnvironmentVariables（svc.sh 服务真实继承源）
-#   3) Runner.Listener 进程环境（plist 未同步时的兜底）
+# CI workflow 已显式置空；本检查只读 Runner 服务侧（不读调用方 shell，避免 IDE 终端误报）：
+#   1) launchd plist 的 EnvironmentVariables（svc.sh 服务真实继承源）
+#   2) Runner.Listener 进程环境（plist 未同步时的兜底）
 safe_delete_session_env=""
 safe_delete_add() {
     local key="$1"
@@ -136,11 +135,6 @@ safe_delete_add() {
         safe_delete_session_env="$tagged"
     fi
 }
-for _sd_key in CODEBUDDY_SESSION_ID CLAUDE_SESSION_ID; do
-    if [[ -n "${!_sd_key:-}" ]]; then
-        safe_delete_add "$_sd_key" "env"
-    fi
-done
 runner_name=""
 if [[ -f "$RUNNER_DIR/.runner" ]]; then
     runner_name="$(grep -o '"agentName": *"[^"]*"' "$RUNNER_DIR/.runner" | sed 's/.*: *"//;s/"//' || true)"
@@ -150,7 +144,7 @@ if [[ -n "$runner_name" ]]; then
     svc_plist="${HOME}/Library/LaunchAgents/actions.runner.${repo_slug}.${runner_name}.plist"
     if [[ -f "$svc_plist" ]] && [[ -x /usr/libexec/PlistBuddy ]]; then
         for _sd_key in CODEBUDDY_SESSION_ID CLAUDE_SESSION_ID; do
-            _sd_val="$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:${_sd_key}" "$svc_plist" 2>/dev/null || true)"
+            _sd_val="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:${_sd_key}" "$svc_plist" 2>/dev/null || true)"
             if [[ -n "$_sd_val" ]]; then
                 safe_delete_add "$_sd_key" "plist"
             fi
