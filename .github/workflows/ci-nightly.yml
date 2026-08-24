@@ -208,3 +208,24 @@ jobs:
         with:
           name: evidence-nightly-${{ github.run_id }}-${{ steps.classify.outputs.classification }}
           path: tests/output/
+
+      # ---------- Phase 10: Enforce classification (证据上传之后再失败，避免假绿) ----------
+      - name: Enforce classification
+        if: always()
+        run: |
+          CLASSIFICATION="${{ steps.classify.outputs.classification }}"
+          REASON="${{ steps.classify.outputs.reason }}"
+          echo "Classification=$CLASSIFICATION reason=$REASON"
+          case "$CLASSIFICATION" in
+            PASSED)
+              echo "Nightly PASSED"
+              ;;
+            FAILED|BLOCKED)
+              echo "::error::Nightly $CLASSIFICATION: $REASON"
+              exit 1
+              ;;
+            *)
+              echo "::error::Nightly UNKNOWN classification='$CLASSIFICATION' (classify step missing or incomplete)"
+              exit 1
+              ;;
+          esac

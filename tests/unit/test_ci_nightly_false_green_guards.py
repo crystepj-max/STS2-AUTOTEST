@@ -54,3 +54,19 @@ def test_dev_extra_includes_pytest_timeout() -> None:
     """Nightly/game workflow 传 --timeout=，dev extra 必须安装插件。"""
     text = PYPROJECT.read_text(encoding="utf-8")
     assert "pytest-timeout" in text
+
+
+def test_nightly_enforces_failed_classification_after_evidence_upload() -> None:
+    """continue-on-error 后必须有最终 enforce，否则 job 仍会假绿。"""
+    text = (WORKFLOWS / "ci-nightly.yml").read_text(encoding="utf-8")
+    assert "Enforce classification" in text
+    assert 'case "$CLASSIFICATION" in' in text
+    assert "FAILED|BLOCKED)" in text
+
+    workflow = _load_workflow("ci-nightly.yml")
+    steps = workflow["jobs"]["nightly"]["steps"]
+    names = [step.get("name", "") for step in steps]
+    enforce_idx = names.index("Enforce classification")
+    upload_idx = names.index("Upload evidence pack")
+    assert enforce_idx > upload_idx, "enforce 必须在证据上传之后"
+    assert steps[enforce_idx].get("if") == "always()"
