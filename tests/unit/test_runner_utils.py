@@ -28,6 +28,26 @@ def _write_pid_then_sleep(marker: Path) -> str:
     return f"import os; open({str(marker)!r}, 'w').write(str(os.getpid())); import time; time.sleep(300)"
 
 
+def _process_fully_reaped(pid: int) -> bool:
+    """PID 不存在，或仅为僵尸（已被 SIGKILL，等待 init 回收）均视为已终止。
+
+    Linux 容器里 PID 1 若不回收孤儿，``psutil.pid_exists`` 对 zombie 仍为 True。
+    """
+    if not psutil.pid_exists(pid):
+        return True
+    try:
+        return psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return True
+
+
+def _wait_until_reaped(pid: int, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not _process_fully_reaped(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert _process_fully_reaped(pid), f"process {pid} still alive after timeout"
+
+
 def test_run_timed_returns_output_and_exit_code_for_fast_command(tmp_path: Path) -> None:
     log = tmp_path / "check.log"
     result = runner_utils.run_timed(
@@ -74,10 +94,7 @@ def test_run_timed_leaves_no_residual_process_after_timeout(tmp_path: Path) -> N
 
     assert result.timed_out is True
     child_pid = int(pid_file.read_text(encoding="utf-8"))
-    deadline = time.monotonic() + 10
-    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert not psutil.pid_exists(child_pid), f"child {child_pid} still alive after timeout"
+    _wait_until_reaped(child_pid)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="进程组清理行为在 POSIX 上验证")
@@ -102,10 +119,7 @@ def test_run_timed_terminates_grandchild_process_group_on_posix(tmp_path: Path) 
     assert result.timed_out is True
     for pid_file in (parent_pid, child_pid):
         pid = int(pid_file.read_text(encoding="utf-8"))
-        deadline = time.monotonic() + 10
-        while psutil.pid_exists(pid) and time.monotonic() < deadline:
-            time.sleep(0.1)
-        assert not psutil.pid_exists(pid), f"process {pid} still alive after timeout"
+        _wait_until_reaped(pid)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="进程组清理行为在 POSIX 上验证")
@@ -144,10 +158,7 @@ def test_run_timed_kills_sigterm_ignoring_grandchild_after_parent_exits(
         while (not pid_file.exists()) and time.monotonic() < deadline:
             time.sleep(0.05)
         pid = int(pid_file.read_text(encoding="utf-8"))
-        deadline = time.monotonic() + 10
-        while psutil.pid_exists(pid) and time.monotonic() < deadline:
-            time.sleep(0.1)
-        assert not psutil.pid_exists(pid), f"process {pid} still alive after timeout"
+        _wait_until_reaped(pid)
 
 
 def test_run_timed_raises_file_not_found_for_missing_command(tmp_path: Path) -> None:
@@ -259,10 +270,7 @@ def test_run_timed_cleans_up_and_rethrows_on_keyboard_interrupt(
 
     assert len(kill_calls) == 1
     child_pid = int(pid_file.read_text(encoding="utf-8"))
-    deadline = time.monotonic() + 10
-    while psutil.pid_exists(child_pid) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert not psutil.pid_exists(child_pid), f"child {child_pid} still alive after interrupt"
+    _wait_until_reaped(child_pid)
 
 
 def test_env_timeout_uses_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
