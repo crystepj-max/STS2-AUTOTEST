@@ -95,15 +95,31 @@ else
     fail "缺少早期证据或上传失败门禁"
 fi
 
+test_begin "env 探针缺少 sts2 必须失败（不得假通过）"
+EMPTY_BIN="$(mktemp -d "${TMPDIR:-/tmp}/nightly-env-bin.XXXXXX")"
+# 提供假 python3/pip，但故意不提供 sts2；保留系统基本工具
+ln -sf "$(command -v python3)" "$EMPTY_BIN/python3"
+ln -sf "$(command -v true)" "$EMPTY_BIN/pip"
+RC=0
+OUT="$(PATH="$EMPTY_BIN:/usr/bin:/bin:/usr/sbin:/sbin" bash "$ENV_CHECK" 2>&1)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "1" "无 sts2 时 env 探针退出码应为 1"
+assert_contains "$OUT" "BLOCKED" "无 sts2 时应标记 BLOCKED/失败"
+rm -rf "$EMPTY_BIN"
+
 test_begin "env 探针不得在失败前写 runner_ready=true"
-if grep -n 'runner_ready=true' "$ENV_CHECK" | grep -v 'FAIL'; then
-    # 允许在 FAIL!=1 的分支写入；禁止在 FAIL 判定之前无条件写入
-    :
-fi
 if grep -B8 'runner_ready=true' "$ENV_CHECK" | grep -q 'FAIL'; then
     pass "runner_ready=true 受 FAIL 判定保护"
 else
     fail "runner_ready=true 可能在失败前被写入"
+fi
+
+test_begin "closeout 汇总脚本对 gh 调用带 timeout"
+if grep -nE 'timeout=|TimeoutExpired' "$REPO_ROOT/.github/scripts/summarize_nightly_closeout.py" \
+    | grep -q timeout; then
+    pass "summarize_nightly_closeout.py 含 timeout 防护"
+else
+    fail "summarize_nightly_closeout.py 缺少 gh timeout"
 fi
 
 test_begin "工作流契约检查器"

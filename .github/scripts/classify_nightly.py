@@ -159,6 +159,12 @@ def classify(
                 reason = f"{phase} failed"
                 failed_phase = phase
                 break
+            if outcome == "skipped":
+                # 环境宣称就绪但功能步骤未执行 → 视为环境/控制不可用，不得 PASSED
+                classification = "BLOCKED"
+                reason = f"{phase} skipped (game control or suite unavailable)"
+                failed_phase = phase
+                break
             if outcome != "success":
                 classification = "CANCELLED"
                 reason = f"{phase} did not complete ({outcome})"
@@ -175,6 +181,21 @@ def classify(
     if evidence_upload_ok is False:
         diagnosable = False
 
+    # 关闭证据仅接受：真实游戏验证 PASSED + 可下载证据 + 有截图（early-diagnosis 不算）
+    screenshots = screenshot_index(
+        screenshot_count,
+        checkout_ok=checkout_ok,
+        env_ok=env_ok,
+        game_outcome=resolved["game_tests"],
+    )
+    closeout_eligible = bool(
+        diagnosable
+        and classification == "PASSED"
+        and resolved.get("game_tests") == "success"
+        and bool(screenshots.get("available"))
+        and int(screenshots.get("count") or 0) > 0
+    )
+
     payload: dict[str, Any] = {
         "run_id": run_id,
         "classification": classification,
@@ -184,14 +205,9 @@ def classify(
         "timestamp": ts,
         "stages": {phase: resolved[phase] for phase in (*ENV_PHASES, *FUNCTIONAL_PHASES)},
         "attempts": attempts,
-        "screenshots": screenshot_index(
-            screenshot_count,
-            checkout_ok=checkout_ok,
-            env_ok=env_ok,
-            game_outcome=resolved["game_tests"],
-        ),
+        "screenshots": screenshots,
         "diagnosable": diagnosable,
-        "closeout_eligible": bool(diagnosable and classification != "CANCELLED"),
+        "closeout_eligible": closeout_eligible,
         "env_retry_recorded": any(item["attempt"] == 2 for item in attempts if item["phase"] in ENV_PHASES),
         "functional_retry_forbidden": all(
             item["attempt"] == 1 for item in attempts if item["phase"] in FUNCTIONAL_PHASES
@@ -304,6 +320,41 @@ def run_self_check() -> int:
     upload_fail = classify(passed_outcomes, run_id="self-check-upload", evidence_upload_ok=False)
     _assert(upload_fail["diagnosable"] is False, "证据上传失败不能算可诊断结果", failures)
     _assert(upload_fail["closeout_eligible"] is False, "不可诊断结果不得计入关闭证据", failures)
+
+    skipped_game = {
+        phase: "success" for phase in (*ENV_PHASES, *FUNCTIONAL_PHASES)
+    }
+    skipped_game["game_tests"] = "skipped"
+    skipped_result = classify(skipped_game, run_id="self-check-skipped-game", screenshot_count=0)
+    _assert(
+        skipped_result["classification"] == "BLOCKED",
+        "游戏步骤 skipped 不得 PASSED，应 BLOCKED",
+        failures,
+    )
+    _assert(
+        skipped_result["closeout_eligible"] is False,
+        "无真实游戏证据不得 closeout_eligible",
+        failures,
+    )
+
+    early_blocked = classify(checkout_fail, run_id="self-check-early-closeout", screenshot_count=0)
+    _assert(
+        early_blocked["closeout_eligible"] is False,
+        "early-diagnosis / checkout BLOCKED 不得计入关闭 streak",
+        failures,
+    )
+
+    passed_no_shots = classify(passed_outcomes, run_id="self-check-no-shots", screenshot_count=0)
+    _assert(
+        passed_no_shots["closeout_eligible"] is False,
+        "PASSED 但无截图不得计入关闭证据",
+        failures,
+    )
+    _assert(
+        passed["closeout_eligible"] is True,
+        "PASSED + 有截图 + 可诊断 应 closeout_eligible",
+        failures,
+    )
 
     if failures:
         print("classify_nightly self-check FAILED:", file=sys.stderr)

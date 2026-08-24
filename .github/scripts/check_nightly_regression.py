@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -191,6 +192,29 @@ def validate_workflow(workflow_path: Path, classifier_path: Path) -> list[str]:
     if not classifier_path.is_file():
         violations.append(f"分类器不存在：{classifier_path}")
 
+    env_check_script = Path("scripts/nightly-env-check.sh")
+    if env_check_script.is_file():
+        env_text = env_check_script.read_text(encoding="utf-8")
+        if "sts2 CLI not in PATH" not in env_text and "sts2 not in PATH" not in env_text:
+            # 允许文案微调，但必须在缺失 sts2 时置 FAIL
+            if "command -v sts2" not in env_text:
+                violations.append("nightly-env-check.sh 必须检测 sts2 CLI")
+        # 缺失 sts2 时必须 FAIL=1，禁止仅警告后继续 runner_ready=true
+        if "FAIL=1" not in env_text:
+            violations.append("nightly-env-check.sh 必须在失败时设置 FAIL=1")
+        # 粗检：sts2 缺失分支附近应有 FAIL=1（避免只 echo 警告）
+        if "command -v sts2" in env_text:
+            sts2_idx = env_text.find("command -v sts2")
+            window = env_text[sts2_idx : sts2_idx + 400]
+            if "FAIL=1" not in window:
+                violations.append(
+                    "nightly-env-check.sh 在 sts2 缺失时必须 FAIL=1（不得仅警告后假通过）"
+                )
+        if "PROBE_TIMEOUT" not in env_text and "timeout=" not in env_text:
+            violations.append("nightly-env-check.sh 游戏控制探测必须带 timeout")
+    else:
+        violations.append("缺少 scripts/nightly-env-check.sh")
+
     return violations
 
 
@@ -213,10 +237,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if not args.skip_self_check:
-        result = subprocess.run(
-            [sys.executable, str(args.classifier), "--self-check"],
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, str(args.classifier), "--self-check"],
+                check=False,
+                timeout=float(
+                    os.environ.get("NIGHTLY_CONTRACT_SELFCHECK_TIMEOUT_SECONDS", "60")
+                ),
+            )
+        except subprocess.TimeoutExpired:
+            print("nightly classifier self-check TIMED OUT", file=sys.stderr)
+            return 124
         if result.returncode != 0:
             print("nightly classifier self-check FAILED", file=sys.stderr)
             return result.returncode
