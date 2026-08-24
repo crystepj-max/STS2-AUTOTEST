@@ -89,6 +89,7 @@ curl -s --max-time 5 -x http://127.0.0.1:7890 https://api.ipify.org
 | GitHub 侧 `status=offline` | runner 与 GitHub 断链 | 先看探针数据区分网络/代理；确认代理正常后重启服务 |
 | GitHub 侧 `busy=true` 持续数小时 | 任务执行中或卡死 | 查看 `_diag` 日志；按 run 取消/超时策略处理 |
 | job 排队 >15min 但 runner online | runner 领取异常 | 查 `_diag` 最新日志 + 探针数据归因（本机网络/代理/GitHub 上游） |
+| checkout 报 `SAFE_DELETE_BULK_CONFIRM_REQUIRED` | IDE/代理会话变量触发 safe-delete 钩子 | 确认 `CODEBUDDY_SESSION_ID` / `CLAUDE_SESSION_ID` 未注入 runner 服务环境；workflow 已置空。手动：`unset` 后重跑 `check-runner-health.sh` |
 
 > 探针：`scripts/runner-probe.sh` 输出 JSONL，记录服务状态、真实进程、
 > GitHub 侧状态与忙闲（`github_online`/`github_busy`）、直连/代理可达性
@@ -144,6 +145,10 @@ mkdir -p ~/.sts2-runner-probe
   是否被覆盖（环境变量），或安装目录是否真的存在。
 - **改了 `.env` 不生效**：`.env` 在服务启动时读取，改后需 `stop` + `start`。
 - **磁盘膨胀**：`~/actions-runner/_diag/` 单文件可达 8–25MB，建议按天滚动归档。
+- **checkout 随机失败 / SAFE_DELETE**：不要把 `CODEBUDDY_SESSION_ID`、
+  `CLAUDE_SESSION_ID` 写进 `~/actions-runner/.env` 或 launchd 环境。
+  CI workflow 已显式置空；`check-runner-health.sh --json` 的
+  `safe_delete_session_env` 非空即表示仍有风险。
 - **需要全新安装/修复**：`scripts/setup-mac-runner.sh`（幂等：
   已配置安装跳过下载与注册）。
   - 新安装必须显式提供机器身份：`RUNNER_NAME=<机器名> ./scripts/setup-mac-runner.sh`
