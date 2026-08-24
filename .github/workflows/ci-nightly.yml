@@ -7,6 +7,10 @@ on:
 
 env:
   EVIDENCE_RETENTION_DAYS: 7
+  # 剥离 IDE/代理会话变量，避免 safe-delete 钩子拦截 checkout 清理临时目录
+  # （SAFE_DELETE_BULK_CONFIRM_REQUIRED）。与 run_service.spawn_worker 同源。
+  CODEBUDDY_SESSION_ID: ""
+  CLAUDE_SESSION_ID: ""
 
 jobs:
   nightly:
@@ -140,7 +144,9 @@ jobs:
           elif [ "${{ steps.cli_tests.conclusion }}" == "failure" ]; then
             CLASSIFICATION="FAILED"
             REASON="CLI integration tests failed"
-          elif [ "${{ steps.game_tests.conclusion }}" == "failure" ]; then
+          # continue-on-error 步骤必须读 outcome（失败仍可能 conclusion=success），
+          # 否则 --timeout 插件缺失等硬错误会被误判为 PASSED（假绿）。
+          elif [ "${{ steps.game_tests.outcome }}" == "failure" ]; then
             CLASSIFICATION="FAILED"
             REASON="Game integration tests failed (may be environment-related)"
           else

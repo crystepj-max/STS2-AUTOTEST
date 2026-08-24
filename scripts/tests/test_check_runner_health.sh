@@ -202,6 +202,32 @@ else
     fail "gh 挂起时未限时（用时 ${ELAPSED}s）"
 fi
 
+# --- 用例 10：IDE 会话变量触发 SAFE_DELETE 风险 → UNHEALTHY ---
+test_begin "health: CODEBUDDY_SESSION_ID 非空 → exit 1 UNHEALTHY"
+FAKE="$(new_fake_runner running)"
+BIN="$(new_health_bin 200)"
+RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" CODEBUDDY_SESSION_ID=sess-1 bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "1" "会话变量非空时应 UNHEALTHY(1)"
+if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID" in d.get("safe_delete_session_env","")' 2>/dev/null; then
+    pass "JSON 含 safe_delete_session_env=CODEBUDDY_SESSION_ID"
+else
+    fail "JSON 未正确报告 SAFE_DELETE 风险：$OUT"
+fi
+
+# --- 用例 11：会话变量为空字符串不触发 ---
+test_begin "health: 会话变量置空 → 仍 HEALTHY"
+FAKE="$(new_fake_runner running)"
+BIN="$(new_health_bin 200)"
+RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" CODEBUDDY_SESSION_ID= CLAUDE_SESSION_ID= bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "0" "会话变量置空时应 HEALTHY(0)"
+if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is True; assert d.get("safe_delete_session_env","") == ""' 2>/dev/null; then
+    pass "置空后 safe_delete_session_env 为空"
+else
+    fail "置空后仍误报 SAFE_DELETE：$OUT"
+fi
+
 echo
 echo "check-runner-health 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1

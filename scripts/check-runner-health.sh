@@ -7,6 +7,8 @@
 #   2. 真实进程存在（Runner.Listener）
 #   3. GitHub 侧 runner 状态 online（gh api runners）
 # 外加至少一条 GitHub 网络链路可达（直连或经 ClashX 代理）。
+# 另：CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID 非空 → UNHEALTHY
+# （SAFE_DELETE 风险，会拦截 checkout 清理）。
 # 反例：服务标记 started 但进程缺失 / GitHub 侧 offline → UNHEALTHY，
 # 避免“服务假启动或连接失效仍误报可接任务”。
 # GitHub 侧 gh 缺失/查询失败计为 unknown（不计为不可用），避免 gh 缺失误伤判定。
@@ -114,6 +116,20 @@ code="$(curl -s --max-time 5 --noproxy '*' -o /dev/null -w '%{http_code}' https:
 code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -x "$PROXY_URL" https://api.github.com/zen 2>/dev/null || true)"
 [[ "$code" == "200" ]] && proxy_reachable=true
 
+# --- SAFE_DELETE 风险（IDE/代理会话变量）---
+# CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID 非空时，本机 safe-delete 钩子会拦截
+# checkout 清理 _work/_temp，触发 SAFE_DELETE_BULK_CONFIRM_REQUIRED 并整批红。
+# CI workflow 已显式置空；本检查用于手动诊断与防回归。
+safe_delete_session_env=""
+[[ -n "${CODEBUDDY_SESSION_ID:-}" ]] && safe_delete_session_env="CODEBUDDY_SESSION_ID"
+if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+    if [[ -n "$safe_delete_session_env" ]]; then
+        safe_delete_session_env="${safe_delete_session_env},CLAUDE_SESSION_ID"
+    else
+        safe_delete_session_env="CLAUDE_SESSION_ID"
+    fi
+fi
+
 # --- 判定（服务 + 真实进程 + 网络链路一致才 HEALTHY；GitHub 侧增强核验）---
 # GitHub 侧：能查到 offline → 判 UNHEALTHY（R3 反例：服务假启动/连接失效）。
 # 查不到（unknown）→ 不判死：gh 查询在 CI job 环境受 token 刷新与代理影响，
@@ -128,6 +144,9 @@ fi
 if [[ "$direct_reachable" == "false" && "$proxy_reachable" == "false" ]]; then
     reasons="${reasons:+$reasons; }network=unreachable(direct=${direct_reachable},proxy=${proxy_reachable})"
 fi
+if [[ -n "$safe_delete_session_env" ]]; then
+    reasons="${reasons:+$reasons; }safe_delete_session_env=${safe_delete_session_env}"
+fi
 if [[ -z "$reasons" ]]; then
     healthy=true
     exit_code=0
@@ -141,9 +160,9 @@ else
 fi
 
 if [[ "$MODE" == "--json" ]]; then
-    python3 - "$healthy" "$service_state" "$process_present" "$github_online" "$direct_reachable" "$proxy_reachable" "$reasons" <<'PY'
+    python3 - "$healthy" "$service_state" "$process_present" "$github_online" "$direct_reachable" "$proxy_reachable" "$reasons" "$safe_delete_session_env" <<'PY'
 import json, sys
-healthy, state, process, gh, direct, proxy, reasons = sys.argv[1:]
+healthy, state, process, gh, direct, proxy, reasons, safe_delete = sys.argv[1:]
 print(json.dumps({
     "healthy": healthy == "true",
     "service_state": state,
@@ -151,6 +170,7 @@ print(json.dumps({
     "github_online": gh,
     "direct_github_reachable": direct == "true",
     "proxy_github_reachable": proxy == "true",
+    "safe_delete_session_env": safe_delete,
     "reasons": reasons,
 }))
 PY
