@@ -16,7 +16,8 @@
 - 伤害事件应记录为 5 点伤害 2 次
 
 ## Given
-- 已安装并可连接 STS2-Cli-Mod
+- 已安装并可连接 STS2-Agent（HTTP `http://127.0.0.1:8080`），且调试动作已启用（`STS2_ADAPTER__AGENT__DEBUG_ACTIONS=true`）
+- 本用例权威运行路径为 Agent + debug：`give_card` 注入依赖适配器调试能力，STS2-Cli-Mod（`sts2` CLI）无该命令通道，不作为本用例通过路径
 - 游戏可被启动并加载到主菜单
 - 使用原游戏角色 Ironclad（战士）
 - 双重打击的原版卡牌 ID 为 TWIN_STRIKE
@@ -28,7 +29,7 @@
 3. 选择战士
 4. 开始冒险
 5. 选择开局事件的第 0 个选项
-6. 选择地图节点 (2, 1)
+6. 选择首个普通战斗节点
 7. 进入首次战斗
 8. 添加 TWIN_STRIKE 到手牌
 9. 使用 TWIN_STRIKE

@@ -7,12 +7,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sts2_autotest.adapters.agent import AgentAdapter
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol, HealthStatus
+from sts2_autotest.adapters.cli_mod import CliModAdapter
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.navigation import NavigationBlocked
-from sts2_autotest.core.orchestrator import SessionSummary, TestOrchestrator
+from sts2_autotest.core.orchestrator import (
+    SessionSummary,
+    TestOrchestrator,
+    _require_debug_capability,
+)
 from sts2_autotest.core.progress import load_progress
 from sts2_autotest.core.recovery import (
     DefaultRecoveryStrategy,
@@ -1124,3 +1130,62 @@ class TestAutoReset:
         result = _run(orch.start_session())
         assert result is False
         steam.start_game.assert_called_once()
+
+
+class TestDebugCapabilityGate:
+    """issue-56: give_card 能力门闸——无 debug 能力时在动作下发前明确阻断。
+
+    run 目录的 verify_give_card_gate.py（不入库、CI 不执行）已验证过同样语义；
+    此处在库钉住 `_require_debug_capability` 与 execute_action /
+    execute_action_sequence 双入口调用，防止未来重构误删后回归保护归零。
+    """
+
+    _GIVE_CARD = ActionDescriptor("give_card", {"card_id": "TWIN_STRIKE"})
+
+    def test_execute_action_blocks_give_card_on_cli_adapter(self) -> None:
+        """CliModAdapter 无 capabilities 属性 → give_card 下发前被拦截，零子进程启动。"""
+        cli = CliModAdapter(cli_path="fake-sts2-for-gate-check")
+        orch = TestOrchestrator(adapter=cli)
+        with pytest.raises(STS2Error) as exc_info:
+            _run(orch.execute_action(self._GIVE_CARD))
+        assert exc_info.value.category == ErrorCategory.ADAPTER_ERROR
+        assert exc_info.value.detail is not None
+        assert exc_info.value.detail.get("reason_code") == "DEBUG_ACTIONS_UNAVAILABLE"
+        assert cli.cli_launch_count == 0
+
+    def test_execute_action_blocks_give_card_when_agent_debug_disabled(self) -> None:
+        """AgentAdapter(debug_actions=False) → give_card 同样被明确拦截。"""
+        orch = TestOrchestrator(adapter=AgentAdapter(debug_actions=False))
+        with pytest.raises(STS2Error) as exc_info:
+            _run(orch.execute_action(self._GIVE_CARD))
+        assert exc_info.value.detail is not None
+        assert exc_info.value.detail.get("reason_code") == "DEBUG_ACTIONS_UNAVAILABLE"
+
+    def test_execute_action_sequence_blocks_give_card_before_polling(self) -> None:
+        """execute_action_sequence 先于可用性轮询拦截 give_card，不触碰适配器。"""
+        agent = AgentAdapter(debug_actions=False)
+        with patch.object(AgentAdapter, "wait_until_actionable", new=AsyncMock()) as mock_wait:
+            orch = TestOrchestrator(adapter=agent)
+            with pytest.raises(STS2Error) as exc_info:
+                _run(orch.execute_action_sequence([self._GIVE_CARD]))
+        assert exc_info.value.detail is not None
+        assert exc_info.value.detail.get("reason_code") == "DEBUG_ACTIONS_UNAVAILABLE"
+        assert mock_wait.await_count == 0
+
+    def test_gate_passes_give_card_with_agent_debug_enabled(self) -> None:
+        """AgentAdapter(debug_actions=True) → 门闸放行（不抛异常）。"""
+        _require_debug_capability(AgentAdapter(debug_actions=True), "give_card")
+
+    def test_execute_action_delivers_give_card_when_debug_capable(self) -> None:
+        """开调试能力的适配器上 give_card 放行并真正下发（走完整执行路径）。"""
+        mock = _make_mock_adapter(actions=["give_card", "play_card", "end_turn"])
+        mock.capabilities = MagicMock(supports_debug_actions=True)
+        orch = TestOrchestrator(adapter=mock)
+        result = _run(orch.execute_action(self._GIVE_CARD))
+        assert result.status == "success"
+        assert mock.act.call_args.args[0] == "give_card"
+
+    def test_non_debug_action_unaffected_by_gate(self) -> None:
+        """非调试动作（play_card）不在门闸集合中，无 debug 能力也不受影响。"""
+        cli = CliModAdapter(cli_path="fake-sts2-for-gate-check")
+        _require_debug_capability(cli, "play_card")

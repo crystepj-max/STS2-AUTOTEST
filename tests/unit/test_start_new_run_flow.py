@@ -58,6 +58,7 @@ def test_start_new_run_opens_character_select_from_clean_main_menu() -> None:
             },
         },
     )
+    mock.add_response(200, {"screen": "MAIN_MENU"})
     mock.add_response(200, {"ok": True})
     adapter = SpyAgentAdapter(client=mock, wait_result=True)
 
@@ -66,7 +67,7 @@ def test_start_new_run_opens_character_select_from_clean_main_menu() -> None:
     assert result.status == "success"
     # 启动后的可操作性等待由编排层统一负责，适配器动作本身只负责提交动作。
     assert adapter.wait_calls == []
-    assert mock._requests[1]["kwargs"]["json"] == {"action": "open_character_select"}
+    assert mock._requests[2]["kwargs"]["json"] == {"action": "open_character_select"}
 
 
 def test_select_character_waits_before_resolving_option() -> None:

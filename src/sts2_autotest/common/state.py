@@ -69,13 +69,16 @@ _ALLOWED_TRANSITIONS: dict[GameScreen, frozenset[GameScreen]] = {
         GameScreen.BUNDLE_SELECTION, GameScreen.TRI_SELECT,
     }),
     GameScreen.CHEST: frozenset({GameScreen.MAP}),
+    # Neow 非 MAP 祝福分支（卷轴箱/铅制镇纸/失物盒）是 EVENT 的延展屏：
+    # 复合动作收敛时游戏可能直接进入第一场战斗（issue #57），故与 EVENT 一致
+    # 放行 COMBAT。
     GameScreen.BUNDLE_SELECTION: frozenset({
-        GameScreen.EVENT, GameScreen.MAP,
+        GameScreen.EVENT, GameScreen.MAP, GameScreen.COMBAT,
     }),
     GameScreen.TRI_SELECT: frozenset({
-        GameScreen.EVENT, GameScreen.MAP,
+        GameScreen.EVENT, GameScreen.MAP, GameScreen.COMBAT,
     }),
-    GameScreen.CARD_REWARD: frozenset({GameScreen.MAP}),
+    GameScreen.CARD_REWARD: frozenset({GameScreen.MAP, GameScreen.COMBAT}),
     GameScreen.RELIC_REWARD: frozenset({GameScreen.MAP}),
     GameScreen.BOSS_REWARD: frozenset({GameScreen.MAP, GameScreen.VICTORY}),
     GameScreen.GAME_OVER: frozenset(),

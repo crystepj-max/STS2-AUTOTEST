@@ -2,18 +2,20 @@
 # verify.sh — STS2-AUTOTEST 本地全量验证（issue-24 运行保障任务收口）
 #
 # 硬门槛（必须全绿）：
-#   1. scripts/ 下 shell 脚本测试（runner-ctl / setup-mac-runner / runner-probe / check-runner-health）
-#   2. 单元测试 tests/unit/
-#   3. lint-imports（导入层级隔离）
+#   1. workflow artifact 步骤顺序（issue #61；与 CI check_workflow_artifact_order.py 同语义）
+#   2. scripts/ 下 shell 脚本测试（runner-ctl / setup-mac-runner / runner-probe / check-runner-health）
+#   3. 单元测试 tests/unit/
+#   4. lint-imports（导入层级隔离）
 #
 # 增量门禁（提供 BASELINE_DIR 时执行；缺省跳过，由 CI 兜底）：
-#   4. ruff 无新增债务（与 CI check_ruff_baseline.py 同语义）
-#   5. mypy 无新增债务（与 CI check_mypy_baseline.py 同语义）
+#   5. ruff 无新增债务（与 CI check_ruff_baseline.py 同语义）
+#   6. mypy 无新增债务（与 CI check_mypy_baseline.py 同语义）
 #   —— 仓库存在既有 Ruff/mypy 债务（归属 Issue #25），全量零错误不是当前基线
 #
 # 用法：./scripts/verify.sh [BASELINE_DIR=<main 分支 checkout 路径>]
 # 环境变量：PYTHON 覆盖解释器（默认 .venv/bin/python）、VERIFY_STEP_TIMEOUT
-#          每步超时秒数（默认：shell 测试 600 / 单元测试 1800 / lint-imports 300）
+#          每步超时秒数（默认：shell 测试 600 / 单元测试 1800 / lint-imports 300 /
+#          workflow 顺序校验 60）
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -51,6 +53,8 @@ step() {
 
 cd "$REPO_ROOT"
 
+step "workflow artifact 步骤顺序" "${VERIFY_STEP_TIMEOUT:-60}" \
+    "$PYTHON" .github/scripts/check_workflow_artifact_order.py
 step "shell 脚本测试" "${VERIFY_STEP_TIMEOUT:-600}" bash scripts/tests/run-all.sh
 step "单元测试" "${VERIFY_STEP_TIMEOUT:-1800}" "$PYTHON" -m pytest tests/unit/ -q
 step "lint-imports" "${VERIFY_STEP_TIMEOUT:-300}" "$REPO_ROOT/.venv/bin/lint-imports"

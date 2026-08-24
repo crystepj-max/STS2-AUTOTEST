@@ -72,27 +72,40 @@ def _capture_lines(
                 echo_stream.flush()
 
 
-def _terminate_tree(proc: subprocess.Popen[str]) -> None:
+def _terminate_tree(proc: subprocess.Popen[str], pgid: int | None = None) -> None:
     if sys.platform == "win32":
         try:
             os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
         except (OSError, NotImplementedError):
             proc.terminate()
-    else:
+        return
+    try:
+        target = pgid if pgid is not None else os.getpgid(proc.pid)
+        os.killpg(target, signal.SIGTERM)
+    except OSError:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except OSError:
             proc.terminate()
-
-
-def _kill_tree(proc: subprocess.Popen[str]) -> None:
-    if sys.platform == "win32":
-        proc.kill()
-    else:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except OSError:
+            pass
+
+
+def _kill_tree(proc: subprocess.Popen[str], pgid: int | None = None) -> None:
+    if sys.platform == "win32":
+        try:
             proc.kill()
+        except OSError:
+            pass
+        return
+    try:
+        # 必须用启动时缓存的 pgid：父进程先退出后 getpgid(proc.pid) 会 ESRCH，
+        # 导致忽略 SIGTERM 的孙子逃过 SIGKILL。
+        target = pgid if pgid is not None else os.getpgid(proc.pid)
+        os.killpg(target, signal.SIGKILL)
+    except OSError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
 
 def run_timed(
@@ -108,9 +121,10 @@ def run_timed(
     """在新进程组中运行 ``cmd``，超时后终止整个进程组并保留已有输出。
 
     - 正常结束：``returncode`` 为子进程退出码，``timed_out=False``。
-    - 超时：先 SIGTERM 整个进程组，宽限期后 SIGKILL；``timed_out=True``、
-      ``returncode=124``；向 stderr 输出 ``TIMEOUT: ...``；若 ``GITHUB_OUTPUT``
-      环境变量存在则追加 ``timeout=true``（供 GitHub Actions 步骤读取）。
+    - 超时：先 SIGTERM 整个进程组，宽限期后无条件 SIGKILL 整组（即使父进程
+      已退出）；``timed_out=True``、``returncode=124``；向 stderr 输出
+      ``TIMEOUT: ...``；若 ``GITHUB_OUTPUT`` 环境变量存在则追加 ``timeout=true``
+      （供 GitHub Actions 步骤读取）。
     - 命令不存在（``FileNotFoundError``）直接向上抛出，由调用方按基础设施
       错误处理。
     - 输出实时追加到 ``log_path``；``echo=True`` 时同步回显到父进程控制台
@@ -134,6 +148,12 @@ def run_timed(
         creationflags=creationflags,
     )
     assert proc.stdout is not None and proc.stderr is not None
+    pgid: int | None = None
+    if sys.platform != "win32":
+        try:
+            pgid = os.getpgid(proc.pid)
+        except OSError:
+            pgid = None
 
     with log.open("a", encoding="utf-8", errors="replace") as log_file:
         log_file.write(f"===== {name} start =====\n")
@@ -160,20 +180,24 @@ def run_timed(
             time.sleep(POLL_INTERVAL)
         timed_out = proc.poll() is None
         if timed_out:
-            _terminate_tree(proc)
+            # SIGTERM 整组 → 宽限 → 无条件 SIGKILL 整组。
+            # 父进程（如 dotnet）可能先于忽略 SIGTERM 的 Godot/MSBuild 后代退出；
+            # 若仅在 wait 超时时才 kill，或父退后丢失 pgid，会留下残留进程。
+            _terminate_tree(proc, pgid)
             try:
                 proc.wait(timeout=GRACE_PERIOD)
             except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                try:
-                    proc.wait(timeout=GRACE_PERIOD)
-                except subprocess.TimeoutExpired:
-                    pass  # 进程组内存在忽略信号的顽固进程时，至少已尽力
+                pass
+            _kill_tree(proc, pgid)
+            try:
+                proc.wait(timeout=GRACE_PERIOD)
+            except subprocess.TimeoutExpired:
+                pass  # 进程组内存在忽略信号的顽固进程时，至少已尽力
     except KeyboardInterrupt:
         # 交互中断也要先清理子进程，避免残留后再向上传播；
         # SIGKILL 后必须 wait 回收，否则子进程成为僵尸停留在进程表中
         if proc.poll() is None:
-            _kill_tree(proc)
+            _kill_tree(proc, pgid)
             try:
                 proc.wait(timeout=GRACE_PERIOD)
             except subprocess.TimeoutExpired:
