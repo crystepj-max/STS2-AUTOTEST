@@ -7,6 +7,8 @@
 #   2. 真实进程存在（Runner.Listener）
 #   3. GitHub 侧 runner 状态 online（gh api runners）
 # 外加至少一条 GitHub 网络链路可达（直连或经 ClashX 代理）。
+# 另：CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID 非空 → UNHEALTHY
+# （SAFE_DELETE 风险，会拦截 checkout 清理）。
 # 反例：服务标记 started 但进程缺失 / GitHub 侧 offline → UNHEALTHY，
 # 避免“服务假启动或连接失效仍误报可接任务”。
 # GitHub 侧 gh 缺失/查询失败计为 unknown（不计为不可用），避免 gh 缺失误伤判定。
@@ -114,6 +116,62 @@ code="$(curl -s --max-time 5 --noproxy '*' -o /dev/null -w '%{http_code}' https:
 code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -x "$PROXY_URL" https://api.github.com/zen 2>/dev/null || true)"
 [[ "$code" == "200" ]] && proxy_reachable=true
 
+# --- SAFE_DELETE 风险（IDE/代理会话变量）---
+# CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID 非空时，本机 safe-delete 钩子会拦截
+# checkout 清理 _work/_temp，触发 SAFE_DELETE_BULK_CONFIRM_REQUIRED 并整批红。
+# CI workflow 已显式置空；本检查只读 Runner 服务侧（不读调用方 shell，避免 IDE 终端误报）：
+#   1) launchd plist 的 EnvironmentVariables（svc.sh 服务真实继承源）
+#   2) Runner.Listener 进程环境（plist 未同步时的兜底）
+# ps / PlistBuddy 均经 run_with_timeout，避免进程表或 I/O 卡顿拖死 precheck。
+safe_delete_session_env=""
+safe_delete_add() {
+    local key="$1"
+    local source="$2"
+    local bare=",${safe_delete_session_env},"
+    local tagged="${key}(${source})"
+    if [[ "$bare" == *",${key},"* || "$bare" == *",${tagged},"* ]]; then
+        return 0
+    fi
+    if [[ -n "$safe_delete_session_env" ]]; then
+        safe_delete_session_env="${safe_delete_session_env},${tagged}"
+    else
+        safe_delete_session_env="$tagged"
+    fi
+    return 0
+}
+_sd_runner_name=""
+if [[ -f "$RUNNER_DIR/.runner" ]]; then
+    _sd_runner_name="$(grep -o '"agentName": *"[^"]*"' "$RUNNER_DIR/.runner" | sed 's/.*: *"//;s/"//' || true)"
+fi
+if [[ -n "$_sd_runner_name" ]]; then
+    _sd_repo_slug="$(echo "$REPO" | tr '/' '-')"
+    _sd_plist="${HOME}/Library/LaunchAgents/actions.runner.${_sd_repo_slug}.${_sd_runner_name}.plist"
+    if [[ -f "$_sd_plist" ]] && [[ -x /usr/libexec/PlistBuddy ]]; then
+        for _sd_key in CODEBUDDY_SESSION_ID CLAUDE_SESSION_ID; do
+            _sd_val="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:${_sd_key}" "$_sd_plist" 2>/dev/null || true)"
+            if [[ -n "$_sd_val" ]]; then
+                safe_delete_add "$_sd_key" "plist"
+            fi
+        done
+    fi
+fi
+if [[ "$process_present" == "true" ]]; then
+    # 限时取 Listener PID，再限时读其完整环境（ps eww 在进程表异常时可能挂起）
+    _sd_ps_out="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" ps -eo pid,args || true)"
+    _sd_listener_pid="$(printf '%s\n' "$_sd_ps_out" | grep -F "$RUNNER_DIR/bin/Runner.Listener" | grep -v grep | awk '{print $1}' | head -1 || true)"
+    if [[ -n "$_sd_listener_pid" ]]; then
+        _sd_listener_raw="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" ps eww -p "$_sd_listener_pid" || true)"
+        _sd_listener_line="$(printf '%s\n' "$_sd_listener_raw" | grep -F "$RUNNER_DIR/bin/Runner.Listener" | head -1 || true)"
+        if [[ -n "$_sd_listener_line" ]]; then
+            for _sd_key in CODEBUDDY_SESSION_ID CLAUDE_SESSION_ID; do
+                if printf '%s\n' "$_sd_listener_line" | grep -qE "(^|[[:space:]])${_sd_key}=[^[:space:]]"; then
+                    safe_delete_add "$_sd_key" "listener"
+                fi
+            done
+        fi
+    fi
+fi
+
 # --- 判定（服务 + 真实进程 + 网络链路一致才 HEALTHY；GitHub 侧增强核验）---
 # GitHub 侧：能查到 offline → 判 UNHEALTHY（R3 反例：服务假启动/连接失效）。
 # 查不到（unknown）→ 不判死：gh 查询在 CI job 环境受 token 刷新与代理影响，
@@ -128,6 +186,9 @@ fi
 if [[ "$direct_reachable" == "false" && "$proxy_reachable" == "false" ]]; then
     reasons="${reasons:+$reasons; }network=unreachable(direct=${direct_reachable},proxy=${proxy_reachable})"
 fi
+if [[ -n "$safe_delete_session_env" ]]; then
+    reasons="${reasons:+$reasons; }safe_delete_session_env=${safe_delete_session_env}"
+fi
 if [[ -z "$reasons" ]]; then
     healthy=true
     exit_code=0
@@ -141,9 +202,9 @@ else
 fi
 
 if [[ "$MODE" == "--json" ]]; then
-    python3 - "$healthy" "$service_state" "$process_present" "$github_online" "$direct_reachable" "$proxy_reachable" "$reasons" <<'PY'
+    python3 - "$healthy" "$service_state" "$process_present" "$github_online" "$direct_reachable" "$proxy_reachable" "$reasons" "$safe_delete_session_env" <<'PY'
 import json, sys
-healthy, state, process, gh, direct, proxy, reasons = sys.argv[1:]
+healthy, state, process, gh, direct, proxy, reasons, safe_delete = sys.argv[1:]
 print(json.dumps({
     "healthy": healthy == "true",
     "service_state": state,
@@ -151,6 +212,7 @@ print(json.dumps({
     "github_online": gh,
     "direct_github_reachable": direct == "true",
     "proxy_github_reachable": proxy == "true",
+    "safe_delete_session_env": safe_delete,
     "reasons": reasons,
 }))
 PY
