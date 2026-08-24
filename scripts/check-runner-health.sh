@@ -122,29 +122,33 @@ code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -x "$PROXY_URL" http
 # CI workflow 已显式置空；本检查只读 Runner 服务侧（不读调用方 shell，避免 IDE 终端误报）：
 #   1) launchd plist 的 EnvironmentVariables（svc.sh 服务真实继承源）
 #   2) Runner.Listener 进程环境（plist 未同步时的兜底）
+# ps / PlistBuddy 均经 run_with_timeout，避免进程表或 I/O 卡顿拖死 precheck。
 safe_delete_session_env=""
 safe_delete_add() {
     local key="$1"
     local source="$2"
     local bare=",${safe_delete_session_env},"
     local tagged="${key}(${source})"
-    [[ "$bare" == *",${key},"* || "$bare" == *",${tagged},"* ]] && return 0
+    if [[ "$bare" == *",${key},"* || "$bare" == *",${tagged},"* ]]; then
+        return 0
+    fi
     if [[ -n "$safe_delete_session_env" ]]; then
         safe_delete_session_env="${safe_delete_session_env},${tagged}"
     else
         safe_delete_session_env="$tagged"
     fi
+    return 0
 }
-runner_name=""
+_sd_runner_name=""
 if [[ -f "$RUNNER_DIR/.runner" ]]; then
-    runner_name="$(grep -o '"agentName": *"[^"]*"' "$RUNNER_DIR/.runner" | sed 's/.*: *"//;s/"//' || true)"
+    _sd_runner_name="$(grep -o '"agentName": *"[^"]*"' "$RUNNER_DIR/.runner" | sed 's/.*: *"//;s/"//' || true)"
 fi
-if [[ -n "$runner_name" ]]; then
-    repo_slug="$(echo "$REPO" | tr '/' '-')"
-    svc_plist="${HOME}/Library/LaunchAgents/actions.runner.${repo_slug}.${runner_name}.plist"
-    if [[ -f "$svc_plist" ]] && [[ -x /usr/libexec/PlistBuddy ]]; then
+if [[ -n "$_sd_runner_name" ]]; then
+    _sd_repo_slug="$(echo "$REPO" | tr '/' '-')"
+    _sd_plist="${HOME}/Library/LaunchAgents/actions.runner.${_sd_repo_slug}.${_sd_runner_name}.plist"
+    if [[ -f "$_sd_plist" ]] && [[ -x /usr/libexec/PlistBuddy ]]; then
         for _sd_key in CODEBUDDY_SESSION_ID CLAUDE_SESSION_ID; do
-            _sd_val="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:${_sd_key}" "$svc_plist" 2>/dev/null || true)"
+            _sd_val="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:${_sd_key}" "$_sd_plist" 2>/dev/null || true)"
             if [[ -n "$_sd_val" ]]; then
                 safe_delete_add "$_sd_key" "plist"
             fi
@@ -152,19 +156,21 @@ if [[ -n "$runner_name" ]]; then
     fi
 fi
 if [[ "$process_present" == "true" ]]; then
-    listener_pid="$(ps -eo pid,args 2>/dev/null | grep -F "$RUNNER_DIR/bin/Runner.Listener" | grep -v grep | awk '{print $1}' | head -1 || true)"
-    if [[ -n "$listener_pid" ]]; then
-        listener_line="$(ps eww -p "$listener_pid" 2>/dev/null | grep -F "$RUNNER_DIR/bin/Runner.Listener" | head -1 || true)"
-        if [[ -n "$listener_line" ]]; then
+    # 限时取 Listener PID，再限时读其完整环境（ps eww 在进程表异常时可能挂起）
+    _sd_ps_out="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" ps -eo pid,args || true)"
+    _sd_listener_pid="$(printf '%s\n' "$_sd_ps_out" | grep -F "$RUNNER_DIR/bin/Runner.Listener" | grep -v grep | awk '{print $1}' | head -1 || true)"
+    if [[ -n "$_sd_listener_pid" ]]; then
+        _sd_listener_raw="$(run_with_timeout "$HEALTH_CMD_TIMEOUT" ps eww -p "$_sd_listener_pid" || true)"
+        _sd_listener_line="$(printf '%s\n' "$_sd_listener_raw" | grep -F "$RUNNER_DIR/bin/Runner.Listener" | head -1 || true)"
+        if [[ -n "$_sd_listener_line" ]]; then
             for _sd_key in CODEBUDDY_SESSION_ID CLAUDE_SESSION_ID; do
-                if echo "$listener_line" | grep -qE "(^|[[:space:]])${_sd_key}=[^[:space:]]"; then
+                if printf '%s\n' "$_sd_listener_line" | grep -qE "(^|[[:space:]])${_sd_key}=[^[:space:]]"; then
                     safe_delete_add "$_sd_key" "listener"
                 fi
             done
         fi
     fi
 fi
-unset _sd_key _sd_val listener_pid listener_line repo_slug svc_plist
 
 # --- 判定（服务 + 真实进程 + 网络链路一致才 HEALTHY；GitHub 侧增强核验）---
 # GitHub 侧：能查到 offline → 判 UNHEALTHY（R3 反例：服务假启动/连接失效）。
