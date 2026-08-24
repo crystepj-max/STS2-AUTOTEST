@@ -228,6 +228,20 @@ else
     fail "置空后仍误报 SAFE_DELETE：$OUT"
 fi
 
+# --- 用例 12：Runner .env 含会话变量 → UNHEALTHY ---
+test_begin "health: Runner .env 含 CODEBUDDY_SESSION_ID → exit 1 UNHEALTHY"
+FAKE="$(new_fake_runner running)"
+BIN="$(new_health_bin 200)"
+printf 'HTTP_PROXY=http://127.0.0.1:7890\nCODEBUDDY_SESSION_ID=from-env\n' > "$FAKE/.env"
+RC=0; OUT="$(cd /tmp && RUNNER_DIR="$FAKE" PATH="$BIN:/usr/bin:/bin" env -u CODEBUDDY_SESSION_ID -u CLAUDE_SESSION_ID bash "$HEALTH_SCRIPT" --json 2>/dev/null)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "1" ".env 含会话变量时应 UNHEALTHY(1)"
+if echo "$OUT" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); assert d.get("healthy") is False; assert "CODEBUDDY_SESSION_ID" in d.get("safe_delete_session_env","")' 2>/dev/null; then
+    pass "JSON 报告 .env 中的 SAFE_DELETE 风险"
+else
+    fail "未检测到 .env 会话变量：$OUT"
+fi
+
 echo
 echo "check-runner-health 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1

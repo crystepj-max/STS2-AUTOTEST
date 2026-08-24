@@ -25,12 +25,11 @@ def _load_workflow(name: str) -> dict:
 def test_nightly_classifies_game_tests_by_outcome_not_conclusion() -> None:
     """continue-on-error 下 conclusion 可能仍为 success；必须用 outcome。"""
     text = (WORKFLOWS / "ci-nightly.yml").read_text(encoding="utf-8")
-    # 分类分支必须读 outcome；classification.json 的 stages 可仍记 conclusion。
-    assert 'steps.game_tests.outcome }}" == "failure"' in text or (
-        'steps.game_tests.outcome' in text
-        and 'elif [ "${{ steps.game_tests.outcome }}" == "failure" ]' in text
-    )
+    # 分类分支与 classification.json stages 均须读 outcome。
+    assert 'elif [ "${{ steps.game_tests.outcome }}" == "failure" ]' in text
+    assert '"game_tests": "${{ steps.game_tests.outcome }}"' in text
     assert 'elif [ "${{ steps.game_tests.conclusion }}" == "failure" ]' not in text
+    assert '"game_tests": "${{ steps.game_tests.conclusion }}"' not in text
 
     workflow = _load_workflow("ci-nightly.yml")
     steps = workflow["jobs"]["nightly"]["steps"]

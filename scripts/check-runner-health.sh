@@ -119,15 +119,47 @@ code="$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -x "$PROXY_URL" http
 # --- SAFE_DELETE 风险（IDE/代理会话变量）---
 # CODEBUDDY_SESSION_ID / CLAUDE_SESSION_ID 非空时，本机 safe-delete 钩子会拦截
 # checkout 清理 _work/_temp，触发 SAFE_DELETE_BULK_CONFIRM_REQUIRED 并整批红。
-# CI workflow 已显式置空；本检查用于手动诊断与防回归。
+# CI workflow 已显式置空；本检查覆盖：
+#   1) 当前进程环境（job 内调用时即 runner 作业环境）
+#   2) Runner 安装目录 .env（launchd 服务启动时加载，诊断服务侧残留）
 safe_delete_session_env=""
-[[ -n "${CODEBUDDY_SESSION_ID:-}" ]] && safe_delete_session_env="CODEBUDDY_SESSION_ID"
+if [[ -n "${CODEBUDDY_SESSION_ID:-}" ]]; then
+    safe_delete_session_env="CODEBUDDY_SESSION_ID"
+fi
 if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
     if [[ -n "$safe_delete_session_env" ]]; then
         safe_delete_session_env="${safe_delete_session_env},CLAUDE_SESSION_ID"
     else
         safe_delete_session_env="CLAUDE_SESSION_ID"
     fi
+fi
+if [[ -f "$RUNNER_DIR/.env" ]]; then
+    # 解析 KEY=VALUE（忽略注释/空行）；仅关心两个会话变量
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line//[[:space:]]/}" ]] && continue
+        case "$line" in
+            CODEBUDDY_SESSION_ID=*|CLAUDE_SESSION_ID=*)
+                key="${line%%=*}"
+                val="${line#*=}"
+                val="${val%\"}"
+                val="${val#\"}"
+                if [[ -n "$val" ]]; then
+                    case ",${safe_delete_session_env}," in
+                        *",${key},"*) ;;
+                        *",${key}(.env),"*) ;;
+                        *)
+                            if [[ -n "$safe_delete_session_env" ]]; then
+                                safe_delete_session_env="${safe_delete_session_env},${key}(.env)"
+                            else
+                                safe_delete_session_env="${key}(.env)"
+                            fi
+                            ;;
+                    esac
+                fi
+                ;;
+        esac
+    done < "$RUNNER_DIR/.env"
 fi
 
 # --- 判定（服务 + 真实进程 + 网络链路一致才 HEALTHY；GitHub 侧增强核验）---

@@ -182,7 +182,7 @@ jobs:
               "import_check": "${{ steps.import_check.conclusion }}",
               "unit_tests": "${{ steps.unit_tests.conclusion }}",
               "cli_tests": "${{ steps.cli_tests.conclusion }}",
-              "game_tests": "${{ steps.game_tests.conclusion }}"
+              "game_tests": "${{ steps.game_tests.outcome }}"
             }
           }
           CLASS_EOF
