@@ -34,6 +34,13 @@ workflows:
         producers:
           - name: "Run ${{ matrix.check }}"
 
+  - file: ci-main.yml
+    job: deploy-gawain
+    rules:
+      - artifact: deploy-gawain.log
+        producers:
+          - id: deploy_gawain
+
   - file: ci-nightly.yml
     job: nightly
     rules:

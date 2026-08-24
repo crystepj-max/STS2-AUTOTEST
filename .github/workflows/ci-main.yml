@@ -84,8 +84,15 @@ jobs:
     name: Deploy Gawain Mod
     needs: [cli-integration]
     runs-on: ["self-hosted", "macos", "autotest"]
-    timeout-minutes: 15
+    timeout-minutes: 30
+    # 同一自托管机上禁止并行 Godot --export-pack（EditorSettings 间歇失败）
+    # 30min ≥ 最坏路径 2×(warmup 90s + publish 480s)≈19min + checkout/setup
+    concurrency:
+      group: deploy-gawain-${{ github.repository }}
+      cancel-in-progress: false
     steps:
+      # 先检出本仓库脚本（deploy_gawain.py），再检出 Gawain 到子目录
+      - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '9.0'
@@ -107,40 +114,19 @@ jobs:
           ref: main
           token: ${{ secrets.GH_PAT }}
       - name: Build and deploy Gawain
+        id: deploy_gawain
         run: |
-          cd gawain-src
-          # issue-13（2026-08-18）：Directory.Build.props 为机器本地文件、不入库，CI checkout
-          # 缺失 Sts2InstallDir/ModsPath/GodotPath，构建会报 "Slay the Spire 2 data not found" /
-          # "Godot path must be set up"；此处按本地 Directory.Build.props 等效显式传入，
-          # 由 csproj 自动复制 dll/pdb/json 并导出 .pck 到游戏 mods 目录。
-          # 游戏目录实际名称为 "Slay the Spire 2"（带空格），无空格变体不存在。
-          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2}"
-          MODS_DIR="$GAME_DIR/SlayTheSpire2.app/Contents/MacOS/mods"
-          GODOT_BIN="${GODOT_PATH:-}"
-          if [ -z "$GODOT_BIN" ] || [ ! -x "$GODOT_BIN" ]; then
-            for p in "/Applications/Godot_mono.app/Contents/MacOS/Godot" "/Applications/Godot.app/Contents/MacOS/Godot"; do
-              if [ -x "$p" ]; then GODOT_BIN="$p"; break; fi
-            done
-          fi
-          if [ -z "$GODOT_BIN" ] || [ ! -x "$GODOT_BIN" ]; then
-            echo "::error::Godot executable not found (set GODOT_PATH or install Godot Mono)."
-            exit 1
-          fi
-          dotnet publish Gawain.csproj -c Release \
-            -p:Sts2InstallDir="$GAME_DIR" \
-            -p:ModsPath="$MODS_DIR/" \
-            -p:GodotPath="$GODOT_BIN"
-      - name: Verify deployment
-        run: |
-          GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2}"
-          MODS_DIR="$GAME_DIR/SlayTheSpire2.app/Contents/MacOS/mods"
-          for f in Gawain.dll Gawain.json Gawain.pdb gawain.pck; do
-            if [ ! -f "$MODS_DIR/Gawain/$f" ]; then
-              echo "::error::deploy artifact missing: $MODS_DIR/Gawain/$f"
-              exit 1
-            fi
-          done
-          echo "Gawain deployed and verified: $MODS_DIR/Gawain/ (dll/json/pdb/pck)"
+          python3 .github/scripts/deploy_gawain.py \
+            --project-dir gawain-src \
+            --log-path deploy-gawain.log \
+            --max-attempts 2
+      - name: Upload deploy log
+        if: failure() && always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-gawain-log-${{ github.run_id }}
+          path: deploy-gawain.log
+          if-no-files-found: warn
 
   # ── Job Summary ──
 
