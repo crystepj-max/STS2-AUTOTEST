@@ -1401,6 +1401,73 @@ class TestOrchestrator:
             # available 集合而在轮询超时后才失败；此处给出明确的 DEBUG_ACTIONS_UNAVAILABLE。
             _require_debug_capability(self.adapter, action.action_type)
             if action.action_type != "nav_to_screen":
+                if action.action_type == "return_to_menu":
+                    available = await self.adapter.get_available_actions()
+                    if action.action_type not in available:
+                        logger.info(
+                            "return_to_menu unavailable; attempting main-menu recovery"
+                        )
+                        try:
+                            await self._auto_reset_to_main_menu()
+                        except STS2Error as exc:
+                            logger.error(
+                                "main-menu recovery raised an error: %s",
+                                exc.message,
+                            )
+                            raise STS2Error(
+                                category=exc.category,
+                                message=(
+                                    "Failed to restore MAIN_MENU before return_to_menu: "
+                                    f"{exc.message}"
+                                ),
+                                detail={
+                                    "action_index": i,
+                                    "action": action.action_type,
+                                    "target_screen": GameScreen.MAIN_MENU.value,
+                                    "recovery_error": exc.to_dict(),
+                                },
+                            ) from exc
+                        try:
+                            await self._get_state_validated()
+                            # 非严格校验可能返回缓存状态；恢复门禁必须以本次原始
+                            # 读取为准，避免旧的 MAIN_MENU 快照放行后续动作。
+                            state = await self.adapter.get_state()
+                        except STS2Error as exc:
+                            logger.error(
+                                "main-menu recovery state check failed: %s",
+                                exc.message,
+                            )
+                            raise STS2Error(
+                                category=exc.category,
+                                message=(
+                                    "Failed to restore MAIN_MENU before return_to_menu: "
+                                    f"{exc.message}"
+                                ),
+                                detail={
+                                    "action_index": i,
+                                    "action": action.action_type,
+                                    "target_screen": GameScreen.MAIN_MENU.value,
+                                    "recovery_error": exc.to_dict(),
+                                },
+                            ) from exc
+                        if state.screen != GameScreen.MAIN_MENU:
+                            logger.error(
+                                "main-menu recovery failed; current screen=%s",
+                                state.screen.value,
+                            )
+                            raise STS2Error(
+                                category=ErrorCategory.GAME_ERROR,
+                                message="Failed to restore MAIN_MENU before return_to_menu",
+                                detail={
+                                    "action_index": i,
+                                    "action": action.action_type,
+                                    "target_screen": GameScreen.MAIN_MENU.value,
+                                    "current_screen": state.screen.value,
+                                },
+                            )
+                        logger.info(
+                            "main-menu recovery succeeded; continuing return_to_menu"
+                        )
                 actionable = await self._wait_until_action_available(
                     action.action_type,
                     action.timeout,

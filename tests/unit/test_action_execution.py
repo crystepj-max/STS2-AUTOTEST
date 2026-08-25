@@ -355,6 +355,85 @@ class TestExecuteActionSequence:
         assert results[0].status == "success"
         assert mock.wait_until_actionable.call_count == 2
 
+    def test_return_to_menu_from_map_resets_before_waiting(self) -> None:
+        """Issue #70：地图状态下先恢复主菜单，再等待 return_to_menu。"""
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        current_screen = [GameScreen.MAP]
+        mock.get_state.side_effect = lambda: GameState(screen=current_screen[0])
+        mock.get_available_actions.side_effect = lambda: (
+            ["choose_map_node"]
+            if current_screen[0] == GameScreen.MAP
+            else ["return_to_menu"]
+        )
+        mock.act.return_value = ActionResult(status="success", state_changed=True)
+        mock.wait_until_actionable.return_value = True
+        mock.capture_bug_snapshot.return_value = {}
+
+        orch = TestOrchestrator(adapter=mock)
+        async def recover_to_main_menu() -> None:
+            current_screen[0] = GameScreen.MAIN_MENU
+
+        with patch.object(
+            orch,
+            "_auto_reset_to_main_menu",
+            new=AsyncMock(side_effect=recover_to_main_menu),
+        ) as reset_mock:
+            results = _run(
+                orch.execute_action_sequence(
+                    [ActionDescriptor(action_type="return_to_menu", timeout=0.01)]
+                )
+            )
+
+        assert results[0].status == "success"
+        reset_mock.assert_awaited_once()
+        mock.act.assert_called_once_with("return_to_menu", {})
+
+    def test_return_to_menu_from_main_menu_does_not_reset(self) -> None:
+        """Issue #70：主菜单已有 return_to_menu 时不触发恢复。"""
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.side_effect = [
+            GameState(screen=GameScreen.MAIN_MENU),
+            GameState(screen=GameScreen.MAIN_MENU),
+        ]
+        mock.get_available_actions.return_value = ["return_to_menu"]
+        mock.act.return_value = ActionResult(status="success", state_changed=True)
+        mock.wait_until_actionable.return_value = True
+        mock.capture_bug_snapshot.return_value = {}
+
+        orch = TestOrchestrator(adapter=mock)
+        with patch.object(orch, "_auto_reset_to_main_menu", new=AsyncMock()) as reset_mock:
+            results = _run(
+                orch.execute_action_sequence(
+                    [ActionDescriptor(action_type="return_to_menu", timeout=0.01)]
+                )
+            )
+
+        assert results[0].status == "success"
+        reset_mock.assert_not_awaited()
+
+    def test_return_to_menu_fails_fast_when_recovery_does_not_reach_main_menu(self) -> None:
+        """Issue #70：恢复失败时直接报告主菜单恢复失败，不再等待动作超时。"""
+        mock = MagicMock(spec=GameAdapterProtocol)
+        mock.health_check.return_value = HealthStatus(healthy=True)
+        mock.get_state.return_value = GameState(screen=GameScreen.MAP)
+        mock.get_available_actions.return_value = ["choose_map_node"]
+        mock.wait_until_actionable.return_value = True
+        mock.capture_bug_snapshot.return_value = {}
+
+        orch = TestOrchestrator(adapter=mock)
+        with patch.object(orch, "_auto_reset_to_main_menu", new=AsyncMock()) as reset_mock:
+            with pytest.raises(STS2Error, match="Failed to restore MAIN_MENU before return_to_menu"):
+                _run(
+                    orch.execute_action_sequence(
+                        [ActionDescriptor(action_type="return_to_menu", timeout=0.01)]
+                    )
+                )
+
+        reset_mock.assert_awaited_once()
+        mock.wait_until_actionable.assert_not_called()
+
 
 class TestCacheInvalidation:
     """AC#3: Cache is invalidated after action."""
