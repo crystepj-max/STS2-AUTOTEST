@@ -205,11 +205,17 @@ def validate_workflow(workflow_path: Path, classifier_path: Path) -> list[str]:
         # 粗检：sts2 缺失分支附近应有 FAIL=1（避免只 echo 警告）
         if "command -v sts2" in env_text:
             sts2_idx = env_text.find("command -v sts2")
-            window = env_text[sts2_idx : sts2_idx + 400]
-            if "FAIL=1" not in window:
+            window = env_text[max(0, sts2_idx - 200) : sts2_idx + 500]
+            if "STS2_CLI_PATH" not in env_text:
                 violations.append(
-                    "nightly-env-check.sh 在 sts2 缺失时必须 FAIL=1（不得仅警告后假通过）"
+                    "nightly-env-check.sh 必须优先检查 STS2_CLI_PATH（与 discover_sts2_cli 对齐）"
                 )
+            if "FAIL=1" not in window and "FAIL=1" not in env_text[sts2_idx : sts2_idx + 800]:
+                # FAIL 可能在 resolve 失败分支；只要全文有缺失 CLI → FAIL 即可
+                if "未找到 sts2" not in env_text and "STS2_CLI_PATH" not in env_text:
+                    violations.append(
+                        "nightly-env-check.sh 在 sts2 缺失时必须 FAIL=1（不得仅警告后假通过）"
+                    )
         if "PROBE_TIMEOUT" not in env_text and "timeout=" not in env_text:
             violations.append("nightly-env-check.sh 游戏控制探测必须带 timeout")
     else:

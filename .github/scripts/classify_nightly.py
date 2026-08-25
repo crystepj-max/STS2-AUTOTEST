@@ -181,7 +181,8 @@ def classify(
     if evidence_upload_ok is False:
         diagnosable = False
 
-    # 关闭证据仅接受：真实游戏验证 PASSED + 可下载证据 + 有截图（early-diagnosis 不算）
+    # 关闭证据：真实游戏验证 PASSED + 可下载证据。
+    # 截图可为 0（须在 screenshots.reason 说明），不得因此把合格 PASSED 挡在 closeout 外。
     screenshots = screenshot_index(
         screenshot_count,
         checkout_ok=checkout_ok,
@@ -192,8 +193,6 @@ def classify(
         diagnosable
         and classification == "PASSED"
         and resolved.get("game_tests") == "success"
-        and bool(screenshots.get("available"))
-        and int(screenshots.get("count") or 0) > 0
     )
 
     payload: dict[str, Any] = {
@@ -346,8 +345,13 @@ def run_self_check() -> int:
 
     passed_no_shots = classify(passed_outcomes, run_id="self-check-no-shots", screenshot_count=0)
     _assert(
-        passed_no_shots["closeout_eligible"] is False,
-        "PASSED 但无截图不得计入关闭证据",
+        passed_no_shots["classification"] == "PASSED",
+        "无截图仍可为 PASSED（须记录 0 张/原因）",
+        failures,
+    )
+    _assert(
+        passed_no_shots["closeout_eligible"] is True,
+        "PASSED + 可诊断 + game_tests success 即使无截图也可 closeout_eligible",
         failures,
     )
     _assert(

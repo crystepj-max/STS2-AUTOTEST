@@ -2,10 +2,41 @@
 # 夜间回归 Phase 0 环境就绪探针（issue #15 / #65）。
 # 退出码：0=就绪 1=未就绪。
 # 禁止在失败前写入 runner_ready=true，避免分类脚本把环境失败误当成就绪。
-# 缺少 sts2 / 游戏控制能力时必须 FAIL（不得仅警告后继续显示“环境就绪”）。
+# 缺少游戏控制 CLI / 控制面时必须 FAIL（不得仅警告后继续显示“环境就绪”）。
+#
+# CLI 解析顺序与 adapters.discovery.discover_sts2_cli 对齐（本阶段尚未 pip install，
+# 不能 import 包，故在此复刻轻量逻辑）：
+#   1) STS2_CLI_PATH  2) PATH 中的 sts2  3) 常见安装路径
 set -euo pipefail
 
 PROBE_TIMEOUT_SECONDS="${NIGHTLY_ENV_PROBE_TIMEOUT_SECONDS:-10}"
+
+resolve_sts2_cli() {
+    local candidate
+    if [[ -n "${STS2_CLI_PATH:-}" ]]; then
+        if [[ -f "$STS2_CLI_PATH" && -x "$STS2_CLI_PATH" ]]; then
+            printf '%s\n' "$STS2_CLI_PATH"
+            return 0
+        fi
+        echo "⚠️ STS2_CLI_PATH 已设置但不可执行: $STS2_CLI_PATH" >&2
+    fi
+    if command -v sts2 >/dev/null 2>&1; then
+        command -v sts2
+        return 0
+    fi
+    for candidate in \
+        "${HOME}/.local/bin/sts2" \
+        "${HOME}/.sts2-cli-mod/sts2" \
+        "${HOME}/Library/Application Support/Steam/steamapps/common/Slay the Spire 2/sts2" \
+        "/usr/local/bin/sts2"
+    do
+        if [[ -f "$candidate" && -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
 echo "::group::Environment readiness probe"
 FAIL=0
@@ -24,13 +55,12 @@ else
     echo "✅ pip available"
 fi
 
-if ! command -v sts2 >/dev/null 2>&1; then
-    echo "❌ sts2 CLI not in PATH — 游戏控制不可用，环境必须 BLOCKED（不得假通过）"
-    FAIL=1
-else
-    echo "✅ sts2 CLI: $(sts2 --version 2>&1 || echo 'version unknown')"
+STS2_BIN=""
+if STS2_BIN="$(resolve_sts2_cli)"; then
+    echo "✅ sts2 CLI: $STS2_BIN ($("$STS2_BIN" --version 2>&1 || echo 'version unknown'))"
+    export STS2_BIN
     # 带超时探测游戏控制面：sts2 ping 优先，失败再试 Agent HTTP /health。
-    if ! PROBE_TIMEOUT_SECONDS="$PROBE_TIMEOUT_SECONDS" python3 - <<'PY'
+    if ! PROBE_TIMEOUT_SECONDS="$PROBE_TIMEOUT_SECONDS" STS2_BIN="$STS2_BIN" python3 - <<'PY'
 import os
 import subprocess
 import sys
@@ -38,6 +68,7 @@ import urllib.error
 import urllib.request
 
 timeout = float(os.environ.get("PROBE_TIMEOUT_SECONDS", "10"))
+sts2_bin = os.environ["STS2_BIN"]
 
 
 def ok(msg: str) -> None:
@@ -48,7 +79,7 @@ def ok(msg: str) -> None:
 def try_sts2_ping() -> bool:
     try:
         completed = subprocess.run(
-            ["sts2", "ping"],
+            [sts2_bin, "ping"],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -84,6 +115,9 @@ PY
     then
         FAIL=1
     fi
+else
+    echo "❌ 未找到 sts2 CLI（STS2_CLI_PATH / PATH / 常见路径均失败）— 游戏控制不可用，环境必须 BLOCKED"
+    FAIL=1
 fi
 
 FREE_GB="$(df -g . 2>/dev/null | awk 'NR==2{print $4}' || df -h . | awk 'NR==2{print $4}' | sed 's/G//')"

@@ -97,15 +97,38 @@ fi
 
 test_begin "env 探针缺少 sts2 必须失败（不得假通过）"
 EMPTY_BIN="$(mktemp -d "${TMPDIR:-/tmp}/nightly-env-bin.XXXXXX")"
-# 提供假 python3/pip，但故意不提供 sts2；保留系统基本工具
+EMPTY_HOME="$(mktemp -d "${TMPDIR:-/tmp}/nightly-env-home.XXXXXX")"
+# 提供假 python3/pip，但故意不提供 sts2；清空 STS2_CLI_PATH 与 HOME 常见路径
 ln -sf "$(command -v python3)" "$EMPTY_BIN/python3"
 ln -sf "$(command -v true)" "$EMPTY_BIN/pip"
 RC=0
-OUT="$(PATH="$EMPTY_BIN:/usr/bin:/bin:/usr/sbin:/sbin" bash "$ENV_CHECK" 2>&1)" || RC=$?
+OUT="$(env -u STS2_CLI_PATH HOME="$EMPTY_HOME" PATH="$EMPTY_BIN:/usr/bin:/bin:/usr/sbin:/sbin" bash "$ENV_CHECK" 2>&1)" || RC=$?
 RC="${RC:-0}"
 assert_eq "$RC" "1" "无 sts2 时 env 探针退出码应为 1"
 assert_contains "$OUT" "BLOCKED" "无 sts2 时应标记 BLOCKED/失败"
-rm -rf "$EMPTY_BIN"
+rm -rf "$EMPTY_BIN" "$EMPTY_HOME"
+
+test_begin "env 探针接受 STS2_CLI_PATH（不必在 PATH）"
+FAKE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/nightly-sts2-cli.XXXXXX")"
+FAKE_BIN="$FAKE_ROOT/bin"
+mkdir -p "$FAKE_BIN"
+# 假 sts2：ping 成功；--version 输出占位
+cat > "$FAKE_BIN/sts2" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "ping" ]]; then echo READY; exit 0; fi
+if [[ "${1:-}" == "--version" ]]; then echo "sts2-fake 0.0.0"; exit 0; fi
+exit 0
+EOF
+chmod +x "$FAKE_BIN/sts2"
+EMPTY_BIN="$(mktemp -d "${TMPDIR:-/tmp}/nightly-env-bin2.XXXXXX")"
+ln -sf "$(command -v python3)" "$EMPTY_BIN/python3"
+ln -sf "$(command -v true)" "$EMPTY_BIN/pip"
+RC=0
+OUT="$(STS2_CLI_PATH="$FAKE_BIN/sts2" PATH="$EMPTY_BIN:/usr/bin:/bin:/usr/sbin:/sbin" bash "$ENV_CHECK" 2>&1)" || RC=$?
+RC="${RC:-0}"
+assert_eq "$RC" "0" "STS2_CLI_PATH 可用且 ping 成功时应通过"
+assert_contains "$OUT" "passed" "应打印 readiness passed"
+rm -rf "$FAKE_ROOT" "$EMPTY_BIN"
 
 test_begin "env 探针不得在失败前写 runner_ready=true"
 if grep -B8 'runner_ready=true' "$ENV_CHECK" | grep -q 'FAIL'; then
