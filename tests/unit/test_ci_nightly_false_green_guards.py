@@ -25,11 +25,10 @@ def _load_workflow(name: str) -> dict:
 def test_nightly_classifies_game_tests_by_outcome_not_conclusion() -> None:
     """continue-on-error 下 conclusion 可能仍为 success；必须用 outcome。"""
     text = (WORKFLOWS / "ci-nightly.yml").read_text(encoding="utf-8")
-    # 分类分支与 classification.json stages 均须读 outcome。
-    assert 'elif [ "${{ steps.game_tests.outcome }}" == "failure" ]' in text
-    assert '"game_tests": "${{ steps.game_tests.outcome }}"' in text
-    assert 'elif [ "${{ steps.game_tests.conclusion }}" == "failure" ]' not in text
-    assert '"game_tests": "${{ steps.game_tests.conclusion }}"' not in text
+    assert "steps.game_tests.conclusion" not in text
+    assert "steps.game_tests.outcome" in text
+    assert "NIGHTLY_STEP_GAME_TESTS: ${{ steps.game_tests.outcome }}" in text
+    assert "classify_nightly.py" in text
 
     workflow = _load_workflow("ci-nightly.yml")
     steps = workflow["jobs"]["nightly"]["steps"]
@@ -60,8 +59,6 @@ def test_nightly_enforces_failed_classification_after_evidence_upload() -> None:
     """continue-on-error 后必须有最终 enforce，否则 job 仍会假绿。"""
     text = (WORKFLOWS / "ci-nightly.yml").read_text(encoding="utf-8")
     assert "Enforce classification" in text
-    assert 'case "$CLASSIFICATION" in' in text
-    assert "FAILED|BLOCKED)" in text
 
     workflow = _load_workflow("ci-nightly.yml")
     steps = workflow["jobs"]["nightly"]["steps"]
