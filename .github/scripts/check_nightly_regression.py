@@ -192,6 +192,7 @@ def validate_workflow(workflow_path: Path, classifier_path: Path) -> list[str]:
     if not classifier_path.is_file():
         violations.append(f"分类器不存在：{classifier_path}")
 
+    env_check_script = Path("scripts/nightly-env-check.sh")
     if env_check_script.is_file():
         env_text = env_check_script.read_text(encoding="utf-8")
         if "STS2_CLI_PATH" not in env_text:
