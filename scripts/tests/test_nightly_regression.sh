@@ -100,7 +100,8 @@ EMPTY_BIN="$(mktemp -d "${TMPDIR:-/tmp}/nightly-env-bin.XXXXXX")"
 EMPTY_HOME="$(mktemp -d "${TMPDIR:-/tmp}/nightly-env-home.XXXXXX")"
 # 提供假 python3/pip，但故意不提供 sts2；清空 STS2_CLI_PATH 与 HOME 常见路径
 ln -sf "$(command -v python3)" "$EMPTY_BIN/python3"
-ln -sf "$(command -v true)" "$EMPTY_BIN/pip"
+printf '#!/bin/sh\nexit 0\n' > "$EMPTY_BIN/pip"
+chmod +x "$EMPTY_BIN/pip"
 RC=0
 OUT="$(env -u STS2_CLI_PATH HOME="$EMPTY_HOME" PATH="$EMPTY_BIN:/usr/bin:/bin:/usr/sbin:/sbin" bash "$ENV_CHECK" 2>&1)" || RC=$?
 RC="${RC:-0}"
@@ -122,7 +123,8 @@ EOF
 chmod +x "$FAKE_BIN/sts2"
 EMPTY_BIN="$(mktemp -d "${TMPDIR:-/tmp}/nightly-env-bin2.XXXXXX")"
 ln -sf "$(command -v python3)" "$EMPTY_BIN/python3"
-ln -sf "$(command -v true)" "$EMPTY_BIN/pip"
+printf '#!/bin/sh\nexit 0\n' > "$EMPTY_BIN/pip"
+chmod +x "$EMPTY_BIN/pip"
 RC=0
 OUT="$(STS2_CLI_PATH="$FAKE_BIN/sts2" PATH="$EMPTY_BIN:/usr/bin:/bin:/usr/sbin:/sbin" bash "$ENV_CHECK" 2>&1)" || RC=$?
 RC="${RC:-0}"

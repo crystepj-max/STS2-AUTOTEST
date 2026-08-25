@@ -233,6 +233,7 @@ jobs:
             python3 "$SCRIPT" \
               --run-id "$NIGHTLY_RUN_ID" \
               --evidence-dir tests/output \
+              --junit-game junit-game.xml \
               --write "$EVID_DIR/classification.json" \
               --write tests/output/classification.json
           else
@@ -262,7 +263,7 @@ jobs:
             echo "reason=$REASON" >> "$GITHUB_OUTPUT"
             echo "failed_phase=$FAILED_PHASE" >> "$GITHUB_OUTPUT"
             echo "diagnosable=true" >> "$GITHUB_OUTPUT"
-            echo "closeout_eligible=true" >> "$GITHUB_OUTPUT"
+            echo "closeout_eligible=false" >> "$GITHUB_OUTPUT"
             echo "timestamp=$TS" >> "$GITHUB_OUTPUT"
           fi
           echo "::endgroup::"

@@ -83,6 +83,58 @@ def count_screenshots(root: Path | None) -> int:
     return total
 
 
+def junit_case_stats(junit_path: Path | None) -> dict[str, int]:
+    """统计 JUnit 中已执行 / 跳过 / 失败用例数。"""
+    stats = {"executed": 0, "skipped": 0, "failed": 0, "total": 0}
+    if junit_path is None or not junit_path.is_file():
+        return stats
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.parse(junit_path).getroot()
+    except (OSError, ET.ParseError):
+        return stats
+
+    cases = list(root.iter("testcase"))
+    stats["total"] = len(cases)
+    for case in cases:
+        if case.find("skipped") is not None:
+            stats["skipped"] += 1
+            continue
+        if case.find("failure") is not None or case.find("error") is not None:
+            stats["failed"] += 1
+        stats["executed"] += 1
+    return stats
+
+
+def game_evidence_present(
+    evidence_dir: Path | None,
+    *,
+    screenshot_count: int,
+) -> dict[str, Any]:
+    """是否存在真实游戏验证产物（截图 / 状态 JSON / 日志）。"""
+    shots = max(0, screenshot_count)
+    state_json = 0
+    logs = 0
+    if evidence_dir is not None and evidence_dir.is_dir():
+        for path in evidence_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            name = path.name.lower()
+            suffix = path.suffix.lower()
+            if suffix == ".json" and name not in {"classification.json", "early-diagnosis.json"}:
+                state_json += 1
+            elif suffix in {".log", ".txt"} or "log" in name:
+                logs += 1
+    present = shots > 0 or state_json > 0 or logs > 0
+    return {
+        "present": present,
+        "screenshots": shots,
+        "state_json": state_json,
+        "logs": logs,
+    }
+
+
 def screenshot_index(
     count: int,
     *,
@@ -111,6 +163,7 @@ def classify(
     evidence_dir: Path | None = None,
     evidence_upload_ok: bool | None = None,
     timestamp: str | None = None,
+    junit_game: Path | None = None,
 ) -> dict[str, Any]:
     """按 outcome 给出 PASSED / FAILED / BLOCKED / CANCELLED。"""
     attempts: list[dict[str, Any]] = []
@@ -160,7 +213,6 @@ def classify(
                 failed_phase = phase
                 break
             if outcome == "skipped":
-                # 环境宣称就绪但功能步骤未执行 → 视为环境/控制不可用，不得 PASSED
                 classification = "BLOCKED"
                 reason = f"{phase} skipped (game control or suite unavailable)"
                 failed_phase = phase
@@ -176,15 +228,33 @@ def classify(
     if screenshot_count is None:
         screenshot_count = count_screenshots(evidence_dir)
 
+    game_junit = junit_case_stats(junit_game)
+    game_artifacts = game_evidence_present(
+        evidence_dir,
+        screenshot_count=int(screenshot_count or 0),
+    )
+
+    # game_tests 报 success 但未真正执行 / 无证据 → BLOCKED（防 all-skip 假绿）
+    if classification == "PASSED" and resolved.get("game_tests") == "success":
+        if game_junit["executed"] <= 0:
+            classification = "BLOCKED"
+            reason = (
+                "game_tests reported success but executed=0 "
+                f"(skipped={game_junit['skipped']}, total={game_junit['total']})"
+            )
+            failed_phase = "game_tests"
+        elif not game_artifacts["present"]:
+            classification = "BLOCKED"
+            reason = "game_tests ran but no screenshot/state JSON/log evidence"
+            failed_phase = "game_tests"
+
     ts = timestamp or utc_now_iso()
     diagnosable = True
     if evidence_upload_ok is False:
         diagnosable = False
 
-    # 关闭证据：真实游戏验证 PASSED + 可下载证据。
-    # 截图可为 0（须在 screenshots.reason 说明），不得因此把合格 PASSED 挡在 closeout 外。
     screenshots = screenshot_index(
-        screenshot_count,
+        int(screenshot_count or 0),
         checkout_ok=checkout_ok,
         env_ok=env_ok,
         game_outcome=resolved["game_tests"],
@@ -193,6 +263,8 @@ def classify(
         diagnosable
         and classification == "PASSED"
         and resolved.get("game_tests") == "success"
+        and game_junit["executed"] > 0
+        and game_artifacts["present"]
     )
 
     payload: dict[str, Any] = {
@@ -205,6 +277,8 @@ def classify(
         "stages": {phase: resolved[phase] for phase in (*ENV_PHASES, *FUNCTIONAL_PHASES)},
         "attempts": attempts,
         "screenshots": screenshots,
+        "game_junit": game_junit,
+        "game_evidence": game_artifacts,
         "diagnosable": diagnosable,
         "closeout_eligible": closeout_eligible,
         "env_retry_recorded": any(item["attempt"] == 2 for item in attempts if item["phase"] in ENV_PHASES),
@@ -300,13 +374,99 @@ def run_self_check() -> int:
     passed_outcomes = {
         phase: "success" for phase in (*ENV_PHASES, *FUNCTIONAL_PHASES)
     }
-    passed = classify(passed_outcomes, run_id="self-check-passed", screenshot_count=2)
-    _assert(passed["classification"] == "PASSED", "全部成功应得到 PASSED", failures)
-    _assert(passed["screenshots"]["available"] is True, "有截图时应标记 available", failures)
+    import tempfile
 
-    ts = passed["timestamp"]
-    _assert(bool(ISO_Z_RE.match(ts)), f"时间戳必须是真实 UTC ISO：{ts}", failures)
-    _assert(all(marker not in ts for marker in PLACEHOLDER_MARKERS), "时间戳不得是未展开占位", failures)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        junit_ok = tmp_path / "junit-game.xml"
+        junit_ok.write_text(
+            """<?xml version="1.0"?>
+<testsuite tests="2" skipped="0" failures="0">
+  <testcase classname="t" name="a"/>
+  <testcase classname="t" name="b"/>
+</testsuite>
+""",
+            encoding="utf-8",
+        )
+        junit_all_skip = tmp_path / "junit-skip.xml"
+        junit_all_skip.write_text(
+            """<?xml version="1.0"?>
+<testsuite tests="2" skipped="2" failures="0">
+  <testcase classname="t" name="a"><skipped/></testcase>
+  <testcase classname="t" name="b"><skipped/></testcase>
+</testsuite>
+""",
+            encoding="utf-8",
+        )
+        evidence = tmp_path / "output"
+        evidence.mkdir()
+        (evidence / "state.json").write_text('{"screen":"MENU"}', encoding="utf-8")
+
+        passed = classify(
+            passed_outcomes,
+            run_id="self-check-passed",
+            screenshot_count=2,
+            evidence_dir=evidence,
+            junit_game=junit_ok,
+        )
+        _assert(passed["classification"] == "PASSED", "全部成功应得到 PASSED", failures)
+        _assert(passed["screenshots"]["available"] is True, "有截图时应标记 available", failures)
+        _assert(passed["closeout_eligible"] is True, "有执行+证据应 closeout_eligible", failures)
+
+        ts = passed["timestamp"]
+        _assert(bool(ISO_Z_RE.match(ts)), f"时间戳必须是真实 UTC ISO：{ts}", failures)
+        _assert(all(marker not in ts for marker in PLACEHOLDER_MARKERS), "时间戳不得是未展开占位", failures)
+
+        upload_fail = classify(
+            passed_outcomes,
+            run_id="self-check-upload",
+            evidence_upload_ok=False,
+            evidence_dir=evidence,
+            junit_game=junit_ok,
+            screenshot_count=1,
+        )
+        _assert(upload_fail["diagnosable"] is False, "证据上传失败不能算可诊断结果", failures)
+        _assert(upload_fail["closeout_eligible"] is False, "不可诊断结果不得计入关闭证据", failures)
+
+        all_skip = classify(
+            passed_outcomes,
+            run_id="self-check-all-skip",
+            screenshot_count=0,
+            junit_game=junit_all_skip,
+        )
+        _assert(
+            all_skip["classification"] == "BLOCKED",
+            "game_tests success 但 JUnit executed=0 应 BLOCKED",
+            failures,
+        )
+        _assert(all_skip["closeout_eligible"] is False, "all-skip 不得 closeout", failures)
+
+        no_evidence = classify(
+            passed_outcomes,
+            run_id="self-check-no-evidence",
+            screenshot_count=0,
+            junit_game=junit_ok,
+            evidence_dir=tmp_path / "empty",
+        )
+        _assert(
+            no_evidence["classification"] == "BLOCKED",
+            "有执行但无截图/状态/日志应 BLOCKED",
+            failures,
+        )
+
+        state_only = classify(
+            passed_outcomes,
+            run_id="self-check-state-only",
+            screenshot_count=0,
+            junit_game=junit_ok,
+            evidence_dir=evidence,
+        )
+        _assert(
+            state_only["classification"] == "PASSED",
+            "无截图但有状态 JSON + 已执行用例可为 PASSED",
+            failures,
+        )
+        _assert(state_only["closeout_eligible"] is True, "状态 JSON 证据应允许 closeout", failures)
 
     checkout_fail = dict(skipped)
     checkout_fail["checkout"] = "failure"
@@ -315,10 +475,6 @@ def run_self_check() -> int:
     _assert(early["classification"] == "BLOCKED", "checkout 失败应 BLOCKED", failures)
     _assert(early["screenshots"]["count"] == 0, "无截图时应记录 count=0", failures)
     _assert("0 张/不可用" in str(early["screenshots"]["reason"]), "无截图应写明 0 张/不可用", failures)
-
-    upload_fail = classify(passed_outcomes, run_id="self-check-upload", evidence_upload_ok=False)
-    _assert(upload_fail["diagnosable"] is False, "证据上传失败不能算可诊断结果", failures)
-    _assert(upload_fail["closeout_eligible"] is False, "不可诊断结果不得计入关闭证据", failures)
 
     skipped_game = {
         phase: "success" for phase in (*ENV_PHASES, *FUNCTIONAL_PHASES)
@@ -343,23 +499,6 @@ def run_self_check() -> int:
         failures,
     )
 
-    passed_no_shots = classify(passed_outcomes, run_id="self-check-no-shots", screenshot_count=0)
-    _assert(
-        passed_no_shots["classification"] == "PASSED",
-        "无截图仍可为 PASSED（须记录 0 张/原因）",
-        failures,
-    )
-    _assert(
-        passed_no_shots["closeout_eligible"] is True,
-        "PASSED + 可诊断 + game_tests success 即使无截图也可 closeout_eligible",
-        failures,
-    )
-    _assert(
-        passed["closeout_eligible"] is True,
-        "PASSED + 有截图 + 可诊断 应 closeout_eligible",
-        failures,
-    )
-
     if failures:
         print("classify_nightly self-check FAILED:", file=sys.stderr)
         for item in failures:
@@ -375,6 +514,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--write", action="append", type=Path, default=[], help="写入 classification.json（可重复）")
     parser.add_argument("--run-id", default="", help="GitHub run id")
     parser.add_argument("--evidence-dir", type=Path, default=None, help="用于统计截图的目录")
+    parser.add_argument(
+        "--junit-game",
+        type=Path,
+        default=None,
+        help="游戏集成测试 JUnit XML（用于识别 all-skip 假绿）",
+    )
     parser.add_argument(
         "--evidence-upload-ok",
         choices=["true", "false", "unknown"],
@@ -422,6 +567,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_id=run_id,
         evidence_dir=args.evidence_dir,
         evidence_upload_ok=upload_ok,
+        junit_game=args.junit_game,
     )
     for target in args.write:
         write_json(target, payload)
