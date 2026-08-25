@@ -6,7 +6,6 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
-      - '.gitignore'
 
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref }}
