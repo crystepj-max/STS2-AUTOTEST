@@ -200,6 +200,72 @@ jobs:
         continue-on-error: true
         run: python -m pytest tests/integration/ -v -m requires_game --timeout=300 --junitxml=junit-game.xml
 
+      - name: Capture game evidence markers
+        id: game_evidence
+        if: always() && (steps.game_tests.outcome == 'success' || steps.game_tests.outcome == 'failure')
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          mkdir -p tests/output
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import subprocess
+          import urllib.error
+          import urllib.request
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          out = Path("tests/output")
+          out.mkdir(parents=True, exist_ok=True)
+          timeout = float(os.environ.get("NIGHTLY_ENV_PROBE_TIMEOUT_SECONDS", "10"))
+          payload: dict = {
+              "source": "nightly-game-evidence",
+              "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "sts2_ping": None,
+              "agent_health": None,
+          }
+          sts2 = os.environ.get("STS2_CLI_PATH") or "sts2"
+          try:
+              completed = subprocess.run(
+                  [sts2, "ping"],
+                  capture_output=True,
+                  text=True,
+                  timeout=timeout,
+                  check=False,
+              )
+              payload["sts2_ping"] = {
+                  "rc": completed.returncode,
+                  "stdout": (completed.stdout or "")[:500],
+                  "stderr": (completed.stderr or "")[:500],
+              }
+          except (OSError, subprocess.TimeoutExpired) as exc:
+              payload["sts2_ping"] = {"error": str(exc)}
+
+          url = os.environ.get("STS2_AGENT_HEALTH_URL", "http://127.0.0.1:8080/health")
+          try:
+              with urllib.request.urlopen(url, timeout=timeout) as resp:
+                  payload["agent_health"] = {
+                      "url": url,
+                      "status": resp.status,
+                      "body": resp.read(200).decode("utf-8", errors="replace"),
+                  }
+          except (urllib.error.URLError, TimeoutError, OSError) as exc:
+              payload["agent_health"] = {"url": url, "error": str(exc)}
+
+          (out / "game-control.json").write_text(
+              json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          junit = Path("junit-game.xml")
+          if junit.is_file():
+              target = out / "junit-game.xml"
+              target.write_bytes(junit.read_bytes())
+          print(f"wrote {out / 'game-control.json'}")
+          PY
+
       # ---------- Phase 6: Result classification ----------
       - name: Classify results
         id: classify
