@@ -162,6 +162,40 @@ Test Agent 原则：
 - 游戏无法启动、自动化接口不可用、环境缺失时标记 BLOCKED。
 - 发现裸 Key、missing localization、崩溃、关键交互失败时标记 FAILED。
 
+## Canonical 回读与 GitHub 模板
+
+开工前读关联 Issue 的 `## Canonical`：
+
+- 已有 Agent 且 Branch 已填、且不是自己：加入该分支，不得另开主 PR。
+- 为空：写入 Agent（格式 `provider/model`，如 `cursor/grok-4.6`）和 Canonical Branch，设 assignee，立刻回读。回读发现不是自己则停止，去已有分支。
+- 开出 Canonical PR 之后只改 PR 行。不要改 Canonical 下面的需求正文。
+
+### Issue Ready 与普通 PR
+
+Ready 的定义就是 Issue 模板本身（`.github/ISSUE_TEMPLATE/ready.md`），不另开 `docs/process/` 文档：已打 `ready`、assignee 空、顶部有空的 `## Canonical` 三行、正文是三要素（任务目标 / 涉及范围 / 验收标准）。外部依赖写在涉及范围里；体量用已有的 `sized-*`，不写风险章节。半成品不要用 Ready 模板，改走空白 Issue + `triage`（`blank_issues_enabled: true`）。
+
+需求文档里的「Ready 七条」映射到三要素，不是第二套结构。
+
+普通 PR 描述用仓库默认模板 `.github/pull_request_template.md`，必须填关联 Issue 或「无需 Issue」原因——这是约定和模板，**不**新增必填 CI check。政策 PR 用 `.github/PULL_REQUEST_TEMPLATE/policy_change.md`（compare URL 加 `?template=policy_change.md`）。
+
+### AI Review 状态
+
+PR 模板填 `主 Reviewer: provider/model`（可与 Canonical Agent 相同）。
+
+- 发现问题时：**开 Review 线程**。`required_review_thread_resolution` 仍为 true，未解决不能合。
+- 额度或服务不可用时：发一条 PR 评论，标题必须是 `## AI Review 未运行`，写明原因。**不要**为此开 Review 线程。
+- 没找 Reviewer：无线程、无该评论。当前允许合并。
+
+本轮不要求第二 Reviewer，除非负责人开口，或已有线程里写明需要再看。不要把「未运行」当成门禁，也不要为 Review 是否发生新增 CI。不强制 `requested_reviewers`。
+
+### 流程交付（不要生成本地阶段报告）
+
+普通任务的交付摘要就是 PR 描述（默认模板），不要另写交付摘要。不要再写 `dispatch` / `dev-report` / `accept-report` / `acceptance-summary` / `cleanup-report`，也不要把 `.agent-runs/` 下的 handoff 当成门禁。
+
+可追踪链：Issue 三要素 → PR 描述（解决什么 / 不做 / 验收对照 / 验证）→ `PR Check Summary` → Review 线程或「AI Review 未运行」评论。缺本地阶段文档不得判失败。
+
+`autotest review` / `autotest agent-test` 的报告是产品功能产物，不是这套流程文档。兄弟仓库 `agent-protocol` 的 `ARTIFACT_TEST_REPORT.md` 只约束 Test Agent 测试证据，不要求本仓库再写一份流程摘要。
+
 ## 安全与工作区注意事项
 
 - 密钥与本地配置只放 `.env`（已 gitignore），模板用 `.env.example`；仓库不得出现真实凭据。
@@ -173,6 +207,7 @@ Test Agent 原则：
 ## 关键文档索引
 
 - 最完整的项目说明与红线：`CLAUDE.md`；agent 初始化指南：`AGENT.md`。
+- Ready Issue 模板：`.github/ISSUE_TEMPLATE/ready.md`；默认 PR 模板：`.github/pull_request_template.md`；政策 PR 模板：`.github/PULL_REQUEST_TEMPLATE/policy_change.md`。
 - 用户手册：`docs/user-manual.md`；权威路线图：`docs/beta-roadmap.md`。
 - STS2-Cli-Mod CLI 参考：`docs/sts2-cli-mod-reference.md`；Agent 适配器：`docs/agent-adapter-guide.md`。
 - 跨 Agent：`docs/unified-run-contract.md`、`docs/cross-agent-acceptance.md`、`docs/platform-capability-inventory.md`。
