@@ -29,18 +29,21 @@
 
 ### 3. 仓库规则集（ruleset「Autotest protect」）
 
-2026-07-29 创建，2026-08-14 修正以对齐治理决策（审批数 1→0、必填检查名 `Unit Tests`→`PR Check Summary`，修正旧 CI 重构后的悬空检查）：
+2026-07-29 创建，2026-08-14 修正以对齐治理决策（审批数 1→0、必填检查名 `Unit Tests`→`PR Check Summary`，修正旧 CI 重构后的悬空检查）；2026-08-26 关闭 code owner review（#80，常规解锁，非紧急绕过）：
 
 | 规则 | 值 |
 |---|---|
 | 变更必须通过 PR | 启用（禁止直接写入 main） |
 | 必填状态检查 | `PR Check Summary`（strict，要求分支最新） |
 | PR 审批数 | 0 |
+| Code owner review（`require_code_owner_review`） | **否**（#80：解除政策 PR 自批死锁；CODEOWNERS 保留作负责人标识；出现第二写者后再议是否重开，不在本票） |
+| 未归属 Copilot PR 额外审批（`require_extra_approval_for_unattributed_changes`） | `true`。官方语义：Copilot 以 App 身份打开、未归属到具体人的 PR，在已配置审批数上 +1。**审批数为 0 时该设置无效果**，不构成第二死锁（T03）。判定依据是 PR 开立身份，不是 Cursor trailer / Agent 代写痕迹。 |
+| 新 push 撤销旧审批（`dismiss_stale_reviews_on_push`） | `true`。只撤销已存在的 approving review；审批数为 0 时对合并门禁为空操作，不构成第二死锁（T03）。 |
 | review 线程解决要求 | **是**（bot/人工意见线程须处理并标记解决后方可合并；处理约定见 [`t6-ruleset-thread-restored.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t6-ruleset-thread-restored.md)） |
 | 删除分支 / 非快进推送 | 禁止 |
 | 绕过者（bypass actors） | 无，`current_user_can_bypass: never`（紧急情况下临时授予并立即恢复，见「紧急绕过流程」） |
 
-- 证据：[`t1-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t1-ruleset-readback.json)、复审修复后回读：[`t6-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t6-ruleset-readback.json)
+- 证据：[`t1-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t1-ruleset-readback.json)、复审修复后回读：[`t6-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t6-ruleset-readback.json)、#80 回读：`GET /repos/crystepj-max/STS2-AUTOTEST/rulesets/19962718`（2026-08-26：`require_code_owner_review: false`、`bypass_actors: []`、`required_approving_review_count: 0`；`enforce_admins` 未改）
 
 ### 4. 本地配置防护（复审新增）
 
