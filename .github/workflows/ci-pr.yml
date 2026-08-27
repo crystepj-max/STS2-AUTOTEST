@@ -89,10 +89,10 @@ jobs:
         continue-on-error: true
         run: |
           python3.11 -m venv .venv-ci
-          .venv-ci/bin/python -m pip install -e ".[dev]"
+          .venv-ci/bin/python -m pip install --no-cache-dir -e ".[dev]"
           # issue-21：固定 lint 工具版本（不带 --no-deps，保留 mypy 运行时依赖），
           # 防止 PR 通过修改 pyproject.toml 依赖范围改变检查工具版本
-          .venv-ci/bin/python -m pip install -r .github/requirements-lint.txt --force-reinstall
+          .venv-ci/bin/python -m pip install --no-cache-dir -r .github/requirements-lint.txt --force-reinstall
           echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
 
       - name: Controlled timeout verification (issue-18)
@@ -140,8 +140,8 @@ jobs:
         run: |
           python3.11 -m venv .venv-baseline
           cd .ci-baseline
-          ../.venv-baseline/bin/python -m pip install -e ".[dev]"
-          ../.venv-baseline/bin/python -m pip install -r ../.github/requirements-lint.txt --force-reinstall
+          ../.venv-baseline/bin/python -m pip install --no-cache-dir -e ".[dev]"
+          ../.venv-baseline/bin/python -m pip install --no-cache-dir -r ../.github/requirements-lint.txt --force-reinstall
           cd ..
 
       - name: Check no new Ruff debt
@@ -220,7 +220,12 @@ jobs:
         id: visual
         if: always() && steps.install.outcome == 'success'
         continue-on-error: true
-        run: .venv-ci/bin/python -m pip install -e ".[visual]"
+        run: |
+          # opencv wheel 约 48MB；runner 磁盘紧张时 pip cache + /tmp 解包会 ENOSPC，
+          # 进而 continue-on-error 把 visual 标成 conclusion=success、outcome=failure，mypy 被跳过。
+          df -h
+          .venv-ci/bin/python -m pip cache purge || true
+          TMPDIR="${RUNNER_TEMP:-/tmp}" .venv-ci/bin/python -m pip install --no-cache-dir -e ".[visual]"
 
       - name: Check no new mypy debt
         id: mypy
