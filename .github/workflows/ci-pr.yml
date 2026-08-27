@@ -3,9 +3,6 @@ name: CI — Pull Request
 on:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
 
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref }}
@@ -28,28 +25,66 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Runner health precheck (issue-24 T4)
-        # 业务验收开始前判定 runner 是否可用（服务状态 + GitHub 网络链路），
-        # 不可用则快速失败，避免排队/执行后才发现环境故障
-        run: |
-          # 只跑一次：重复调用会放大 gh/ps 瞬时抖动，且第二次 stdout 进 summary 不便排障
-          echo "## Runner Health Precheck" >> "$GITHUB_STEP_SUMMARY"
-          bash scripts/check-runner-health.sh --json | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Checkout historical baseline
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .ci-baseline
 
+      - name: Collect changed files
+        id: changed_files
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          git diff --name-only --diff-filter=ACDMRT \
+            "${{ github.event.pull_request.base.sha }}" "${{ github.sha }}" \
+            > "${RUNNER_TEMP}/changed-files.txt"
+          echo "path=${RUNNER_TEMP}/changed-files.txt" >> "$GITHUB_OUTPUT"
+          echo "## Changed files" >> "$GITHUB_STEP_SUMMARY"
+          sed 's/^/- /' "${RUNNER_TEMP}/changed-files.txt" >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Check policy isolation (issue-81)
+        id: policy_isolation
+        run: python3.11 .github/scripts/check_policy_isolation.py --base-dir .ci-baseline --head-dir . --changed-files "${{ steps.changed_files.outputs.path }}"
+
+      - name: Check canonical PR (issue-81)
+        id: canonical
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_BODY_JSON: ${{ toJSON(github.event.pull_request.body) }}
+        run: python3.11 .github/scripts/check_canonical_pr.py --pr-number ${{ github.event.pull_request.number }} --repo ${{ github.repository }}
+
+      - name: Classify L0 path (issue-81)
+        id: classify
+        if: always() && steps.changed_files.outcome == 'success'
+        run: python3.11 .github/scripts/classify_l0.py --base-dir .ci-baseline --changed-files "${{ steps.changed_files.outputs.path }}" --github-output "$GITHUB_OUTPUT"
+
+      - name: L0 lightweight confirmation
+        id: l0_ok
+        if: steps.classify.outputs.l0 == 'true'
+        run: |
+          echo "L0 直通道：跳过 health / 单测 / ruff / mypy / CLI / runner 脚本测试 / 超时实验。"
+          echo "L0 lightweight path; expensive checks skipped." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Runner health precheck (issue-24 T4)
+        # 业务验收开始前判定 runner 是否可用（服务状态 + GitHub 网络链路），
+        # 不可用则快速失败，避免排队/执行后才发现环境故障
+        # L0 不跑 health（issue #81）
+        if: steps.classify.outputs.l0 != 'true' && steps.policy_isolation.outcome == 'success' && steps.canonical.outcome == 'success'
+        run: |
+          # 只跑一次：重复调用会放大 gh/ps 瞬时抖动，且第二次 stdout 进 summary 不便排障
+          echo "## Runner Health Precheck" >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/check-runner-health.sh --json | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Verify Python 3.11
         id: python
+        if: steps.classify.outputs.l0 != 'true' && steps.policy_isolation.outcome == 'success' && steps.canonical.outcome == 'success'
         continue-on-error: true
         run: python3.11 --version
 
       - name: Install project dev dependencies
         id: install
-        if: always() && steps.python.outcome == 'success'
+        if: always() && steps.python.outcome == 'success' && steps.classify.outputs.l0 != 'true'
         continue-on-error: true
         run: |
           python3.11 -m venv .venv-ci
@@ -127,7 +162,9 @@ jobs:
       - name: Run runner script tests (issue-24)
         # 自托管 runner 运维脚本（runner-ctl/setup/probe/health）的 shell 测试；
         # 必须随 PR 必跑，防止脚本回归在 CI 绿灯下漏网
+        # L0 不跑 runner 脚本测试（issue #81）
         id: script_tests
+        if: steps.classify.outputs.l0 != 'true' && steps.install.outcome == 'success'
         run: bash scripts/tests/run-all.sh
 
       - name: Check no new unit-test failures
@@ -163,18 +200,20 @@ jobs:
         run: .venv-ci/bin/python -m pytest tests/integration/ -v -m "not requires_game" --junitxml=junit-integration.xml
 
       - name: Upload unit JUnit artifact
-        if: always()
+        if: always() && steps.classify.outputs.l0 != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: junit-unit-macos-self-hosted
           path: junit-unit.xml
+          if-no-files-found: ignore
 
       - name: Upload integration JUnit artifact
-        if: always()
+        if: always() && steps.classify.outputs.l0 != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: junit-integration
           path: junit-integration.xml
+          if-no-files-found: ignore
 
       - name: Install visual dependency for mypy
         id: visual
@@ -196,7 +235,7 @@ jobs:
         # 超时时已产生的 stdout/stderr 与日志均落盘在 check log 中，随 artifact 保留供诊断。
         # 必须晚于所有产生日志的步骤（mypy 依赖 visual 排在更后）：上传发生在
         # mypy 之前会导致 mypy-check.log 永不进入 artifact，mypy 超时诊断输出完全丢失。
-        if: always()
+        if: always() && steps.classify.outputs.l0 != 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
@@ -228,6 +267,9 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Policy isolation | ${{ steps.policy_isolation.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Canonical PR | ${{ steps.canonical.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| L0 classify | ${{ steps.classify.outcome }} (l0=${{ steps.classify.outputs.l0 }}) |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Python 3.11 | ${{ steps.python.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Install dev dependencies | ${{ steps.install.outcome }} |" >> "$GITHUB_STEP_SUMMARY"
           # 脚本超时（exit 124）会写入 GITHUB_OUTPUT timeout=true，与普通质量失败区分
@@ -284,6 +326,16 @@ jobs:
               failed=1
             fi
           }
+
+          check "Collect changed files" "${{ steps.changed_files.outcome }}"
+          check "Policy isolation" "${{ steps.policy_isolation.outcome }}"
+          check "Canonical PR" "${{ steps.canonical.outcome }}"
+          check "L0 classify" "${{ steps.classify.outcome }}"
+
+          if [ "${{ steps.classify.outputs.l0 }}" = "true" ]; then
+            check "L0 lightweight confirmation" "${{ steps.l0_ok.outcome }}"
+            exit "$failed"
+          fi
 
           check "Python 3.11" "${{ steps.python.outcome }}"
           check "Install dev dependencies" "${{ steps.install.outcome }}"
