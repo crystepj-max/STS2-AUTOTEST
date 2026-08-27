@@ -48,6 +48,7 @@ jobs:
 
       - name: Check canonical PR (issue-81)
         id: canonical
+        if: always() && steps.changed_files.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}

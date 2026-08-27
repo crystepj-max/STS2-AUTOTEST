@@ -91,6 +91,34 @@ def test_isolation_policy_plus_docs() -> None:
     assert code == isolation_mod.EXIT_OK
 
 
+def test_isolation_bootstrap_new_policy_scripts_with_legacy_codeowners() -> None:
+    """base CODEOWNERS 尚未登记新脚本时，引导 PR 不得被当成政策+功能混批。"""
+
+    legacy = """\
+.github/workflows/ @owner
+.github/scripts/check_*_baseline.py @owner
+docs/process/quality-gate-governance.md @owner
+"""
+    patterns = matcher.parse_codeowners_patterns(legacy)
+    code, message = isolation_mod.classify_policy_isolation(
+        [
+            ".github/workflows/ci-pr.yml",
+            ".github/CODEOWNERS",
+            ".github/l0-allowlist.txt",
+            ".github/scripts/check_policy_isolation.py",
+            ".github/scripts/check_canonical_pr.py",
+            ".github/scripts/classify_l0.py",
+            ".github/scripts/pr_path_matcher.py",
+            "docs/process/quality-gate-governance.md",
+            "tests/unit/test_policy_pr_gates.py",
+            "AGENTS.md",
+        ],
+        patterns,
+        head_codeowners_text=BASE_CODEOWNERS,
+    )
+    assert code == isolation_mod.EXIT_OK, message
+
+
 def test_isolation_policy_plus_src_fails() -> None:
     patterns = matcher.parse_codeowners_patterns(BASE_CODEOWNERS)
     code, message = isolation_mod.classify_policy_isolation(

@@ -14,11 +14,19 @@ _CODEOWNERS_SELF = ".github/CODEOWNERS"
 _ALLOWLIST_RELATIVE = ".github/l0-allowlist.txt"
 
 # 政策 PR 允许附带的路径（硬编码，避免被 PR 内容改写）。
+# 新脚本 / 白名单 / CODEOWNERS 自指在 base 尚未登记前，必须能与政策文件同 PR 引导落地；
+# 合入后它们会出现在 CODEOWNERS 里，按政策文件而非附带分类。
 ACCOMPANYING_PATTERNS: tuple[str, ...] = (
     "docs/**",
     "*.md",
     "tests/unit/test_policy*.py",
     "tests/unit/test_ci_*_baseline.py",
+    ".github/CODEOWNERS",
+    ".github/l0-allowlist.txt",
+    ".github/scripts/check_policy_isolation.py",
+    ".github/scripts/check_canonical_pr.py",
+    ".github/scripts/classify_l0.py",
+    ".github/scripts/pr_path_matcher.py",
 )
 
 # L0 白名单不得覆盖这些路径（不变量）。
