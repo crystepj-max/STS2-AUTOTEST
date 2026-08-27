@@ -29,18 +29,21 @@
 
 ### 3. 仓库规则集（ruleset「Autotest protect」）
 
-2026-07-29 创建，2026-08-14 修正以对齐治理决策（审批数 1→0、必填检查名 `Unit Tests`→`PR Check Summary`，修正旧 CI 重构后的悬空检查）：
+2026-07-29 创建，2026-08-14 修正以对齐治理决策（审批数 1→0、必填检查名 `Unit Tests`→`PR Check Summary`，修正旧 CI 重构后的悬空检查）；2026-08-26 关闭 code owner review（#80，常规解锁，非紧急绕过）；2026-08-27 删除 `paths-ignore` 并在同一 job 内落地混合检查 / Canonical / L0（#81）：
 
 | 规则 | 值 |
 |---|---|
 | 变更必须通过 PR | 启用（禁止直接写入 main） |
-| 必填状态检查 | `PR Check Summary`（strict，要求分支最新） |
+| 必填状态检查 | `PR Check Summary`（strict，要求分支最新；唯一必填 check 名） |
 | PR 审批数 | 0 |
+| Code owner review（`require_code_owner_review`） | **否**（#80：解除政策 PR 自批死锁；CODEOWNERS 保留作负责人标识） |
+| 未归属 Copilot PR 额外审批（`require_extra_approval_for_unattributed_changes`） | `true`。官方语义：Copilot 以 App 身份打开、未归属到具体人的 PR，在已配置审批数上 +1。**审批数为 0 时该设置无效果**，不构成第二死锁（T03）。判定依据是 PR 开立身份，不是 Cursor trailer / Agent 代写痕迹。 |
+| 新 push 撤销旧审批（`dismiss_stale_reviews_on_push`） | `true`。只撤销已存在的 approving review；审批数为 0 时对合并门禁为空操作，不构成第二死锁（T03）。 |
 | review 线程解决要求 | **是**（bot/人工意见线程须处理并标记解决后方可合并；处理约定见 [`t6-ruleset-thread-restored.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t6-ruleset-thread-restored.md)） |
 | 删除分支 / 非快进推送 | 禁止 |
 | 绕过者（bypass actors） | 无，`current_user_can_bypass: never`（紧急情况下临时授予并立即恢复，见「紧急绕过流程」） |
 
-- 证据：[`t1-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t1-ruleset-readback.json)、复审修复后回读：[`t6-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t6-ruleset-readback.json)
+- 证据：[`t1-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t1-ruleset-readback.json)、复审修复后回读：[`t6-ruleset-readback.json`](../../.agent-runs/issue-23-main-merge-protection/evidence/t6-ruleset-readback.json)、#80 回读：`GET /repos/crystepj-max/STS2-AUTOTEST/rulesets/19962718`
 
 ### 4. 本地配置防护（复审新增）
 
@@ -58,9 +61,9 @@
 
 1. 所有日常变更必须通过 PR 进入 `main`（直接 push 会被远端拒绝，见验证证据）。
 2. 准备合并的**最终提交**必须通过 `PR Check Summary`（strict=true，分支需与 main 保持最新）。
-3. `PR Check Summary` **失败或未运行**（缺失）时，PR 都无法合并（失败样例与缺失样例见验证证据）。
+3. `PR Check Summary` **失败**时 PR 无法合并。**缺失**（未运行）仍然禁止合并，但纯文档 / 白名单路径必须走 L0 直通道**产出**该检查，不再把 `paths-ignore` 造成的 0 check 当成日常行为（#81）。
 4. 合并前需满足 review 线程解决要求：bot/人工意见线程逐条处理并标记解决。
-5. 合并后若需要更新文档，同样走 PR（需包含会触发 CI 的变更，保证 `PR Check Summary` 存在并成功）。
+5. 文档变更同样走 PR。L0 判定只读 **base SHA** 的 `.github/l0-allowlist.txt` 与 CODEOWNERS，防止 HEAD 把 `src/**` 写进白名单后自称 L0。政策文件（含本治理文档）命中 CODEOWNERS，不是 L0，走全套。
 
 ## 紧急绕过流程
 
@@ -119,11 +122,12 @@
 - `PR Check Summary` 失败的 PR → 合并被禁：HTTP 405 `Required status check "PR Check Summary" is failing`，状态 `BLOCKED`
   - 证据：[`t3b-check-failure-merge-blocked.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t3b-check-failure-merge-blocked.md)、失败 run：https://github.com/crystepj-max/STS2-AUTOTEST/actions/runs/31768184810
 
-### 缺失样例（复审补证）
+### 缺失样例（历史；#81 后不再是日常预期）
 
-- 仅含 markdown 文件的 PR（命中 ci-pr.yml `paths-ignore`，0 个检查运行）→ 合并被禁：
+- 仅含 markdown 文件的 PR 在 **#81 之前**命中 `ci-pr.yml` `paths-ignore`，0 个检查运行 → 合并被禁：
   HTTP 405 `Required status check "PR Check Summary" is expected.`
   - 证据：[`t8-missing-check-probe.md`](../../.agent-runs/issue-23-main-merge-protection/evidence/t8-missing-check-probe.md)（探针 PR #31，`check-runs = 0`）
+  - **当前预期**：去掉 `paths-ignore` 后，仅命中 L0 白名单且未命中 CODEOWNERS 的 PR 跑轻量 `PR Check Summary`；命中政策文件的文档 PR 跑全套。二者都必须产出同名检查。
 
 ### 成功样例
 
@@ -138,7 +142,7 @@
 | 完成标准 | 状态 | 证据 |
 |---|---|---|
 | `PR Check Summary` **失败**的 PR 无法合并 | ✅ | T3b（HTTP 405 + BLOCKED，PR #26） |
-| `PR Check Summary` **缺失**（未运行）的 PR 无法合并 | ✅ | T8 探针（HTTP 405 `is expected`，PR #31，0 check-runs） |
+| `PR Check Summary` **缺失**（未运行）的 PR 无法合并 | ✅（历史 T8）/ 日常由 L0 避免纯文档缺失 | T8 探针（HTTP 405 `is expected`，PR #31）；#81 后纯文档应产出同名检查 |
 | 成功结果必须对应准备合并的最终提交 | ✅ | branch protection strict=true + ruleset strict 策略 |
 | 日常直接写入 `main` 被禁止 | ✅ | T3a（GH013 拒绝） |
 | 成功 PR 在满足人工授权后可以正常合并 | ✅ | T4 成功样例（PR #27 合并）+ 复审修复 PR 合并 |

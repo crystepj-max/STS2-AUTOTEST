@@ -211,3 +211,7 @@ STS2_EXECUTION__GAME_TIMEOUT=60.0
 STS2_EXECUTION__GAME_STARTUP_TIMEOUT=60.0
 STS2_EXECUTION__MAX_RETRIES=3
 ```
+
+## Agent 约束（政策 PR）
+
+Agent 可开独立政策 PR、推代码、跑 CI；**不得** `gh pr merge` 政策变更（含 `--admin`）。政策 PR 由维护者点 Merge。CODEOWNERS 仍标识负责人，ruleset 不再要求 code owner review（#80）。混合检查与 L0 直通道见 `docs/process/quality-gate-governance.md`（#81）。详见 `AGENTS.md`。
