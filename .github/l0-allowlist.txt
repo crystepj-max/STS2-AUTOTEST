@@ -1,0 +1,9 @@
+# L0 直通道白名单（issue #81）。
+# 本文件自身不得列入。判定只读 PR **base SHA** 上的副本；HEAD 把 src/** 写进来无效。
+docs/**
+**/*.md
+.gitignore
+LICENSE
+NOTICE
+AUTHORS
+CHANGELOG*

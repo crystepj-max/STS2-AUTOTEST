@@ -201,6 +201,7 @@ PR 模板填 `主 Reviewer: provider/model`（可与 Canonical Agent 相同）�
 - 密钥与本地配置只放 `.env`（已 gitignore），模板用 `.env.example`；仓库不得出现真实凭据。
 - 这个仓库经常有多个 agent 或用户同时改动：开始前先看 `git status --short`；不要 revert/reset/checkout 或删除你没有创建的改动；只改当前任务需要的文件。
 - 不直接读写游戏进程内存；游戏交互只走适配器。外部进程调用必须有 timeout，子进程清理要防僵尸。
+- **政策变更 PR**：Agent 可以创建独立政策 PR、推送代码、等待或触发 CI；**禁止**对政策变更执行 `gh pr merge`（含 `--admin`）。政策 PR 必须由维护者本人点 Merge。CODEOWNERS 仍标识负责人；混合政策/功能由 `PR Check Summary` 内检查阻断（#81）。
 - 遇到以下情况必须暂停并向用户请求决策：验收标准与实现或安全实践冲突；需要改 public API 名称/签名/导出类型；共享数据模型或跨模块边界变化；需要引入 shortcut、stub 或推迟工作；无法写测试证明某条验收标准；同一文件所有权冲突。
 - 结束时向用户说明修改过的文件和未能运行的验证命令。
 
