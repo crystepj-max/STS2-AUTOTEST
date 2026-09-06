@@ -560,36 +560,36 @@ class TestReviewSpec:
 
 class TestCompileSpec:
     @patch("sts2_autotest.cli.mcp_tools.compile_spec_file")
-    def test_compile_spec_calls_generator(self, mock_compile):
-        import shutil
-        # Create output dir within workspace so path whitelist validation passes
-        ws_dir = Path("/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests")
-        output_dir = ws_dir / "tmp_mcp_output"
-        output_dir.mkdir(exist_ok=True)
-        try:
-            mock_compile.return_value = output_dir / "test_tc.py"
-            result = handle_compile_spec({
-                "spec_path": (
-                    "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST"
-                    "/docs/superpowers/specs/2026-05-31-b11-cicd-design.md"
-                ),
-                "output_dir": str(output_dir),
-            })
-            assert "generated_file" in result
-            assert result["warnings"] == []
-        finally:
-            shutil.rmtree(output_dir, ignore_errors=True)
+    def test_compile_spec_calls_generator(self, mock_compile, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "sts2_autotest.cli.mcp_tools._ALLOWED_ROOTS", [tmp_path]
+        )
+        spec_file = tmp_path / "specs" / "sample-spec.md"
+        spec_file.parent.mkdir()
+        spec_file.write_text("# spec", encoding="utf-8")
+        output_dir = tmp_path / "tmp_mcp_output"
+        output_dir.mkdir()
+        mock_compile.return_value = output_dir / "test_tc.py"
+        result = handle_compile_spec({
+            "spec_path": str(spec_file),
+            "output_dir": str(output_dir),
+        })
+        assert "generated_file" in result
+        assert result["warnings"] == []
 
-    def test_compile_spec_rejects_external_output_dir(self):
+    def test_compile_spec_rejects_external_output_dir(self, tmp_path, monkeypatch):
         """output_dir outside whitelist should raise McpError."""
         from sts2_autotest.cli.mcp_protocol import McpError
+        monkeypatch.setattr(
+            "sts2_autotest.cli.mcp_tools._ALLOWED_ROOTS", [tmp_path]
+        )
+        spec_file = tmp_path / "specs" / "sample-spec.md"
+        spec_file.parent.mkdir()
+        spec_file.write_text("# spec", encoding="utf-8")
         with pytest.raises(McpError, match="not within allowed roots"):
             handle_compile_spec({
-                "spec_path": (
-                    "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST"
-                    "/docs/superpowers/specs/2026-05-31-b11-cicd-design.md"
-                ),
-                "output_dir": "/tmp/evil_output",
+                "spec_path": str(spec_file),
+                "output_dir": str(tmp_path.parent / "outside_output"),
             })
 
 
@@ -610,7 +610,10 @@ class TestRunTest:
         assert result["status"] == "OK"
 
     @patch("sts2_autotest.cli.mcp_tools.run_tests_in_dir")
-    def test_run_test_returns_result(self, mock_run):
+    def test_run_test_returns_result(self, mock_run, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "sts2_autotest.cli.mcp_tools._ALLOWED_ROOTS", [tmp_path]
+        )
         mock_run.return_value = {
             "run_id": "run-001",
             "passed": 3,
@@ -620,14 +623,17 @@ class TestRunTest:
             "junit_xml_url": "file:///tmp/junit.xml",
             "stderr": None,
         }
-        result = handle_run_test({"spec_dir": "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests/"})
+        result = handle_run_test({"spec_dir": str(tmp_path)})
         assert result["passed"] == 3
         assert result["failed"] == 0
         assert result["status"] == "OK"
 
     @patch("sts2_autotest.cli.mcp_tools.run_tests_in_dir")
-    def test_run_test_reports_timeout(self, mock_run):
+    def test_run_test_reports_timeout(self, mock_run, tmp_path, monkeypatch):
         """Timeout should report status=TIMEOUT."""
+        monkeypatch.setattr(
+            "sts2_autotest.cli.mcp_tools._ALLOWED_ROOTS", [tmp_path]
+        )
         mock_run.return_value = {
             "run_id": "run-002",
             "passed": 0,
@@ -637,13 +643,16 @@ class TestRunTest:
             "junit_xml_url": "file:///tmp/junit.xml",
             "stderr": "Test execution timed out after 90s",
         }
-        result = handle_run_test({"spec_dir": "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests/"})
+        result = handle_run_test({"spec_dir": str(tmp_path)})
         assert result["status"] == "TIMEOUT"
         assert result["passed"] == 0
 
     @patch("sts2_autotest.cli.mcp_tools.run_tests_in_dir")
-    def test_run_test_reports_failure(self, mock_run):
+    def test_run_test_reports_failure(self, mock_run, tmp_path, monkeypatch):
         """Non-zero exit should report status=FAILED with stderr."""
+        monkeypatch.setattr(
+            "sts2_autotest.cli.mcp_tools._ALLOWED_ROOTS", [tmp_path]
+        )
         mock_run.return_value = {
             "run_id": "run-003",
             "passed": 2,
@@ -653,7 +662,7 @@ class TestRunTest:
             "junit_xml_url": "file:///tmp/junit.xml",
             "stderr": "Exit code: 1",
         }
-        result = handle_run_test({"spec_dir": "/Users/chris/STS2-WORKSPACE/STS2-AUTOTEST/tests/"})
+        result = handle_run_test({"spec_dir": str(tmp_path)})
         assert result["status"] == "FAILED"
         assert result["failed"] == 3
         assert result["stderr"] is not None
