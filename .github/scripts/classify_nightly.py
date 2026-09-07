@@ -34,6 +34,20 @@ FUNCTIONAL_PHASES: tuple[str, ...] = (
 SCREENSHOT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 VALID_OUTCOMES = {"success", "failure", "cancelled", "skipped"}
 PLACEHOLDER_MARKERS = ("$(date", "${{", "T%FT%TZ")
+# issue #83：单测/CLI-only 的 pytest 运行也会写入 case-traces（fluent DSL 固定目录名），
+# 这些 traces 不是真实游戏产物，不得计入 game_evidence。
+UNIT_TRACE_DIR_NAMES = {"case-traces"}
+
+
+def is_unit_trace_path(path: Path, evidence_dir: Path) -> bool:
+    """文件是否位于单元测试痕迹目录（case-traces）之下，或证据目录本身就是该目录。"""
+    if evidence_dir.name in UNIT_TRACE_DIR_NAMES:
+        return True
+    try:
+        rel = path.relative_to(evidence_dir)
+    except ValueError:
+        return False
+    return any(part in UNIT_TRACE_DIR_NAMES for part in rel.parts)
 
 
 def utc_now_iso() -> str:
@@ -79,6 +93,8 @@ def count_screenshots(root: Path | None) -> int:
     total = 0
     for path in root.rglob("*"):
         if path.is_file() and path.suffix.lower() in SCREENSHOT_SUFFIXES:
+            if is_unit_trace_path(path, root):
+                continue
             total += 1
     return total
 
@@ -112,13 +128,21 @@ def game_evidence_present(
     *,
     screenshot_count: int,
 ) -> dict[str, Any]:
-    """是否存在真实游戏验证产物（截图 / 状态 JSON / 日志）。"""
+    """是否存在真实游戏验证产物（截图 / 状态 JSON / 日志）。
+
+    单元测试痕迹目录（case-traces）下的文件是 pytest 运行留下的 traces，
+    不是游戏产物，不计入（issue #83）。
+    """
     shots = max(0, screenshot_count)
     state_json = 0
     logs = 0
+    unit_traces_excluded = 0
     if evidence_dir is not None and evidence_dir.is_dir():
         for path in evidence_dir.rglob("*"):
             if not path.is_file():
+                continue
+            if is_unit_trace_path(path, evidence_dir):
+                unit_traces_excluded += 1
                 continue
             name = path.name.lower()
             suffix = path.suffix.lower()
@@ -132,6 +156,7 @@ def game_evidence_present(
         "screenshots": shots,
         "state_json": state_json,
         "logs": logs,
+        "unit_traces_excluded": unit_traces_excluded,
     }
 
 
@@ -467,6 +492,66 @@ def run_self_check() -> int:
             failures,
         )
         _assert(state_only["closeout_eligible"] is True, "状态 JSON 证据应允许 closeout", failures)
+
+        # issue #83：单元测试留下的 traces 不是游戏证据
+        unit_output = tmp_path / "unit-output"
+        traces = unit_output / "case-traces"
+        traces.mkdir(parents=True)
+        for idx in range(3):
+            (traces / f"case-{idx}.log").write_text("trace", encoding="utf-8")
+        (traces / "case-state.json").write_text("{}", encoding="utf-8")
+
+        unit_only = classify(
+            passed_outcomes,
+            run_id="self-check-unit-traces",
+            junit_game=junit_ok,
+            evidence_dir=unit_output,
+        )
+        _assert(
+            unit_only["classification"] == "BLOCKED",
+            "冒烟全过但仅有单元 traces、0 截图不得给出 PASSED",
+            failures,
+        )
+        _assert(
+            unit_only["closeout_eligible"] is False,
+            "单元 traces 不得计入 closeout",
+            failures,
+        )
+        _assert(
+            unit_only["game_evidence"]["unit_traces_excluded"] == 4,
+            "被排除的单元 traces 数应记录在 game_evidence",
+            failures,
+        )
+
+        traces_dir_only = classify(
+            passed_outcomes,
+            run_id="self-check-traces-dir",
+            junit_game=junit_ok,
+            evidence_dir=traces,
+        )
+        _assert(
+            traces_dir_only["classification"] == "BLOCKED",
+            "证据目录本身为 case-traces 时不得 PASSED",
+            failures,
+        )
+        _assert(
+            traces_dir_only["closeout_eligible"] is False,
+            "证据目录本身为 case-traces 时不得 closeout",
+            failures,
+        )
+
+        (unit_output / "game-final.png").write_bytes(b"\x89PNG\r\n")
+        mixed = classify(
+            passed_outcomes,
+            run_id="self-check-mixed-evidence",
+            junit_game=junit_ok,
+            evidence_dir=unit_output,
+        )
+        _assert(
+            mixed["classification"] == "PASSED" and mixed["closeout_eligible"] is True,
+            "真实游戏截图不受单元 traces 排除影响",
+            failures,
+        )
 
     checkout_fail = dict(skipped)
     checkout_fail["checkout"] = "failure"
