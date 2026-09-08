@@ -34,6 +34,22 @@ FUNCTIONAL_PHASES: tuple[str, ...] = (
 SCREENSHOT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 VALID_OUTCOMES = {"success", "failure", "cancelled", "skipped"}
 PLACEHOLDER_MARKERS = ("$(date", "${{", "T%FT%TZ")
+# issue #83：单测/CLI-only 测试运行写入的输出目录（fluent DSL 的 case-traces、
+# 生成测试的 suite-summaries）不是真实游戏产物，不得计入 game_evidence。
+TEST_TRACE_DIR_NAMES = {"case-traces", "suite-summaries"}
+# Nightly 流水线自身写入的记账/探针 JSON 同样不是游戏产物。
+PIPELINE_JSON_NAMES = {"classification.json", "early-diagnosis.json", "game-control.json"}
+
+
+def is_test_trace_path(path: Path, evidence_dir: Path) -> bool:
+    """文件是否位于测试输出目录之下，或证据目录本身就是该类目录。"""
+    if evidence_dir.name in TEST_TRACE_DIR_NAMES:
+        return True
+    try:
+        rel = path.relative_to(evidence_dir)
+    except ValueError:
+        return False
+    return any(part in TEST_TRACE_DIR_NAMES for part in rel.parts)
 
 
 def utc_now_iso() -> str:
@@ -79,6 +95,8 @@ def count_screenshots(root: Path | None) -> int:
     total = 0
     for path in root.rglob("*"):
         if path.is_file() and path.suffix.lower() in SCREENSHOT_SUFFIXES:
+            if is_test_trace_path(path, root):
+                continue
             total += 1
     return total
 
@@ -112,17 +130,27 @@ def game_evidence_present(
     *,
     screenshot_count: int,
 ) -> dict[str, Any]:
-    """是否存在真实游戏验证产物（截图 / 状态 JSON / 日志）。"""
+    """是否存在真实游戏验证产物（截图 / 状态 JSON / 日志）。
+
+    测试运行写入的输出目录（case-traces / suite-summaries）与流水线自身的
+    记账/探针 JSON（game-control.json 等）不是游戏产物，不计入（issue #83）。
+    """
     shots = max(0, screenshot_count)
     state_json = 0
     logs = 0
+    test_traces_excluded = 0
     if evidence_dir is not None and evidence_dir.is_dir():
         for path in evidence_dir.rglob("*"):
             if not path.is_file():
                 continue
             name = path.name.lower()
+            if is_test_trace_path(path, evidence_dir):
+                test_traces_excluded += 1
+                continue
+            if name in PIPELINE_JSON_NAMES:
+                continue
             suffix = path.suffix.lower()
-            if suffix == ".json" and name not in {"classification.json", "early-diagnosis.json"}:
+            if suffix == ".json":
                 state_json += 1
             elif suffix in {".log", ".txt"} or "log" in name:
                 logs += 1
@@ -132,6 +160,7 @@ def game_evidence_present(
         "screenshots": shots,
         "state_json": state_json,
         "logs": logs,
+        "test_traces_excluded": test_traces_excluded,
     }
 
 
@@ -467,6 +496,85 @@ def run_self_check() -> int:
             failures,
         )
         _assert(state_only["closeout_eligible"] is True, "状态 JSON 证据应允许 closeout", failures)
+
+        # issue #83：测试运行与流水线自身写入的产物不是游戏证据
+        # 形态对照事故 run 32914876217 的真实 artifacts：case-traces 的
+        # log/json、流水线探针 game-control.json、生成测试写的
+        # suite-summaries 失败摘要，外加 0 张截图。
+        unit_output = tmp_path / "unit-output"
+        traces = unit_output / "case-traces"
+        summaries = unit_output / "suite-summaries"
+        summaries.mkdir(parents=True)
+        traces.mkdir(parents=True)
+        for idx in range(3):
+            (traces / f"case-{idx}.log").write_text("trace", encoding="utf-8")
+        (traces / "case-state.json").write_text("{}", encoding="utf-8")
+        (unit_output / "game-control.json").write_text(
+            '{"source": "nightly-game-evidence", "sts2_ping": {"rc": 0}}',
+            encoding="utf-8",
+        )
+        (summaries / "SUITE-EXAMPLE.json").write_text(
+            '{"total": 1, "passed": 0, "failed": 1}',
+            encoding="utf-8",
+        )
+
+        unit_only = classify(
+            passed_outcomes,
+            run_id="self-check-unit-traces",
+            junit_game=junit_ok,
+            evidence_dir=unit_output,
+        )
+        _assert(
+            unit_only["classification"] == "BLOCKED",
+            "冒烟全过但仅有测试/流水线产物、0 截图不得给出 PASSED",
+            failures,
+        )
+        _assert(
+            unit_only["closeout_eligible"] is False,
+            "测试 traces 与流水线探针 JSON 不得计入 closeout",
+            failures,
+        )
+        _assert(
+            unit_only["game_evidence"]["test_traces_excluded"] == 5,
+            "被排除的测试输出文件数应记录在 game_evidence",
+            failures,
+        )
+        _assert(
+            unit_only["game_evidence"]["state_json"] == 0
+            and unit_only["game_evidence"]["logs"] == 0,
+            "排除后不得残留测试/流水线产物计数",
+            failures,
+        )
+
+        traces_dir_only = classify(
+            passed_outcomes,
+            run_id="self-check-traces-dir",
+            junit_game=junit_ok,
+            evidence_dir=traces,
+        )
+        _assert(
+            traces_dir_only["classification"] == "BLOCKED",
+            "证据目录本身为测试输出目录时不得 PASSED",
+            failures,
+        )
+        _assert(
+            traces_dir_only["closeout_eligible"] is False,
+            "证据目录本身为测试输出目录时不得 closeout",
+            failures,
+        )
+
+        (unit_output / "game-final.png").write_bytes(b"\x89PNG\r\n")
+        mixed = classify(
+            passed_outcomes,
+            run_id="self-check-mixed-evidence",
+            junit_game=junit_ok,
+            evidence_dir=unit_output,
+        )
+        _assert(
+            mixed["classification"] == "PASSED" and mixed["closeout_eligible"] is True,
+            "真实游戏截图不受测试输出排除影响",
+            failures,
+        )
 
     checkout_fail = dict(skipped)
     checkout_fail["checkout"] = "failure"
