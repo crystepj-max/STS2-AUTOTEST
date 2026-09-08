@@ -4,9 +4,16 @@ on:
   pull_request:
     branches: [main]
 
+# issue-84：默认 queue=single 时，新排队会取消并顶替同组旧 pending，再叠加
+# cancel-in-progress 连环取消在跑/排队 attempt（样本：2026-08-14 单分支 53 次
+# cancel-in-progress）。queue: max（上限 100，FIFO）+ 不取消 → 每次 push 的
+# attempt 排队逐个执行，策略上不存在取消路径；排队（created_at）与执行
+# （run_started_at）时间分开可见。queue: max 与 cancel-in-progress: true 互斥
+# （workflow 校验错误），故必须保持 false。
 concurrency:
   group: pr-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 
 env:
   # 剥离 IDE/代理会话变量，避免 safe-delete 钩子拦截 checkout 清理临时目录
