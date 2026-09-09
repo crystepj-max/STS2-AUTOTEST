@@ -195,21 +195,14 @@ def _start_orchestrator_session(
     except Exception as exc:
         logger.warning("Adapter cleanup before bootstrap retry failed: %s", exc)
 
-    if _is_agent_enabled():
-        logger.info("Agent adapter mode: bootstrapping Steam/game before waiting for agent service")
-        if not _bootstrap_runtime():
-            logger.info(
-                "Runtime bootstrap did not start the game; waiting for an external launch"
-            )
-        if not _wait_for_adapter_ready(loop, adapter):
-            return False
-    else:
-        if not _bootstrap_runtime():
-            logger.info(
-                "Runtime bootstrap did not start the game; waiting for an external launch"
-            )
-        if not _wait_for_adapter_ready(loop, adapter):
-            return False
+    # bootstrap 与等待逻辑对两种适配器模式完全一致（历史上按模式分支，
+    # 但两分支函数体早已逐字相同——漂移中的死接缝，合并为单一路径）。
+    if not _bootstrap_runtime():
+        logger.info(
+            "Runtime bootstrap did not start the game; waiting for an external launch"
+        )
+    if not _wait_for_adapter_ready(loop, adapter):
+        return False
 
     return loop.run_until_complete(orch.start_session())
 

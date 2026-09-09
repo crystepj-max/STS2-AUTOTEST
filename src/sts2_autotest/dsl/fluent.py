@@ -177,7 +177,7 @@ class FluentBuilder:
             )
 
         loop, owns_loop = self._resolve_loop()
-        previous_hook = self._orchestrator._action_trace_hook
+        previous_hook = self._orchestrator.action_trace_hook
         try:
             start_failures = self._check_start_state(loop)
             if start_failures:

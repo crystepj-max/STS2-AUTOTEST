@@ -7,13 +7,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import cast, Any
 
 from sts2_autotest.adapters.base import ActionResult, GameAdapterProtocol
 from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
-from sts2_autotest.common.types import SessionStatus
+from sts2_autotest.common.types import CaptureResult, SessionStatus
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.data_validator import validate_game_state
 from sts2_autotest.core.evidence_hooks import EvidenceHooks, StubEvidenceHooks
@@ -187,6 +187,32 @@ class TestOrchestrator:
         self._action_trace_hook: Callable[
             [ActionDescriptor, GameState, GameState, ActionResult], None
         ] | None = None
+
+    @property
+    def current_screen(self) -> GameScreen:
+        """最近一次状态同步后的游戏屏幕（DSL 错误留证等公开读取口）。"""
+        return self._current_screen
+
+    @property
+    def action_trace_hook(self) -> "Callable[..., Any] | None":
+        """当前动作轨迹钩子（与 set_action_trace_hook 成对的公开读取口）。"""
+        return self._action_trace_hook
+
+    def log_state_on_failure(self, case_id: str) -> None:
+        """失败留证：记录当前屏幕并收集过滤日志（无收集器时降级 no-op）。"""
+        logger.info(
+            "[%s] Error handler: current screen = %s", case_id, self._current_screen.value
+        )
+        collect = getattr(self.evidence, "collect_on_failure_logs", None)
+        if callable(collect):
+            collect(case_id)
+
+    def capture_failure_screenshot(self, case_id: str) -> "CaptureResult | None":
+        """失败留证：截取带校验的截图；证据钩子不支持时返回 None。"""
+        capture = getattr(self.evidence, "capture_failure_screenshot", None)
+        if not callable(capture):
+            return None
+        return cast("CaptureResult | None", capture(case_id))
 
     def set_action_trace_hook(
         self,
