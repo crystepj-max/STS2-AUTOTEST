@@ -22,6 +22,7 @@ from typing import Any
 from sts2_autotest.adapters.base import ActionResult
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
+from sts2_autotest.common.spec_models import parse_start_state_requirements
 from sts2_autotest.core.orchestrator import TestOrchestrator
 from sts2_autotest.dsl.assertions import (
     AssertionFn,
@@ -78,6 +79,11 @@ class StartStateRequirements:
     screen: GameScreen | None = None
     allowed_screens: tuple[GameScreen, ...] = ()
     needs_travelable_node: bool = False
+    # 豁免标志：生成期由 common.spec_models.parse_start_state_requirements
+    # 从规格文本解析得到；运行时不再对文本做正则判定。
+    exempt_neow_resolved: bool = False
+    exempt_first_battle_finished: bool = False
+    exempt_recoverable_reward: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,11 +120,27 @@ class FluentBuilder:
         self._execute_actions: list[ActionDescriptor] = []
         self._error_handlers: list[HandlerFn] = []
         self._start_state_text: str = ""
+        self._start_state_requirements: StartStateRequirements | None = None
         self._settle_timeout = settle_timeout
         self._settle_poll_interval = settle_poll_interval
 
-    def require_start_state(self, start_state: str) -> FluentBuilder:
+    def require_start_state(
+        self,
+        start_state: str,
+        *,
+        requirements: dict[str, Any] | None = None,
+    ) -> FluentBuilder:
+        """声明启动状态要求。
+
+        ``requirements`` 是生成期由
+        ``common.spec_models.parse_start_state_requirements`` 解析出的结构化
+        结果（推荐路径：运行时不再对文本做正则）；缺省时回退到运行时文本
+        解析（手工测试兼容路径）。
+        """
         self._start_state_text = start_state.strip()
+        self._start_state_requirements = (
+            _requirements_from_payload(requirements) if requirements is not None else None
+        )
         return self
 
     def setup(self, *actions: ActionDescriptor) -> FluentBuilder:
@@ -427,27 +449,79 @@ class FluentBuilder:
         available = loop.run_until_complete(
             self._orchestrator.adapter.get_available_actions()
         )
-        requirements = _parse_start_state_requirements(self._start_state_text)
+        structured = self._start_state_requirements
+        if structured is not None:
+            requirements = structured
+        else:
+            requirements = _parse_start_state_requirements(self._start_state_text)
         failures: list[str] = []
+
+        if structured is not None:
+            # 生成期结构化路径：豁免标志已在生成期解析，运行时不读文本。
+            exempt_recoverable_reward = (
+                state.screen == GameScreen.CARD_REWARD
+                and structured.exempt_recoverable_reward
+            )
+            exempt_neow_resolved = (
+                structured.screen == GameScreen.EVENT
+                and state.screen
+                in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}
+                and structured.exempt_neow_resolved
+            )
+            exempt_first_battle_finished = (
+                structured.screen == GameScreen.MAP
+                and state.screen == GameScreen.CARD_REWARD
+                and structured.exempt_first_battle_finished
+            )
+            exempt_first_battle_allowed = (
+                state.screen == GameScreen.CARD_REWARD
+                and GameScreen.MAP in structured.allowed_screens
+                and GameScreen.COMBAT in structured.allowed_screens
+                and structured.exempt_first_battle_finished
+            )
+            exempt_pending_event_first_battle = (
+                state.screen == GameScreen.EVENT
+                and structured.exempt_first_battle_finished
+                and (
+                    structured.screen == GameScreen.MAP
+                    or (
+                        GameScreen.MAP in structured.allowed_screens
+                        and GameScreen.COMBAT in structured.allowed_screens
+                    )
+                )
+            )
+        else:
+            # 文本回退路径（手工测试兼容）：行为与历史正则谓词逐位一致。
+            text = self._start_state_text
+            exempt_recoverable_reward = _is_recoverable_reward_start(
+                text, state.screen
+            )
+            exempt_neow_resolved = requirements.screen is not None and (
+                _is_already_resolved_neow_start(
+                    text, requirements.screen, state.screen
+                )
+            )
+            exempt_first_battle_finished = requirements.screen is not None and (
+                _is_already_finished_first_battle_start(
+                    text, requirements.screen, state.screen
+                )
+            )
+            exempt_first_battle_allowed = _is_already_finished_first_battle_allowed_start(
+                text, requirements.allowed_screens, state.screen
+            )
+            exempt_pending_event_first_battle = _is_pending_event_before_first_battle_start(
+                text,
+                requirements.allowed_screens,
+                requirements.screen,
+                state.screen,
+            )
 
         if (
             requirements.allowed_screens
             and state.screen not in requirements.allowed_screens
-            and not _is_recoverable_reward_start(
-                self._start_state_text,
-                state.screen,
-            )
-            and not _is_already_finished_first_battle_allowed_start(
-                self._start_state_text,
-                requirements.allowed_screens,
-                state.screen,
-            )
-            and not _is_pending_event_before_first_battle_start(
-                self._start_state_text,
-                requirements.allowed_screens,
-                None,
-                state.screen,
-            )
+            and not exempt_recoverable_reward
+            and not exempt_first_battle_allowed
+            and not exempt_pending_event_first_battle
         ):
             allowed = ", ".join(screen.value for screen in requirements.allowed_screens)
             failures.append(
@@ -459,22 +533,9 @@ class FluentBuilder:
         elif (
             requirements.screen is not None
             and state.screen != requirements.screen
-            and not _is_already_resolved_neow_start(
-                self._start_state_text,
-                requirements.screen,
-                state.screen,
-            )
-            and not _is_already_finished_first_battle_start(
-                self._start_state_text,
-                requirements.screen,
-                state.screen,
-            )
-            and not _is_pending_event_before_first_battle_start(
-                self._start_state_text,
-                (),
-                requirements.screen,
-                state.screen,
-            )
+            and not exempt_neow_resolved
+            and not exempt_first_battle_finished
+            and not exempt_pending_event_first_battle
         ):
             failures.append(
                 "start state is not satisfied: "
@@ -486,12 +547,7 @@ class FluentBuilder:
         if (
             requirements.needs_travelable_node
             and state.screen not in {GameScreen.COMBAT, GameScreen.CARD_REWARD}
-            and not _is_pending_event_before_first_battle_start(
-                self._start_state_text,
-                requirements.allowed_screens,
-                requirements.screen,
-                state.screen,
-            )
+            and not exempt_pending_event_first_battle
             and "choose_map_node" not in available
         ):
             failures.append(
@@ -861,52 +917,34 @@ def _int_or_none(value: Any) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 
-_SCREEN_PATTERNS: list[tuple[re.Pattern[str], GameScreen]] = [
-    (re.compile(r"MAIN_MENU|\u4e3b\u83dc\u5355"), GameScreen.MAIN_MENU),
-    (
-        re.compile(r"CHARACTER_SELECT|\u89d2\u8272\u9009\u62e9"),
-        GameScreen.CHARACTER_SELECT,
-    ),
-    (re.compile(r"\bMAP\b|\u5730\u56fe"), GameScreen.MAP),
-    (re.compile(r"\bCOMBAT\b|\u6218\u6597"), GameScreen.COMBAT),
-    (re.compile(r"\bEVENT\b|\u4e8b\u4ef6"), GameScreen.EVENT),
-    (
-        re.compile(r"CARD_REWARD|\u5361\u724c\u5956\u52b1|\u5956\u52b1\u754c\u9762"),
-        GameScreen.CARD_REWARD,
-    ),
-    (
-        re.compile(r"RELIC_REWARD|\u9057\u7269\u5956\u52b1"),
-        GameScreen.RELIC_REWARD,
-    ),
-    (re.compile(r"GAME_OVER"), GameScreen.GAME_OVER),
-    (re.compile(r"VICTORY"), GameScreen.VICTORY),
-    (re.compile(r"UNKNOWN"), GameScreen.UNKNOWN),
-]
+# 屏幕识别正则已收敛至 common.spec_models._START_STATE_SCREEN_PATTERNS。
 
 
 def _parse_start_state_requirements(text: str) -> StartStateRequirements:
-    matched_screens = tuple(
-        candidate for pattern, candidate in _SCREEN_PATTERNS if pattern.search(text)
-    )
-    uses_screen_list = "/" in text or len(matched_screens) > 1
-    screen = None if uses_screen_list else next(iter(matched_screens), None)
-    allowed_screens = matched_screens if uses_screen_list else ()
-
-    needs_travelable_node = (
-        "\u8282\u70b9" in text
-        and (
-            "\u53ef\u8fbe" in text
-            or "\u5230\u8fbe" in text
-            or "travelable" in text.lower()
-        )
-    )
+    """文本回退路径：委托 common 单源解析并转换为 GameScreen 枚举。"""
+    raw = parse_start_state_requirements(text)
     return StartStateRequirements(
-        screen=screen,
-        allowed_screens=allowed_screens,
-        needs_travelable_node=needs_travelable_node,
+        screen=GameScreen(raw["screen"]) if raw["screen"] else None,
+        allowed_screens=tuple(GameScreen(s) for s in raw["allowed_screens"]),
+        needs_travelable_node=raw["needs_travelable_node"],
+        exempt_neow_resolved=raw["exempt_neow_resolved"],
+        exempt_first_battle_finished=raw["exempt_first_battle_finished"],
+        exempt_recoverable_reward=raw["exempt_recoverable_reward"],
     )
 
 
+def _requirements_from_payload(payload: dict[str, Any]) -> StartStateRequirements:
+    """生成期结构化结果 → StartStateRequirements。"""
+    return StartStateRequirements(
+        screen=GameScreen(payload["screen"]) if payload.get("screen") else None,
+        allowed_screens=tuple(
+            GameScreen(s) for s in (payload.get("allowed_screens") or [])
+        ),
+        needs_travelable_node=bool(payload.get("needs_travelable_node")),
+        exempt_neow_resolved=bool(payload.get("exempt_neow_resolved")),
+        exempt_first_battle_finished=bool(payload.get("exempt_first_battle_finished")),
+        exempt_recoverable_reward=bool(payload.get("exempt_recoverable_reward")),
+    )
 def _is_already_resolved_neow_start(
     text: str,
     required_screen: GameScreen,

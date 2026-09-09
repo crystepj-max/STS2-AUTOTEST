@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
+from sts2_autotest.common.spec_models import parse_start_state_requirements
 
 _ASSERTION_IMPORTS = (
     "advance_dialogue",
@@ -358,8 +359,11 @@ class CodeGenerator:
             f'        define("{spec.id}", autotest, _session_loop)'
         )
         if spec.start_state:
+            req_payload = parse_start_state_requirements(spec.start_state)
+            req_literal = repr(dict(sorted(req_payload.items())))
             lines.append(
-                f'        .require_start_state("""{spec.start_state}""")'
+                f"        .require_start_state({json.dumps(spec.start_state, ensure_ascii=False)}, "
+                f"requirements={req_literal})"
             )
         lines.append("        .setup(")
         for step in setup_steps:
@@ -449,8 +453,11 @@ class CodeGenerator:
             lines.append(f"    {result_var} = (")
             lines.append(f'        define("{spec.id}", autotest, _session_loop)')
             if spec.start_state:
+                req_payload = parse_start_state_requirements(spec.start_state)
+                req_literal = repr(dict(sorted(req_payload.items())))
                 lines.append(
-                    f'        .require_start_state("""{spec.start_state}""")'
+                    f"        .require_start_state({json.dumps(spec.start_state, ensure_ascii=False)}, "
+                    f"requirements={req_literal})"
                 )
             lines.append("        .setup(")
             for step in (spec.steps[:-1] if len(spec.steps) > 1 else []):
