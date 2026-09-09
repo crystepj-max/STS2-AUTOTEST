@@ -1,8 +1,11 @@
-"""Tests for cli/main.py `_run_journey_foreground` — 真实耗时与失败留证。
+"""Tests for core/run_executor.py — 旅程任务运行时的 interface 行为。
 
-验证“新局进入首战”任务入口：
+验证任务运行时的公开 interface（JourneyExecutor / run_journey_worker）：
 1. 成功时 run-result.json 含真实 duration_ms / status_trajectory / final_state / task_id；
-2. 失败时 journey-failure.json 含卡屏页面 / 最后操作 / 原因 / 轨迹 / 最后状态，且耗时 > 0。
+2. 失败时 journey-failure.json 含卡屏页面 / 最后操作 / 原因 / 轨迹 / 最后状态，且耗时 > 0；
+3. 预检阻塞以 exit_code=2 收场且不带病进旅程；
+4. 观测点注入（cancel_check）驱动取消收尾管线；
+5. run_id=None 的匿名执行零持久化副作用。
 """
 
 from __future__ import annotations
@@ -14,6 +17,15 @@ from dataclasses import dataclass
 import pytest
 
 from sts2_autotest.adapters.base import ActionResult
+from sts2_autotest.core.run_executor import (
+    ExecutorEnv,
+    JourneyExecutor,
+    JourneyRequest,
+    RunObservers,
+    _build_cancel_result,
+    _wait_for_stable_api_state,
+    run_journey_worker,
+)
 
 
 @dataclass
@@ -116,26 +128,25 @@ def _no_screenshots(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("STS2_AUTOTEST_EVIDENCE", "none")
 
 
+def _executor_env(tmp_path: pytest.FixtureRequest) -> ExecutorEnv:
+    return ExecutorEnv(evidence_root=tmp_path / "evidence", run_root=tmp_path / "runs")
+
+
 def test_first_battle_success_writes_real_duration_and_trajectory(
     tmp_path: pytest.FixtureRequest,
 ) -> None:
-    from sts2_autotest.cli.main import _run_journey_foreground
-
     run_id = "test-success-1"
     evidence_dir = tmp_path / "evidence"
-    import os
 
-    os.environ["STS2_AUTOTEST_EVIDENCE_DIR"] = str(evidence_dir)
-
-    rc = _run_journey_foreground(
+    outcome = JourneyExecutor(
         _SuccessAdapter(),
-        journey="first_battle",
-        character_id="IRONCLAD",
-        timeout=10.0,
+        JourneyRequest(journey="first_battle", character_id="IRONCLAD", timeout=10.0),
         run_id=run_id,
-    )
+        env=_executor_env(tmp_path),
+    ).execute()
 
-    assert rc == 0
+    assert outcome.exit_code == 0
+    assert outcome.status == "PASSED"
     result_path = evidence_dir / run_id / "reports" / "run-result.json"
     assert result_path.is_file()
     payload = json.loads(result_path.read_text(encoding="utf-8"))
@@ -157,23 +168,17 @@ def test_first_battle_success_writes_real_duration_and_trajectory(
 def test_first_battle_failure_writes_journey_failure_with_evidence(
     tmp_path: pytest.FixtureRequest,
 ) -> None:
-    from sts2_autotest.cli.main import _run_journey_foreground
-
     run_id = "test-failure-1"
     evidence_dir = tmp_path / "evidence"
-    import os
 
-    os.environ["STS2_AUTOTEST_EVIDENCE_DIR"] = str(evidence_dir)
-
-    rc = _run_journey_foreground(
+    outcome = JourneyExecutor(
         _StuckAdapter(),
-        journey="first_battle",
-        character_id="IRONCLAD",
-        timeout=0.3,
+        JourneyRequest(journey="first_battle", character_id="IRONCLAD", timeout=0.3),
         run_id=run_id,
-    )
+        env=_executor_env(tmp_path),
+    ).execute()
 
-    assert rc == 1
+    assert outcome.exit_code == 1
     # run-result.json：失败状态 + 真实耗时 + 失败留证
     result_path = evidence_dir / run_id / "reports" / "run-result.json"
     assert result_path.is_file()
@@ -204,6 +209,106 @@ def test_first_battle_failure_writes_journey_failure_with_evidence(
     ]
 
 
+def test_precheck_blocked_returns_exit_code_2_without_touching_journey(
+    tmp_path: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """预检阻塞：rc=2、run-result 写 BLOCKED_ENVIRONMENT，绝不带病进旅程。"""
+    import sts2_autotest.core.run_executor as run_executor
+
+    monkeypatch.setattr(
+        run_executor, "_run_environment_precheck", lambda _adapter: "GAME_CONTROL_UNAVAILABLE"
+    )
+    evidence_dir = tmp_path / "evidence"
+
+    outcome = JourneyExecutor(
+        object(),  # type: ignore[arg-type]  # 预检在触碰 adapter 前就返回，无需真实适配器
+        JourneyRequest(
+            journey="first_battle", character_id="IRONCLAD", timeout=1.0, precheck=True
+        ),
+        run_id="test-precheck-gate",
+        env=_executor_env(tmp_path),
+        lifecycle_factory=lambda adapter, root: None,
+    ).execute()
+
+    assert outcome.exit_code == 2
+    assert outcome.status == "BLOCKED_ENVIRONMENT"
+    payload = json.loads(
+        (evidence_dir / "test-precheck-gate" / "reports" / "run-result.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["status"] == "BLOCKED_ENVIRONMENT"
+    assert payload["phase"] == "precheck"
+
+
+def test_cancel_observer_triggers_cancel_recovery_pipeline(
+    tmp_path: pytest.FixtureRequest,
+) -> None:
+    """cancel_check 观测点注入：取消触发完整收尾管线并经 finish_cancel 置终态。
+
+    lifecycle 不可用（factory 注入 None）时恢复按「清理失败」归类为
+    FAILED_PLATFORM，与生产 fallback 行为一致。
+    """
+    from sts2_autotest.core.run_service import RunRequest, RunStore
+
+    run_root = tmp_path / "runs"
+    store = RunStore(run_root)
+    store.create(RunRequest(), run_id="cancel-obs-1")
+    store.update("cancel-obs-1", status="RUNNING", phase="RUNNING")
+
+    outcome = JourneyExecutor(
+        _SuccessAdapter(),
+        JourneyRequest(journey="first_battle", character_id="IRONCLAD", timeout=10.0),
+        run_id="cancel-obs-1",
+        env=_executor_env(tmp_path),
+        lifecycle_factory=lambda adapter, root: None,
+        observers=RunObservers(cancel_check=lambda: True),
+    ).execute()
+
+    assert outcome.exit_code == 1
+    assert outcome.status == "FAILED_PLATFORM"
+    record = store.load("cancel-obs-1")
+    assert record is not None and record.is_terminal
+
+
+def test_run_id_none_writes_no_persistent_files(tmp_path: pytest.FixtureRequest) -> None:
+    """run_id=None（匿名执行）：成功但不写 run-result.json、不碰 RunStore。"""
+    evidence_dir = tmp_path / "evidence"
+    run_root = tmp_path / "runs"
+
+    outcome = JourneyExecutor(
+        _SuccessAdapter(),
+        JourneyRequest(journey="first_battle", character_id="IRONCLAD", timeout=10.0),
+        env=ExecutorEnv(evidence_root=evidence_dir, run_root=run_root),
+    ).execute()
+
+    assert outcome.exit_code == 0
+    assert outcome.status == "PASSED"
+    assert outcome.evidence_dir is None
+    assert not run_root.exists()
+    assert not evidence_dir.exists() or not any(evidence_dir.rglob("run-result.json"))
+
+
+def test_worker_full_flow_completes_record(tmp_path: pytest.FixtureRequest) -> None:
+    """run_journey_worker 全流程：排队 → 阶段位 → 执行 → complete_record 收口。"""
+    from sts2_autotest.core.run_service import RunRequest, RunStore
+
+    run_root = tmp_path / "runs"
+    store = RunStore(run_root)
+    store.create(RunRequest(), run_id="worker-1")
+
+    rc = run_journey_worker(
+        _SuccessAdapter,
+        JourneyRequest(journey="first_battle", character_id="IRONCLAD", timeout=10.0),
+        "worker-1",
+        env=_executor_env(tmp_path),
+    )
+
+    assert rc == 0
+    record = store.load("worker-1")
+    assert record is not None and record.is_terminal
+
+
 # ── 截图前的状态稳定等待 ──
 
 
@@ -232,8 +337,6 @@ class _FlappingAdapter:
 
 
 def test_wait_for_stable_api_state_returns_state_after_stabilizes() -> None:
-    from sts2_autotest.cli.main import _wait_for_stable_api_state
-
     adapter = _FlappingAdapter(
         [
             {"screen": "MAP", "map": {"is_traveling": True}},
@@ -254,8 +357,6 @@ def test_wait_for_stable_api_state_returns_state_after_stabilizes() -> None:
 
 
 def test_wait_for_stable_api_state_keeps_last_read_on_timeout() -> None:
-    from sts2_autotest.cli.main import _wait_for_stable_api_state
-
     # 状态永远变化（计数器递增），等待必须在超时后用最后一次读取返回。
     adapter = _FlappingAdapter(
         [{"screen": "COMBAT", "turn": turn} for turn in range(50)]
@@ -271,16 +372,13 @@ def test_wait_for_stable_api_state_keeps_last_read_on_timeout() -> None:
 
 
 def test_success_path_captures_final_state_screenshot(
-    tmp_path: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+    tmp_path: pytest.FixtureRequest,
 ) -> None:
     """成功路径必须额外落一张 FINAL_ 前缀的终态截图。
 
     API 状态可能先于画面翻页（第二章 MAP 截图曾拍到事件页）；旅程结束后的
     延长 settle 截图是与最终状态一致的视觉凭证。
     """
-    import sts2_autotest.core.evidence_hooks as hooks_module
-    from sts2_autotest.cli.main import _run_journey_foreground
-
     captured: list[tuple[str, dict]] = []
 
     class _FakeEvidence:
@@ -299,21 +397,15 @@ def test_success_path_captures_final_state_screenshot(
         def capture_state(self, case_id: str, state: dict) -> None:
             captured.append((case_id, state))
 
-    monkeypatch.setattr(hooks_module, "build_evidence_hooks", lambda *a, **k: _FakeEvidence())
-
-    import os
-
-    os.environ["STS2_AUTOTEST_EVIDENCE_DIR"] = str(tmp_path / "evidence")
-
-    rc = _run_journey_foreground(
+    outcome = JourneyExecutor(
         _SuccessAdapter(),
-        journey="first_battle",
-        character_id="IRONCLAD",
-        timeout=10.0,
+        JourneyRequest(journey="first_battle", character_id="IRONCLAD", timeout=10.0),
         run_id="test-final-shot",
-    )
+        env=_executor_env(tmp_path),
+        evidence_factory=lambda root, pack_id: _FakeEvidence(),
+    ).execute()
 
-    assert rc == 0
+    assert outcome.exit_code == 0
     final_shots = [name for name, _state in captured if "_FINAL_" in name]
     assert len(final_shots) == 1
     assert final_shots[0].startswith("journey_first_battle_FINAL_COMBAT_")
@@ -323,7 +415,7 @@ def test_success_path_captures_final_state_screenshot(
 
 
 def _cancel_recovery_dict(**overrides: object) -> dict:
-    """构造与 _recover_main_menu_via_restart 返回值同形状的恢复结果。"""
+    """构造与 recover_main_menu_via_restart 返回值同形状的恢复结果。"""
     base: dict = {
         "target": "MAIN_MENU",
         "recovery_method": "controlled_restart",
@@ -348,7 +440,6 @@ def test_cancel_result_restart_count_promoted_to_report_top_level() -> None:
     「重启次数」卡片在生产路径永不渲染。本测试绑定生产构造函数 + 与 write_result
     相同的顶层展开 + build_report_html 渲染，防止渲染端/生产端再次错配。
     """
-    from sts2_autotest.cli.main import _build_cancel_result
     from sts2_autotest.report_html import build_report_html
 
     cancel_result = _build_cancel_result(
@@ -379,7 +470,6 @@ def test_cancel_result_omits_restart_count_without_real_source() -> None:
 
     与 relaunch_count 同口径：有真实数据源才写、无则不写，禁止编造 0。
     """
-    from sts2_autotest.cli.main import _build_cancel_result
     from sts2_autotest.report_html import build_report_html
 
     cancel_result = _build_cancel_result(

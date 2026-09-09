@@ -109,6 +109,11 @@ def _fingerprint(state: dict[str, Any]) -> str:
     )
 
 
+# 公开别名：跨模块消费者（core/run_executor 等）使用公开名；私有名保留兼容既有引用。
+extract_chapter = _extract_chapter
+state_fingerprint = _fingerprint
+
+
 class GenericJourneys:
     """面向目标的通用游戏流程。"""
 

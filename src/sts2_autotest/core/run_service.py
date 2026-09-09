@@ -643,8 +643,17 @@ def spawn_worker(store: RunStore, record: RunRecord, argv: list[str]) -> int:
     worker_env.pop("CODEBUDDY_SESSION_ID", None)
     worker_env.pop("CLAUDE_SESSION_ID", None)
     try:
+        # 入口分叉：旅程类任务由任务运行时模块自举（排队、阶段位、执行、收口
+        # 都在 run_executor interface 之后，且不加载整个 CLI）；套件类任务仍
+        # 经 cli.main 分派给 orchestrator。旗标协议两侧逐字一致（共用
+        # run_executor.add_journey_arguments 单源定义）。
+        worker_module = (
+            "sts2_autotest.core.run_executor"
+            if "--journey" in argv or "--target-scene" in argv
+            else "sts2_autotest.cli.main"
+        )
         process = subprocess.Popen(
-            [sys.executable, "-m", "sts2_autotest.cli.main", *argv],
+            [sys.executable, "-m", worker_module, *argv],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,

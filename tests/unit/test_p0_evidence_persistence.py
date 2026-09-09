@@ -7,9 +7,9 @@ import shutil
 import zipfile
 from pathlib import Path
 
-from sts2_autotest.cli.main import _write_journey_evidence
 from sts2_autotest.cli.mcp_tools import read_run_report
 from sts2_autotest.core.evidence_hooks import build_evidence_hooks
+from sts2_autotest.core.run_executor import _write_journey_evidence
 from sts2_autotest.core.run_service import RunRequest, RunStore
 from sts2_autotest.evidence.packager import EvidencePackager
 

@@ -517,6 +517,10 @@ class GameLifecycleManager:
             time.sleep(0.3)
         return not self._game_process_present()
 
+    def game_process_present(self) -> bool:
+        """公开探测：游戏进程是否在场（best-effort，含受管与外部进程）。"""
+        return self._game_process_present()
+
     def _game_process_present(self) -> bool:
         """Best-effort detection of a running game process (managed or external)."""
         if self._proc is not None and self._proc.poll() is None:
