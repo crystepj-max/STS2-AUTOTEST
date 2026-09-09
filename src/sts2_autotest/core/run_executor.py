@@ -459,10 +459,16 @@ def _wait_game_gone(lifecycle: Any, *, timeout: float = 30.0) -> None:
 def _force_adapter_state_refresh(adapter: Any) -> None:
     """重启/恢复后强制适配器丢弃状态缓存，以免读到旧画面。
 
-    已知债（CONTEXT.md）：cli_mod 适配器的 ``_cache_stale`` 为私有属性，
-    正解是协议级公开 ``invalidate_cache()``；在收敛前保持 hasattr 保护的
-    原行为。
+    优先走 CliModAdapter 的公开 ``mark_state_stale()``（候选 3 收敛后的
+    公开方法）；对未提供该方法的适配器回退到旧 ``_cache_stale`` 直写。
     """
+    mark_stale = getattr(adapter, "mark_state_stale", None)
+    if callable(mark_stale):
+        try:
+            mark_stale()
+        except Exception:  # noqa: BLE001
+            pass
+        return
     if hasattr(adapter, "_cache_stale"):
         try:
             adapter._cache_stale = True

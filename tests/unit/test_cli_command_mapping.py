@@ -6,10 +6,12 @@
 """
 
 from sts2_autotest.adapters.cli_mod import (
-    _SCREEN_MAP,
     _build_cli_args,
     _filter_state_extra,
     _screen_to_actions,
+)
+from sts2_autotest.adapters.semantics import (
+    SCREEN_NAME_TO_GAME_SCREEN as _SCREEN_MAP,
 )
 from sts2_autotest.common.state import GameScreen
 
