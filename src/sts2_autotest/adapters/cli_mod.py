@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthStatus
+from sts2_autotest.common.types import Capabilities
 from sts2_autotest.adapters.discovery import discover_sts2_cli
 from sts2_autotest.adapters.semantics import (
     SCREEN_NAME_TO_GAME_SCREEN,
@@ -276,6 +277,19 @@ class CliModAdapter:
         return result
 
     # ── public async interface ──────────────────────────────
+
+    @property
+    def capabilities(self) -> Capabilities:
+        """跨 Agent 能力协商：CLI 传输不暴露调试控制台，快速结束战斗不可用。
+
+        与 AgentAdapter.capabilities 对称；调用方从此可以在两个适配器上用
+        同一接口成员读取能力，不再单侧依赖 getattr 鸭子探测。
+        """
+        return Capabilities(
+            supports_multiplayer=False,
+            supports_metadata=False,
+            supports_debug_actions=False,
+        )
 
     def mark_state_stale(self) -> None:
         """丢弃缓存的状态与动作列表（改状态动作后必须调用）。

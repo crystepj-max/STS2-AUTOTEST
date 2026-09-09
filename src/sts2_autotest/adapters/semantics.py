@@ -185,3 +185,34 @@ async def compose_bug_snapshot(
         "available_actions": actions,
         "timestamp": datetime.now(UTC),
     }
+
+
+# ---------------------------------------------------------------------------
+# 动作词表：同一语义动作在两个传输方言中的候选名（按优先级排列）。
+#
+# 导航层「按 available_actions 实际暴露的名字选动作」的逻辑统一引用这些常量；
+# 新增传输方言时在此登记，而不是在导航代码里继续堆 if-chain。
+# ---------------------------------------------------------------------------
+
+# 事件选项：CLI 用 choose_event(index)，Agent 用 choose_event_option(option_index)。
+EVENT_CHOICE_ACTIONS: tuple[str, ...] = ("choose_event", "choose_event_option")
+
+# 回主菜单：不同版本/传输上报的名字不同。
+RETURN_TO_MENU_ACTIONS: tuple[str, ...] = ("return_to_menu", "return_to_main_menu")
+
+# 卡牌奖励跳过：CLI 两个名字按界面形态二选一。
+CARD_REWARD_SKIP_ACTIONS: tuple[str, ...] = ("skip_reward_cards", "reward_skip_card")
+
+# 奖励主界面无人值守推进（收取并离开到地图）。
+REWARD_PROCEED_ACTIONS: tuple[str, ...] = (
+    "collect_rewards_and_proceed",
+    "resolve_rewards",
+    "proceed",
+)
+
+# 事件推进（含 Neow 祝福兜底）：无明确选项时的候选顺序。
+EVENT_ADVANCE_ACTIONS: tuple[str, ...] = (
+    "choose_event",
+    "choose_event_option",
+    "choose_neow_blessing",
+)

@@ -8,6 +8,11 @@ import time
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
+from sts2_autotest.adapters.semantics import (
+    CARD_REWARD_SKIP_ACTIONS,
+    EVENT_CHOICE_ACTIONS,
+)
+
 ActionSpec = tuple[str, dict[str, Any]]
 ActionCallback = Callable[[str, dict[str, Any]], Coroutine[Any, Any, Any]]
 StateGetter = Callable[[], Coroutine[Any, Any, dict[str, Any]]]
@@ -498,10 +503,13 @@ def choose_progress_action(
         if selected_card is not None:
             return selected_card
         # 2) 卡牌奖励子界面：无法识别候选时才跳过
-        if "skip_reward_cards" in actions:
-            return "skip_reward_cards", {}
-        if "reward_skip_card" in actions:
-            return "reward_skip_card", {"type": "card", "nth": 0}
+        skip_action = next(
+            (name for name in CARD_REWARD_SKIP_ACTIONS if name in actions), None
+        )
+        if skip_action == "skip_reward_cards":
+            return skip_action, {}
+        if skip_action == "reward_skip_card":
+            return skip_action, {"type": "card", "nth": 0}
         # 3) 奖励主界面：无人值守推进（收取并离开到地图）
         if "collect_rewards_and_proceed" in actions:
             return "collect_rewards_and_proceed", {}
@@ -559,10 +567,13 @@ def choose_progress_action(
         event = state.get("event") or {}
         options = event.get("options") or []
         if options:
-            if "choose_event" in actions:
-                return "choose_event", {"index": _first_unlocked_option(options)}
-            if "choose_event_option" in actions:
-                return "choose_event_option", {"option_index": _first_unlocked_option(options)}
+            choice_action = next(
+                (name for name in EVENT_CHOICE_ACTIONS if name in actions), None
+            )
+            if choice_action == "choose_event":
+                return choice_action, {"index": _first_unlocked_option(options)}
+            if choice_action == "choose_event_option":
+                return choice_action, {"option_index": _first_unlocked_option(options)}
         if "choose_neow_blessing" in actions:
             return "choose_neow_blessing", {}
 

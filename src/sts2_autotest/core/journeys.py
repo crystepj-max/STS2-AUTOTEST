@@ -14,6 +14,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
+from sts2_autotest.adapters.semantics import (
+    EVENT_ADVANCE_ACTIONS,
+    RETURN_TO_MENU_ACTIONS,
+    REWARD_PROCEED_ACTIONS,
+)
 from sts2_autotest.core.navigation import (
     NavigationBlocked,
     _first_live_enemy,
@@ -346,7 +351,7 @@ class GenericJourneys:
                 return_action = next(
                     (
                         name
-                        for name in ("return_to_menu", "return_to_main_menu")
+                        for name in RETURN_TO_MENU_ACTIONS
                         if name in actions
                     ),
                     None,
@@ -367,11 +372,7 @@ class GenericJourneys:
                     reward_action = next(
                         (
                             name
-                            for name in (
-                                "collect_rewards_and_proceed",
-                                "resolve_rewards",
-                                "proceed",
-                            )
+                            for name in REWARD_PROCEED_ACTIONS
                             if name in actions
                         ),
                         None,
@@ -409,11 +410,8 @@ class GenericJourneys:
                         # 就直接选第一个推进，避免卡在事件页无法回主菜单。
                         event_action = next(
                             (
-                                a for a in (
-                                    "choose_event",
-                                    "choose_event_option",
-                                    "choose_neow_blessing",
-                                ) if a in actions
+                                a for a in EVENT_ADVANCE_ACTIONS
+                                if a in actions
                             ),
                             None,
                         )

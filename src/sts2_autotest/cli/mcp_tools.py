@@ -282,11 +282,10 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
 
 def handle_submit_run(args: dict[str, Any]) -> dict[str, Any]:
     """异步提交统一测试任务，立即返回 run_id。"""
+    from sts2_autotest.core.journeys import TARGET_SCENES
+
     spec_dir = args.get("spec_dir")
-    target_scenes = {
-        "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT",
-        "REST", "SHOP", "CHEST", "CARD_REWARD", "NEXT_ACT",
-    }
+    target_scenes = set(TARGET_SCENES)
     if args.get("target_scene") and str(args["target_scene"]).upper() not in target_scenes:
         raise McpError(INVALID_PARAMS, f"Unsupported target_scene: {args['target_scene']}")
     if args.get("route_policy", "leftmost") not in {"leftmost", "target"}:
