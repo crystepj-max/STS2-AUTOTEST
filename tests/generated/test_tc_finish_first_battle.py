@@ -1,5 +1,6 @@
 import json
-from sts2_autotest.dsl.fluent import define
+
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.dsl.assertions import (
     choose_map_node,
     combat_basic_policy,
@@ -8,7 +9,8 @@ from sts2_autotest.dsl.assertions import (
     no_crash_detected,
     skip_card_reward,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
+
 
 # Given: 已安装并可连接 STS2-Cli-Mod
 # Given: 首次战斗节点可被选择
@@ -16,8 +18,7 @@ def test_tc_finish_first_battle(autotest, _session_loop):
     """完成首次战斗"""
     result = (
         define("TC-FINISH-FIRST-BATTLE", autotest, _session_loop)
-        .require_start_state("""- 当前位于地图界面
-- 存在至少一个可到达的普通战斗节点""")
+        .require_start_state("- 当前位于地图界面\n- 存在至少一个可到达的普通战斗节点", requirements={'allowed_screens': ['MAP', 'COMBAT'], 'exempt_first_battle_finished': True, 'exempt_neow_resolved': False, 'exempt_recoverable_reward': False, 'needs_travelable_node': True, 'screen': None})
         .setup(
             choose_map_node(2, 1),
             enter_combat(),

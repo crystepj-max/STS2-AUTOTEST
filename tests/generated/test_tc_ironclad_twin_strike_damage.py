@@ -28,8 +28,7 @@ def test_tc_ironclad_twin_strike_damage(autotest, _session_loop):
     """战士双重打击伤害验证"""
     result = (
         define("TC-IRONCLAD-TWIN-STRIKE-DAMAGE", autotest, _session_loop)
-        .require_start_state("""- 任意可恢复状态
-- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN""")
+        .require_start_state("- 任意可恢复状态\n- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN", requirements={'allowed_screens': ['MAIN_MENU', 'CHARACTER_SELECT', 'MAP', 'COMBAT', 'EVENT', 'GAME_OVER', 'VICTORY', 'UNKNOWN'], 'exempt_first_battle_finished': False, 'exempt_neow_resolved': False, 'exempt_recoverable_reward': True, 'needs_travelable_node': False, 'screen': None})
         .setup(
             return_to_menu(),
             start_new_run(),

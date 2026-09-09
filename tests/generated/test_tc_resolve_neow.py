@@ -1,12 +1,14 @@
 import json
-from sts2_autotest.dsl.fluent import define
+
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.dsl.assertions import (
     choose_event,
     game_reached_state,
-    no_crash_detected,
     has_travelable_node,
+    no_crash_detected,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
+
 
 # Given: 已安装并可连接 STS2-Cli-Mod
 # Given: 当前事件为开局祝福事件
@@ -14,8 +16,7 @@ def test_tc_resolve_neow(autotest, _session_loop):
     """处理开局祝福事件"""
     result = (
         define("TC-RESOLVE-NEOW", autotest, _session_loop)
-        .require_start_state("""- 已进入新 run
-- 当前位于开局事件界面，且事件可交互""")
+        .require_start_state("- 已进入新 run\n- 当前位于开局事件界面，且事件可交互", requirements={'allowed_screens': [], 'exempt_first_battle_finished': False, 'exempt_neow_resolved': True, 'exempt_recoverable_reward': False, 'needs_travelable_node': False, 'screen': 'EVENT'})
         .setup(
         )
         .execute(
