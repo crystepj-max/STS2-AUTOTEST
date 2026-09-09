@@ -491,3 +491,35 @@ def test_cancel_result_omits_restart_count_without_real_source() -> None:
     payload.update(cancel_result)
     html = build_report_html(payload)
     assert "重启次数" not in html
+
+
+class TestEnvironmentPrecheckTimeout:
+    """LOC-001：预检等待窗上限经 ensure_environment_ready 显式传参（不再强写属性）。"""
+
+    def test_precheck_passes_capped_api_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sts2_autotest.core.run_executor import _run_environment_precheck
+
+        captured: dict[str, object] = {}
+
+        class _Lifecycle:
+            api_timeout = 200.0  # 高于上限 → 预检应截断为 180
+
+            async def ensure_environment_ready(self, *, api_timeout: float | None = None):
+                captured["api_timeout"] = api_timeout
+
+                class _R:
+                    ready = True
+                    reason = None
+
+                return _R()
+
+        monkeypatch.setattr(
+            "sts2_autotest.core.runtime_factory.build_lifecycle_manager",
+            lambda adapter, steam, root: _Lifecycle(),
+        )
+        monkeypatch.setenv("STS2_GAME_DIR", "/tmp/fake-game")
+
+        reason = _run_environment_precheck(object())  # type: ignore[arg-type]
+
+        assert reason is None
+        assert captured["api_timeout"] == 180.0  # min(200, 180) 上限截断生效

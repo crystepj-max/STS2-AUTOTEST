@@ -1043,15 +1043,19 @@ def _run_environment_precheck(adapter: GameAdapterProtocol) -> str | None:
     # 恢复拉起改用 ``open <bundle>``（见 lifecycle.GameLifecycleManager.launch），
     # macOS 上可稳定拉起、约 18s 到达可控主菜单；因此放宽等待窗口，给刚拉起的
     # 游戏留出初始化时间（首帧常为 UNKNOWN，wait_for_controllable 会等到真正屏幕）。
+    # 预检等待窗上限 180s：给刚拉起的游戏留足初始化时间（首帧常为 UNKNOWN）。
+    # 历史上经属性强写（lifecycle.api_timeout = ...）实现，现显式传参，语义等价。
     try:
-        lifecycle.api_timeout = min(float(getattr(lifecycle, "api_timeout", 150.0)), 180.0)
+        precheck_api_timeout = min(float(getattr(lifecycle, "api_timeout", 150.0)), 180.0)
     except (TypeError, ValueError):
-        lifecycle.api_timeout = 180.0
+        precheck_api_timeout = 180.0
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        readiness = loop.run_until_complete(lifecycle.ensure_environment_ready())
+        readiness = loop.run_until_complete(
+            lifecycle.ensure_environment_ready(api_timeout=precheck_api_timeout)
+        )
     except Exception as exc:  # noqa: BLE001 - 预检失败不得中断，归类为环境阻塞
         return f"PRECHECK_ERROR:{exc!r}"
     finally:

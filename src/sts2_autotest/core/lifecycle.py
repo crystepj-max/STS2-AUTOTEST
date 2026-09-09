@@ -615,6 +615,7 @@ class GameLifecycleManager:
         max_recoveries: int = 1,
         port_release_timeout: float | None = None,
         gui_check: Callable[[], bool] | None = None,
+        api_timeout: float | None = None,
     ) -> EnvironmentReadiness:
         """Verify the game is controllable; if not, perform bounded recovery.
 
@@ -670,7 +671,9 @@ class GameLifecycleManager:
         # 把慢启动误判为崩溃，触发一次无谓的硬重启。先给足完整启动窗口等其可控，
         # 超时（确属坏掉）才落入有界恢复终止+单次重拉。
         if pre_process:
-            if await self._wait_until_ready(self.api_timeout):
+            if await self._wait_until_ready(
+                self.api_timeout if api_timeout is None else float(api_timeout)
+            ):
                 ok, reason, checks = await self._probe_ready()
                 pre_process = self._game_process_present()
                 if ok:
@@ -713,7 +716,9 @@ class GameLifecycleManager:
                     detail=f"launch failed: {exc!r}",
                 )
             # Wait for the game to reach a controllable screen (not just "up").
-            if not await self.wait_for_controllable():
+            if not await self.wait_for_controllable(
+                self.api_timeout if api_timeout is None else float(api_timeout)
+            ):
                 reason = (
                     EnvironmentBlockReason.GAME_PROCESS_STALE
                     if pre_process
