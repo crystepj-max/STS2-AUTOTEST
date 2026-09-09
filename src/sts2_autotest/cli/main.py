@@ -821,51 +821,8 @@ def _run_store() -> Any:
     return RunStore(os.environ.get("STS2_AUTOTEST_RUN_ROOT", "tests/output/.runs"))
 
 
-def _child_argv(args: Any, run_id: str) -> list[str]:
-    """Rebuild a stable foreground command for a detached worker."""
-    argv = ["run"]
-    if getattr(args, "all", False):
-        argv.append("--all")
-    if getattr(args, "cases", None):
-        argv.extend(["--cases", *args.cases])
-    if getattr(args, "suite", None):
-        argv.extend(["--suite", args.suite])
-    if getattr(args, "failed", False):
-        argv.append("--failed")
-    if getattr(args, "resume", False):
-        argv.append("--resume")
-    if getattr(args, "no_resume", False):
-        argv.append("--no-resume")
-    for name, flag in (
-        ("timeout", "--timeout"),
-        ("project", "--project"),
-        ("spec_dir", "--spec-dir"),
-        ("output_dir", "--output-dir"),
-        ("adapter", "--adapter"),
-        ("evidence", "--evidence"),
-        ("idempotency_key", "--idempotency-key"),
-    ):
-        value = getattr(args, name, None)
-        if value is not None:
-            argv.extend([flag, str(value)])
-    if getattr(args, "journey", None):
-        argv.extend(["--journey", str(args.journey)])
-    if getattr(args, "character_id", None):
-        argv.extend(["--character-id", str(args.character_id)])
-    if getattr(args, "target_scene", None):
-        argv.extend(["--target-scene", str(args.target_scene)])
-    if getattr(args, "route_policy", None):
-        argv.extend(["--route-policy", str(args.route_policy)])
-    if getattr(args, "combat_mode", None):
-        argv.extend(["--combat-mode", str(args.combat_mode)])
-    if getattr(args, "card_id", None):
-        argv.extend(["--card-id", str(args.card_id)])
-    argv.extend(["--internal-run-id", run_id])
-    return argv
-
-
 def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> int:
-    from sts2_autotest.core.run_service import RunRequest, spawn_worker
+    from sts2_autotest.core.run_service import RunRequest, submit_run
 
     store = _run_store()
     request = request_override or RunRequest(
@@ -885,30 +842,20 @@ def _submit_detached_run(args: Any, *, request_override: Any | None = None) -> i
             "route_policy": getattr(args, "route_policy", "leftmost"),
             "combat_mode": getattr(args, "combat_mode", "traversal"),
             **({"card_id": getattr(args, "card_id")} if getattr(args, "card_id", None) else {}),
+            # 仅 CLI 侧存在的旗标经 metadata 进入 compose_worker_argv。
+            **({"all": True} if getattr(args, "all", False) else {}),
+            **({"failed": True} if getattr(args, "failed", False) else {}),
+            **({"no_resume": True} if getattr(args, "no_resume", False) else {}),
+            **({"output_dir": getattr(args, "output_dir")} if getattr(args, "output_dir", None) else {}),
         },
     )
-    record = store.create(request)
-    if record.request is not request:
-        print(json.dumps({"run_id": record.run_id, "status": record.status}, ensure_ascii=False))
-        return 0
-    request.argv = _child_argv(args, record.run_id)
-    store.update(record.run_id, request=request)
-    # 修复四：恢复任务在新 run_id 上显式记录继承来源。
-    resumed_from = request.metadata.get("resumed_from")
-    if resumed_from:
-        store.update(record.run_id, resumed_from=str(resumed_from))
-    try:
-        spawn_worker(store, record, request.argv)
-    except OSError as exc:
-        store.update(
-            record.run_id,
-            status="FAILED_PLATFORM",
-            phase="COMPLETED",
-            finished_at=datetime_now_iso(),
-            message=f"Cannot start detached worker: {exc}",
-        )
+    record, outcome = submit_run(store, request)
+    if outcome == "spawn_failed":
         print(json.dumps({"run_id": record.run_id, "status": "FAILED_PLATFORM"}))
         return 1
+    if outcome == "reused":
+        print(json.dumps({"run_id": record.run_id, "status": record.status}, ensure_ascii=False))
+        return 0
     print(json.dumps({"run_id": record.run_id, "status": "QUEUED"}, ensure_ascii=False))
     return 0
 
@@ -937,7 +884,11 @@ def cancel_cmd(args: Any) -> int:
 
 
 def resume_run_cmd(args: Any) -> int:
-    from sts2_autotest.core.run_service import RunRequest, resume_precheck
+    from sts2_autotest.core.run_service import (
+        build_resume_request,
+        resume_precheck,
+        submit_run,
+    )
 
     store = _run_store()
     old = store.load(args.run_id)
@@ -955,46 +906,13 @@ def resume_run_cmd(args: Any) -> int:
             "reason": reason,
         }, ensure_ascii=False))
         return 1
-    argv = [item for item in old.request.argv if item not in ("--resume", "--detach")]
-    # The old request can predate persistent runs; use its structured fields then.
-    if not argv:
-        argv = ["run", "--all"]
-    request = RunRequest(
-        project=old.request.project,
-        suite=old.request.suite,
-        cases=list(old.request.cases),
-        mode="resume",
-        timeout=old.request.timeout,
-        adapter=old.request.adapter,
-        spec_dir=old.request.spec_dir,
-        evidence=old.request.evidence,
-        metadata={**old.request.metadata, "resumed_from": old.run_id},
-    )
-    from argparse import Namespace
-
-    # Reuse the normal detached submission while preserving the original request.
-    ns = Namespace(
-        project=request.project,
-        suite=request.suite,
-        cases=request.cases,
-        all="--all" in argv,
-        failed=False,
-        resume=True,
-        no_resume=False,
-        timeout=request.timeout,
-        spec_dir=request.spec_dir,
-        output_dir=None,
-        adapter=request.adapter,
-        journey=request.metadata.get("journey"),
-        character_id=request.metadata.get("character_id", "IRONCLAD"),
-        target_scene=request.metadata.get("target_scene"),
-        route_policy=request.metadata.get("route_policy", "leftmost"),
-        combat_mode=request.metadata.get("combat_mode", "traversal"),
-        card_id=request.metadata.get("card_id"),
-        evidence=request.evidence,
-        idempotency_key=None,
-    )
-    return _submit_detached_run(ns, request_override=request)
+    record, outcome = submit_run(store, build_resume_request(old))
+    if outcome == "spawn_failed":
+        print(json.dumps({"run_id": record.run_id, "status": "FAILED_PLATFORM"}))
+        return 1
+    status = record.status if outcome == "reused" else "QUEUED"
+    print(json.dumps({"run_id": record.run_id, "status": status}, ensure_ascii=False))
+    return 0
 
 
 def run_cmd(args: Any) -> int:
@@ -1569,11 +1487,10 @@ def _report_from_store(evidence_dir: Path, run_id: str, store_run: Path) -> int:
     status = rec.get("status")
     result = rec.get("result") or {}
     # 由压缩包路径派生证据包地址（真实存在，可核验），但不臆造运行期字段。
-    artifact_candidates = sorted(
-        path for path in (evidence_dir / "artifacts").glob(f"{run_id}_*.zip")
-        if path.is_file()
-    ) if (evidence_dir / "artifacts").is_dir() else []
-    artifact_path = str(artifact_candidates[-1].resolve()) if artifact_candidates else None
+    from sts2_autotest.core.run_service import resolve_artifact_path
+
+    resolved_artifact = resolve_artifact_path(evidence_dir, run_id)
+    artifact_path = str(resolved_artifact) if resolved_artifact else None
     payload: dict[str, Any] = {
         "run_id": run_id,
         "task_id": run_id,

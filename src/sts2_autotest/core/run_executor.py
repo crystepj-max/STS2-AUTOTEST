@@ -849,11 +849,9 @@ def _write_journey_evidence(
             for path in log_paths
         ]
 
-        artifact_candidates = sorted(
-            path for path in (evidence_root / "artifacts").glob(f"{run_id}_*.zip")
-            if path.is_file()
-        ) if (evidence_root / "artifacts").is_dir() else []
-        artifact_path = artifact_candidates[-1].resolve() if artifact_candidates else None
+        from sts2_autotest.core.run_service import resolve_artifact_path
+
+        artifact_path = resolve_artifact_path(evidence_root, run_id)
         archive_counts: dict[str, Any] = {"status": "unavailable"}
         if artifact_path is not None:
             try:
@@ -1293,13 +1291,12 @@ class JourneyExecutor:
             """
             if not run_id:
                 return
-            candidates = sorted(
-                path for path in (evidence_root / "artifacts").glob(f"{run_id}_*.zip")
-                if path.is_file()
-            ) if (evidence_root / "artifacts").is_dir() else []
-            if not candidates:
+            from sts2_autotest.core.run_service import resolve_artifact_path
+
+            artifact = resolve_artifact_path(evidence_root, run_id)
+            if artifact is None:
                 return
-            artifact_path = str(candidates[-1].resolve())
+            artifact_path = str(artifact)
             targets = [
                 evidence_root / run_id / "reports" / "run-result.json",
                 evidence_root / ".runs" / run_id / "reports" / "run-result.json",

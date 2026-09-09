@@ -351,17 +351,24 @@ class TestCLICommands:
 
 
 class TestCreateAdapter:
-    def test_child_argv_forwards_card_id_for_card_test(self) -> None:
+    def test_compose_worker_argv_forwards_card_id_for_card_test(self, tmp_path, monkeypatch) -> None:
         """card_test 经 CLI --detach 提交时 --card-id 必须传入工作进程。"""
-        from sts2_autotest.cli.main import _child_argv
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.main import _submit_detached_run
 
+        spawned: dict = {}
+        monkeypatch.setattr(
+            "sts2_autotest.core.run_service.spawn_worker",
+            lambda store, record, argv: spawned.setdefault("argv", argv) or 0,
+        )
         args = _create_parser().parse_args([
             "run", "--journey", "card_test", "--card-id", "gawain:strike_gawain",
             "--adapter", "agent", "--detach",
         ])
 
-        argv = _child_argv(args, "run-test-1")
+        assert _submit_detached_run(args) == 0
 
+        argv = spawned["argv"]
         assert "--card-id" in argv
         assert argv[argv.index("--card-id") + 1] == "gawain:strike_gawain"
 
