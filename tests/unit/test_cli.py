@@ -961,7 +961,9 @@ class TestEnvironmentPrecheck:
         from sts2_autotest.core.lifecycle import EnvironmentReadiness
 
         class _Lifecycle:
-            async def ensure_environment_ready(self) -> EnvironmentReadiness:
+            async def ensure_environment_ready(
+                self, *, api_timeout: float | None = None
+            ) -> EnvironmentReadiness:
                 return EnvironmentReadiness(ready=True)
 
         monkeypatch.setattr(
@@ -978,7 +980,9 @@ class TestEnvironmentPrecheck:
         from sts2_autotest.core.lifecycle import EnvironmentReadiness
 
         class _Lifecycle:
-            async def ensure_environment_ready(self) -> EnvironmentReadiness:
+            async def ensure_environment_ready(
+                self, *, api_timeout: float | None = None
+            ) -> EnvironmentReadiness:
                 return EnvironmentReadiness(
                     ready=False,
                     reason=EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE,
@@ -997,7 +1001,7 @@ class TestEnvironmentPrecheck:
         """ensure_environment_ready 抛错也绝不冒泡 → 归类为 PRECHECK_ERROR。"""
 
         class _Lifecycle:
-            async def ensure_environment_ready(self) -> object:
+            async def ensure_environment_ready(self, *, api_timeout: float | None = None) -> object:
                 raise RuntimeError("boom")
 
         monkeypatch.setattr(
@@ -1114,7 +1118,7 @@ class _CountingLifecycle:
     def _game_process_present(self) -> bool:
         return False
 
-    async def ensure_environment_ready(self):
+    async def ensure_environment_ready(self, *, api_timeout: float | None = None):
         import types
 
         self.ensure_calls += 1

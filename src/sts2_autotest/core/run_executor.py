@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
+from sts2_autotest.core.run_service import RUN_RESULT_FILENAME
 
 DEFAULT_EVIDENCE_DIR = "tests/output"
 
@@ -1270,7 +1271,7 @@ class JourneyExecutor:
             result_dir = evidence_root / run_id / "reports"
             try:
                 result_dir.mkdir(parents=True, exist_ok=True)
-                (result_dir / "run-result.json").write_text(
+                (result_dir / RUN_RESULT_FILENAME).write_text(
                     json.dumps(payload, ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
@@ -1283,7 +1284,7 @@ class JourneyExecutor:
                 store_dir = evidence_root / ".runs" / run_id / "reports"
                 try:
                     store_dir.mkdir(parents=True, exist_ok=True)
-                    (store_dir / "run-result.json").write_text(
+                    (store_dir / RUN_RESULT_FILENAME).write_text(
                         json.dumps(payload, ensure_ascii=False, indent=2),
                         encoding="utf-8",
                     )
@@ -1308,8 +1309,8 @@ class JourneyExecutor:
                 return
             artifact_path = str(artifact)
             targets = [
-                evidence_root / run_id / "reports" / "run-result.json",
-                evidence_root / ".runs" / run_id / "reports" / "run-result.json",
+                evidence_root / run_id / "reports" / RUN_RESULT_FILENAME,
+                evidence_root / ".runs" / run_id / "reports" / RUN_RESULT_FILENAME,
             ]
             for result_path in targets:
                 try:
@@ -1850,7 +1851,7 @@ def run_journey_worker(
         evidence_root = resolved_env.resolve_evidence_root()
         run_evidence_dir = evidence_root / run_id
         result_payload: dict[str, Any] = {}
-        result_path = run_evidence_dir / "reports" / "run-result.json"
+        result_path = run_evidence_dir / "reports" / RUN_RESULT_FILENAME
         if result_path.is_file():
             try:
                 loaded = json.loads(result_path.read_text(encoding="utf-8"))

@@ -46,6 +46,9 @@ RUN_PHASES = (
     "COMPLETED",
 )
 
+RUN_RESULT_FILENAME = "run-result.json"
+
+
 TERMINAL_STATUSES = frozenset({
     "PASSED",
     "FAILED_PRODUCT",
@@ -448,7 +451,7 @@ class RunStore:
         result_dir = evidence_root / run_id / "reports"
         try:
             result_dir.mkdir(parents=True, exist_ok=True)
-            (result_dir / "run-result.json").write_text(
+            (result_dir / RUN_RESULT_FILENAME).write_text(
                 json.dumps(
                     {
                         "run_id": run_id,

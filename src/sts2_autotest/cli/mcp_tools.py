@@ -26,6 +26,7 @@ from sts2_autotest.cli.mcp_protocol import (
     McpTool,
 )
 from sts2_autotest.core.run_service import (
+    RUN_RESULT_FILENAME,
     RunRequest,
     RunStore,
     build_resume_request,
@@ -503,7 +504,7 @@ def run_tests_in_dir(
             duration_ms=int((time.monotonic() - started) * 1000),
         )
         shutil.copy2(junit_xml, pack_dir / "reports" / "junit.xml")
-        (pack_dir / "reports" / "run-result.json").write_text(
+        (pack_dir / "reports" / RUN_RESULT_FILENAME).write_text(
             json.dumps(
                 {
                     "run_id": run_id,
@@ -715,7 +716,7 @@ def read_run_report(run_id: str) -> dict[str, Any]:
     manifest, manifest_path = _read_report_json(roots, artifact, "evidence-manifest.json")
     trace, trace_path = _read_report_json(roots, artifact, "journey-trace.json")
     journey_failure, failure_path = _read_report_json(roots, artifact, "journey-failure.json")
-    run_result, run_result_path = _read_report_json(roots, artifact, "run-result.json")
+    run_result, run_result_path = _read_report_json(roots, artifact, RUN_RESULT_FILENAME)
     failure = _compact_failure(summary.get("failure"))
     if failure is None and record is not None:
         failure = _compact_failure(record.result.get("failure"))

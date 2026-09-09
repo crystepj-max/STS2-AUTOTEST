@@ -33,6 +33,7 @@ from sts2_autotest.core.run_executor import (
     compact_persistent_result,
     run_journey_worker,
 )
+from sts2_autotest.core.run_service import RUN_RESULT_FILENAME
 from sts2_autotest.core.visual_qa import (
     DisabledOcrProvider,
     OcrProvider,
@@ -961,7 +962,7 @@ def run_cmd(args: Any) -> int:
         )
         run_evidence_dir = evidence_root / internal_run_id
         result_payload: dict[str, Any] = {}
-        result_path = run_evidence_dir / "reports" / "run-result.json"
+        result_path = run_evidence_dir / "reports" / RUN_RESULT_FILENAME
         if result_path.is_file():
             try:
                 loaded = json.loads(result_path.read_text(encoding="utf-8"))
@@ -1515,7 +1516,7 @@ def _report_from_store(evidence_dir: Path, run_id: str, store_run: Path) -> int:
     out_dir = evidence_dir / run_id / "reports"
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "run-result.json").write_text(
+        (out_dir / RUN_RESULT_FILENAME).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
@@ -1552,7 +1553,7 @@ def report_cmd(args: Any) -> int:
     # 顶层 summary.json / reports/ 可能不存在。回退顺序：
     #   summary.json → run-result.json → .runs 任务记录（合成并落盘）→ 列可用任务
     # 确保 .runs 任务的「四处一致」报告契约同样可验证。
-    run_result_path = evidence_dir / run_id / "reports" / "run-result.json"
+    run_result_path = evidence_dir / run_id / "reports" / RUN_RESULT_FILENAME
     if summary_path.exists():
         try:
             data = json.loads(summary_path.read_text(encoding="utf-8"))
