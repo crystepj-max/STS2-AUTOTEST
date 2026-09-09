@@ -967,7 +967,7 @@ async def _wait_for_stable_api_state(
     界面）；连续两次读取指纹一致后再等一个 settle 间隔，可显著降低
     截图拍到上一页的概率。超时仍未稳定时用最后一次读取，不阻塞任务。
     """
-    from sts2_autotest.core.journeys import state_fingerprint
+    from sts2_autotest.common.state import state_fingerprint
 
     latest = initial
     previous_fp = state_fingerprint(initial)

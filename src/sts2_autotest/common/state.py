@@ -5,6 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
+from typing import Any
 
 
 class GameScreen(StrEnum):
@@ -99,3 +100,20 @@ class GameState(BaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
 
     screen: GameScreen
+
+
+def state_fingerprint(state: dict[str, Any]) -> str:
+    """去掉易变字段后的状态指纹：比较业务状态，避免把重复读取误判为进展。
+
+    消费方：journeys（进度发布去重）、navigation（推进判定）、
+    run_executor（截图前稳定等待）——历史上各自持有一份逐字相同的拷贝。
+    """
+    import json
+
+    volatile = {"state_version", "request_id", "timestamp", "updated_at"}
+    return json.dumps(
+        {key: value for key, value in state.items() if key not in volatile},
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )

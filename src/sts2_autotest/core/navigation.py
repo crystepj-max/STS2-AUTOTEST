@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
+from sts2_autotest.common.state import state_fingerprint
 from sts2_autotest.adapters.semantics import (
     CARD_REWARD_SKIP_ACTIONS,
     EVENT_CHOICE_ACTIONS,
@@ -370,11 +370,8 @@ def _rest_action(state: dict[str, Any], actions: list[str]) -> ActionSpec | None
     return "choose_rest_option", {"option_index": 0}
 
 
-def _state_fingerprint(state: dict[str, Any]) -> str:
-    """去掉读取编号后比较业务状态，避免把重复读取误判为进展。"""
-    volatile = {"state_version", "request_id", "timestamp", "updated_at"}
-    cleaned = {key: value for key, value in state.items() if key not in volatile}
-    return json.dumps(cleaned, sort_keys=True, ensure_ascii=False, default=str)
+# 状态指纹单源于 common.state.state_fingerprint（历史拷贝已删除）。
+_state_fingerprint = state_fingerprint
 
 
 def _detect_card_reward_no_progress(

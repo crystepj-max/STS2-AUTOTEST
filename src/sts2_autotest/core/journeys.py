@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
+from sts2_autotest.common.state import state_fingerprint
 from sts2_autotest.adapters.semantics import (
     EVENT_ADVANCE_ACTIONS,
     RETURN_TO_MENU_ACTIONS,
@@ -104,19 +105,10 @@ def _extract_floor(state: dict[str, Any]) -> int | None:
     return None
 
 
-def _fingerprint(state: dict[str, Any]) -> str:
-    volatile = {"state_version", "request_id", "timestamp", "updated_at"}
-    return json.dumps(
-        {key: value for key, value in state.items() if key not in volatile},
-        sort_keys=True,
-        ensure_ascii=False,
-        default=str,
-    )
-
-
-# 公开别名：跨模块消费者（core/run_executor 等）使用公开名；私有名保留兼容既有引用。
+# 状态指纹单源于 common.state.state_fingerprint（历史拷贝已删除）；
+# 公开别名：跨模块消费者（core/run_executor 等）使用公开名。
 extract_chapter = _extract_chapter
-state_fingerprint = _fingerprint
+_fingerprint = state_fingerprint
 
 
 class GenericJourneys:
