@@ -118,3 +118,31 @@ class TestActionVocabulary:
 
     def test_card_reward_skip_order(self) -> None:
         assert CARD_REWARD_SKIP_ACTIONS == ("skip_reward_cards", "reward_skip_card")
+
+
+class TestConvergenceVocabulary:
+    """LOC-004：推进收敛判定词表——四份推进实现的共享判定条件。"""
+
+    def test_converged_screens(self) -> None:
+        from sts2_autotest.adapters.semantics import CONVERGED_SCREENS
+
+        assert CONVERGED_SCREENS == frozenset({GameScreen.MAP, GameScreen.COMBAT})
+
+    def test_interstitial_screens(self) -> None:
+        from sts2_autotest.adapters.semantics import INTERSTITIAL_SCREENS
+
+        assert INTERSTITIAL_SCREENS == frozenset({
+            GameScreen.EVENT,
+            GameScreen.CARD_REWARD,
+            GameScreen.TRI_SELECT,
+            GameScreen.BUNDLE_SELECTION,
+        })
+
+    def test_vocabularies_disjoint(self) -> None:
+        """收敛屏与中间屏不相交：同一屏幕不能同时是目标与中间态。"""
+        from sts2_autotest.adapters.semantics import (
+            CONVERGED_SCREENS,
+            INTERSTITIAL_SCREENS,
+        )
+
+        assert not (CONVERGED_SCREENS & INTERSTITIAL_SCREENS)

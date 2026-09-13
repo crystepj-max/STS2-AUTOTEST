@@ -80,7 +80,7 @@
       "source": "会话录入（架构走查债务清单 CONTEXT.md）",
       "source_ref": "CONTEXT.md 已知债务标记",
       "baseline": "V1",
-      "status": "定义中",
+      "status": "已合并",
       "priority": "sized-m",
       "env_group": null,
       "env_role": "独立",
@@ -88,11 +88,14 @@
       "branch": "feat/architecture-deepening",
       "worktree": "/Volumes/4mac/STS2-WORKSPACE/STS2-AUTOTEST-DEEPENING",
       "runs": [],
-      "merge": null,
+      "merge": {
+        "commit": "LOCAL-004",
+        "merged_at": "2026-09-10T00:00:00Z"
+      },
       "github_sync": "pending",
       "created_at": "2026-09-10T00:00:00Z",
       "updated_at": "2026-09-10T00:00:00Z",
-      "note": "未决产品事项 1：统一策略边界待拍板"
+      "note": "决策 B 落地：判定条件单源（CONVERGED/INTERSTITIAL_SCREENS），收敛序列保留传输方言"
     },
     {
       "task_id": "LOC-005",

@@ -188,6 +188,32 @@ async def compose_bug_snapshot(
 
 
 # ---------------------------------------------------------------------------
+# 推进收敛判定词表：「何时需要推进、何时算收敛」的共享判定条件。
+# 历史上四份推进实现（cli_mod 收敛序列 / agent _finish_interstitials /
+# navigation 决策表 / journeys 回退链）各自持有屏幕集合字面量，漂移无防线。
+# 收敛序列本身保留传输方言（LOC-004 决策 B），此处只单源化判定条件；
+# 各实现取共享集合的子集时用集合运算表达，漂移在 review 即可见。
+# ---------------------------------------------------------------------------
+
+# 推进已收敛：到达 MAP（目标屏）或 COMBAT（首战类目标的实际终点）即无需推进。
+CONVERGED_SCREENS: frozenset[GameScreen] = frozenset(
+    {GameScreen.MAP, GameScreen.COMBAT}
+)
+
+# 需要推进收敛的中间屏并集：事件 / 卡牌奖励 / 三选一 / 卡包选择。
+# 各传输方言按需取子集（如 agent 额外处理 RELIC_REWARD、CLI 的事件收敛
+# 含 grid 卡牌屏——GRID_CARD_SELECT 归一为 EVENT）。
+INTERSTITIAL_SCREENS: frozenset[GameScreen] = frozenset(
+    {
+        GameScreen.EVENT,
+        GameScreen.CARD_REWARD,
+        GameScreen.TRI_SELECT,
+        GameScreen.BUNDLE_SELECTION,
+    }
+)
+
+
+# ---------------------------------------------------------------------------
 # 动作词表：同一语义动作在两个传输方言中的候选名（按优先级排列）。
 #
 # 导航层「按 available_actions 实际暴露的名字选动作」的逻辑统一引用这些常量；

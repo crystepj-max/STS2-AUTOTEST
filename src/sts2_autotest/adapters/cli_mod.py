@@ -26,6 +26,8 @@ from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthS
 from sts2_autotest.common.types import Capabilities
 from sts2_autotest.adapters.discovery import discover_sts2_cli
 from sts2_autotest.adapters.semantics import (
+    CONVERGED_SCREENS,
+    INTERSTITIAL_SCREENS,
     SCREEN_NAME_TO_GAME_SCREEN,
     check_version_compatibility,
     classify_action_error,
@@ -501,22 +503,17 @@ class CliModAdapter:
                 cur = self._get_state_sync()
             except STS2Error:
                 cur = self._cached_state
-            if cur.screen in {GameScreen.MAP, GameScreen.COMBAT}:
+            if cur.screen in CONVERGED_SCREENS:
                 return ActionResult(status="success", state_changed=False)
-            if cur.screen in {
-                GameScreen.CARD_REWARD,
-                GameScreen.TRI_SELECT,
-                GameScreen.EVENT,
-                GameScreen.BUNDLE_SELECTION,
-            }:
+            if cur.screen in INTERSTITIAL_SCREENS:
                 # 循环跳过奖励/三选一、选 grid 卡、点击 Proceed、选包裹直至 MAP/COMBAT；
                 # 对普通事件选项（非 Proceed、非 grid）保守 no-op，不替上层 choose_event。
                 return self._advance_dialogue_to_map_sync()
         if action == "choose_event":
             # 短路：已越过事件屏（MAP/COMBAT/CARD_REWARD）时为空操作成功。
-            if self._cached_state is not None and self._cached_state.screen in {
-                GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD
-            }:
+            if self._cached_state is not None and self._cached_state.screen in (
+                CONVERGED_SCREENS | {GameScreen.CARD_REWARD}
+            ):
                 return ActionResult(status="success", state_changed=False)
             idx = 0
             if args and args.get("index") is not None:
@@ -534,7 +531,7 @@ class CliModAdapter:
                 cur = self._cached_state
             if cur.screen == GameScreen.COMBAT:
                 return ActionResult(status="success", state_changed=False)
-            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT, GameScreen.BUNDLE_SELECTION}:
+            if cur.screen in INTERSTITIAL_SCREENS - {GameScreen.EVENT}:
                 # Neow 祝福带出奖励/三选一/包裹选择屏时，先推进到 MAP 再选节点
                 # （真机曾卡在 CARD_REWARD：choose_map_node 短路为空操作 → 后续
                 # give_card 无法执行；BUNDLE_SELECTION 下发选节点报 Game not
