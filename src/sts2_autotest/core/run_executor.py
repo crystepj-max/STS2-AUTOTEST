@@ -27,6 +27,19 @@ from typing import Any, Literal
 from sts2_autotest.adapters.base import GameAdapterProtocol
 from sts2_autotest.core.run_service import RUN_RESULT_FILENAME
 
+# 干净主菜单判定核心已单源至 core/main_menu_state（LOC-005 决策 B）；
+# 以下私有别名保持 run_executor 内部调用面不变。
+from sts2_autotest.core.main_menu_state import (  # noqa: E402
+    NEW_RUN_ACTIONS as _NEW_RUN_ACTIONS,
+    frame_clean as _frame_clean,
+    frame_dirty as _frame_dirty,
+    menu_actions as _menu_actions,
+    menu_has_run_save_field as _menu_has_run_save_field,
+    screen_of as _screen_of,
+    state_view as _state_view,
+)
+
+
 DEFAULT_EVIDENCE_DIR = "tests/output"
 
 TerminalStatus = Literal[
@@ -142,21 +155,6 @@ def _default_lifecycle_factory(adapter: Any, evidence_root: Path) -> Any:
 # 搬迁实现：干净主菜单恢复（自 cli/main.py 424-955 原样迁入）
 # ---------------------------------------------------------------------------
 
-# 游戏主菜单的开新局能力可能使用其中任一动作名（与 journeys.start_new_run 一致）。
-_NEW_RUN_ACTIONS = ("start_new_run", "new_run", "open_character_select")
-
-
-def _screen_of(state: Any) -> str | None:
-    """Extract the normalized screen name from a state dict or GameState."""
-    if state is None:
-        return None
-    if isinstance(state, dict):
-        scr = state.get("screen")
-    else:
-        scr = getattr(state, "screen", None)
-    return str(scr).upper() if scr is not None else None
-
-
 def _wait_for_main_menu(
     adapter: Any,
     loop: Any,
@@ -194,55 +192,6 @@ def _wait_for_main_menu(
     return last
 
 
-def _state_view(state: Any) -> dict[str, Any]:
-    """把 GameState / dict / 普通对象归一成普通 dict 视图（含 pydantic extras）。
-
-    真实游戏控制接口的主菜单状态里 ``has_run_save`` 嵌套在 ``menu`` 下，
-    ``available_actions`` 为字符串列表；判定逻辑统一基于该视图，避免按
-    对象形态各写一套取值导致漏判。
-    """
-    if state is None:
-        return {}
-    if isinstance(state, dict):
-        return state
-    model_dump = getattr(state, "model_dump", None)
-    if callable(model_dump):
-        try:
-            dumped = model_dump()
-            if isinstance(dumped, dict):
-                return dumped
-        except Exception:  # noqa: BLE001
-            pass
-    view: dict[str, Any] = {}
-    for key in ("screen", "timestamp", "has_run_save", "menu", "available_actions"):
-        value = getattr(state, key, None)
-        if value is not None:
-            view[key] = value
-    return view
-
-
-def _menu_has_run_save_field(view: dict[str, Any]) -> bool | None:
-    """存档内省字段（三态）：True=有旧局；False=明确无旧局；None=字段未发布。
-
-    V11 真实验收证据：游戏控制服务直接内省存档系统，该字段比界面动作列表
-    可信——菜单重建期动作列表会短暂摆出陈旧项（放弃成功后仍短暂出现
-    continue_run/abandon_run，但 start_new_run 可直接开局且无确认框，
-    证明存档已删除、动作是伪影）。
-    """
-    if "has_run_save" in view:
-        value = view.get("has_run_save")
-        return value if isinstance(value, bool) else None
-    menu = view.get("menu")
-    if isinstance(menu, dict) and "has_run_save" in menu:
-        value = menu.get("has_run_save")
-        return value if isinstance(value, bool) else None
-    return None
-
-
-def _menu_actions(view: dict[str, Any]) -> list[str]:
-    return [str(action) for action in (view.get("available_actions") or [])]
-
-
 def _adapter_actions(adapter: Any, loop: Any) -> list[str]:
     """经适配器协议方法获取可执行动作；失败返回空列表。
 
@@ -275,31 +224,6 @@ def _frame_signals(
     return view, [], "none"
 
 
-def _frame_dirty(view: dict[str, Any], actions: list[str]) -> bool:
-    """该帧是否存在旧局：内省字段优先，字段缺失时退回动作列表。"""
-    has_save = _menu_has_run_save_field(view)
-    if has_save is not None:
-        return has_save
-    return "continue_run" in actions
-
-
-def _frame_clean(view: dict[str, Any], actions: list[str]) -> bool:
-    """该帧是否满足干净主菜单：无旧局 + 存在开新局能力。
-
-    has_run_save 显式 False 时忽略动作列表中的陈旧/静态项（V11 实测：
-    Agent 菜单重建期会摆出陈旧 continue/abandon；CliMod 动作列表为静态
-    派生，同样不代表真实旧局）。
-    """
-    if _screen_of(view) != "MAIN_MENU":
-        return False
-    has_save = _menu_has_run_save_field(view)
-    if has_save is True:
-        return False
-    if not any(name in actions for name in _NEW_RUN_ACTIONS):
-        return False
-    if has_save is False:
-        return True
-    return "continue_run" not in actions and "abandon_run" not in actions
 
 
 def _final_state_snapshot(adapter: Any, loop: Any, state: Any) -> dict[str, Any]:

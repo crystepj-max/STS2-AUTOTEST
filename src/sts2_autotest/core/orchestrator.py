@@ -14,6 +14,7 @@ from sts2_autotest.common.errors import ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
 from sts2_autotest.common.types import CaptureResult, SessionStatus
+from sts2_autotest.core.main_menu_state import frame_dirty, state_view
 from sts2_autotest.core.action_model import ActionDescriptor, TestResult
 from sts2_autotest.core.data_validator import validate_game_state
 from sts2_autotest.core.evidence_hooks import EvidenceHooks, StubEvidenceHooks
@@ -313,6 +314,24 @@ class TestOrchestrator:
 
             screen = state.screen
             if screen == GameScreen.MAIN_MENU:
+                # 判定口径统一（LOC-005 决策 B）：has_run_save 三态优先的脏检查，
+                # 不再把残留旧局的主菜单当作已完成复位；可放弃则放弃后由下一轮
+                # 复核，无放弃能力时保持旧行为放行。
+                view = state_view(state)
+                menu_act: list[str] = []
+                try:
+                    menu_act = [
+                        str(action)
+                        for action in (await self.adapter.get_available_actions() or [])
+                    ]
+                except STS2Error:
+                    menu_act = []
+                if not frame_dirty(view, menu_act):
+                    return
+                if "abandon_run" in menu_act:
+                    await self.adapter.act("abandon_run")
+                    await asyncio.sleep(1)
+                    continue
                 return
 
             # 进行中的一局本可用游戏内「放弃」（系统设置→放弃游戏→确认）回到

@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
+from sts2_autotest.core.main_menu_state import frame_dirty, menu_actions, state_view
 from sts2_autotest.common.state import state_fingerprint
 from sts2_autotest.adapters.semantics import (
     EVENT_ADVANCE_ACTIONS,
@@ -338,6 +339,16 @@ class GenericJourneys:
                 state = await self.snapshot()
                 screen = str(state.get("screen") or "").upper()
                 if screen == "MAIN_MENU":
+                    # 判定口径统一（LOC-005 决策 B）：has_run_save 三态优先的脏
+                    # 检查——残留旧局的主菜单不算完成复位；可放弃则放弃后由下一
+                    # 轮复核，无放弃能力时保持旧行为放行（清理不可达，不新增失败面）。
+                    view = state_view(state)
+                    menu_act = menu_actions(view)
+                    if not frame_dirty(view, menu_act):
+                        return state
+                    if "abandon_run" in menu_act:
+                        await self._act_confirmed("abandon_run")
+                        continue
                     return state
                 actions = list(state.get("available_actions") or [])
                 return_action = next(
