@@ -29,9 +29,10 @@ adapter（适配器）、leverage（杠杆）、locality（局部性）——见
 
 ## 已知债务标记（勿视为接口）
 
-- `adapter._cache_stale` 直写、`lifecycle.api_timeout` 强写：行为敏感，改动需专门验证。（前者的公开方法 `mark_state_stale()` 已落地，run_executor 已改走公开方法；`lifecycle.api_timeout` 强写仍在。）
-- 回主菜单恢复存在三份实现（run_executor / journeys.reset_to_main_menu / orchestrator._auto_reset_to_main_menu），语义不同（前者唯一带受控重启全流程）；统一是独立决策。
-- 「动作后等到状态稳定」（settle）存在四种判定口径：adapter 内部轮询、orchestrator 的 intermediate settle、fluent 双快照、navigation fingerprint——归一依赖语义层进一步整合。
-- 「事件/奖励推进到 MAP」的推进序列在 cli_mod / agent / navigation / journeys 各有适配传输的版本；合并需要先归一动作词表的参数形状。
-- fluent 的规格 Given 文本启动校验依赖中文魔法子串正则（`_check_start_state` 等）；清除需 code_generator 产出结构化 StartStateRequirements 并全量重生成 tests/generated。
-- `run-result.json`、`supported_target_scene` 上报列表、runner 三件套（bash）等多处知识存在副本或包外实现；收敛在后续架构轮次处理。
+- `lifecycle.api_timeout` 强写：已消除（LOC-001，预检改经 `ensure_environment_ready(api_timeout=…)` 显式传参）。
+- 状态指纹：已单源（LOC-002，`common.state.state_fingerprint`）。
+- 「动作后等到状态稳定」（settle）存在四种判定口径：adapter 内部轮询、orchestrator 的 intermediate settle、fluent 双快照、navigation fingerprint。**决议（2026-09-10）：行为合并判定为不做**——四种口径分别服务传输等待/动作间稳定/截图前稳定/导航决策，时机与对象不同；指纹比较已单源。
+- 「事件/奖励推进到 MAP」：收敛序列保留传输方言（决议 LOC-004 方案 B），判定条件已单源（`adapters.semantics.CONVERGED_SCREENS / INTERSTITIAL_SCREENS`）。
+- 回主菜单恢复三份实现：恢复方式保留场景差异（决议 LOC-005 方案 B），干净判定口径已统一（`core/main_menu_state`，has_run_save 三态权威）。
+- `run-result.json` 文件名已单源（LOC-003，`run_service.RUN_RESULT_FILENAME`）；目录布局结构化与 `supported_target_scene` 上报清单副本仍在，后续轮次处理。
+- runner 三件套（bash）：**决议（2026-09-10，LOC-007）：不迁入包**——产品边界与 CI runner 服务管理无交集，bash 域有独立测试套件；重新评估触发条件见 docs/tasks/LOC-007 决策记录。
