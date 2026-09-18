@@ -91,6 +91,18 @@ jobs:
         timeout-minutes: 2
         run: bash scripts/nightly-env-check.sh
 
+      # 探测失败先幂等拉起游戏会话再重探（issue #66）：bootstrap 属于环境准备，
+      # 不改变 #65 的「探测最多两次」语义；拉起失败时 retry 仍判 BLOCKED。
+      - name: Game session bootstrap
+        id: game_bootstrap
+        if: steps.env_check.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          mkdir -p "${RUNNER_TEMP}/nightly-early-evidence"
+          bash scripts/nightly-game-bootstrap.sh 2>&1 | tee "${RUNNER_TEMP}/nightly-early-evidence/game-bootstrap.log"
+          exit "${PIPESTATUS[0]}"
+
       - name: Environment readiness retry
         id: env_check_retry
         if: steps.env_check.outcome == 'failure'
