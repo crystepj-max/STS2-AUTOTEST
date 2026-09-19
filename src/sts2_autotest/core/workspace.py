@@ -173,3 +173,48 @@ class Workspace:
         if p.is_absolute():
             return str(p)
         return str((self._base_dir / p).resolve())
+
+
+def load_default_workspace() -> "Workspace | None":
+    """尝试从当前目录默认位置加载 workspace 配置；不存在或解析失败返回 None。
+
+    自 cli.main._load_workspace 下沉：worker 子进程需在进程内解析项目登记，
+    CLI 层保留同名委托。
+    """
+    candidates = ["sts2-autotest.yaml", "sts2-autotest.yml"]
+    for fname in candidates:
+        if os.path.isfile(fname):
+            try:
+                return Workspace.from_yaml(fname)
+            except Exception:  # noqa: BLE001 - 配置损坏时按未登记处理
+                return None
+    return None
+
+
+def resolve_project_base_dir(project: str | None) -> Path | None:
+    """按任务项目输入解析项目根目录。
+
+    支持两种通用输入（公共契约：项目标识或项目目录）：
+    1. 直接项目目录（含路径分隔符或以 ``.`` 开头，且目录真实存在）；
+    2. 已登记的项目名称（当前目录本地 workspace 配置中的 manifest 指针；
+       平台不预置任何项目登记，登记属于本地设置）。
+    未提供或解析失败时返回 None（调用方回退当前目录）。
+
+    自 cli.main._resolve_project_base_dir 下沉，CLI 层保留同名委托。
+    """
+    if not project:
+        return None
+    if "/" in project or "\\" in project or project.startswith("."):
+        candidate = Path(project).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        if candidate.is_dir():
+            return candidate.resolve()
+        return None
+    ws = load_default_workspace()
+    if ws is None:
+        return None
+    manifest = ws.mod_manifest_path(project)
+    if not manifest:
+        return None
+    return Path(manifest).resolve().parent

@@ -79,7 +79,11 @@ class TestCodeGenerator:
             steps=["选择地图节点 (2, 1)", "进入首次战斗"],
         )
         code = self.generator.generate_case_test(spec)
-        assert '.require_start_state("""- 当前位于地图界面' in code
+        # LOC-006：生成期结构化启动要求随文本一起 emit，运行时不再正则解析
+        assert ".require_start_state(" in code
+        assert "requirements=" in code
+        assert "{'allowed_screens': ['MAP', 'COMBAT']" in code
+        assert "'needs_travelable_node': True" in code
 
     def test_first_battle_smoke_steps_use_dsl_primitives(self) -> None:
         spec = TestSpec(

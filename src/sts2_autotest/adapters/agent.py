@@ -18,13 +18,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from datetime import UTC, datetime
 from typing import Any, Literal, Protocol
 
 import httpx
 
 from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthStatus
+from sts2_autotest.adapters.semantics import (
+    SCREEN_NAME_TO_GAME_SCREEN,
+    check_version_compatibility,
+    classify_action_error,
+    compose_bug_snapshot,
+    filter_state_extra,
+    map_screen_name,
+)
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
@@ -32,34 +39,8 @@ from sts2_autotest.common.types import Capabilities
 
 logger = get_logger("adapters.agent")
 
-# STS2-Agent screen name → GameScreen enum mapping (same semantics as cli_mod.py)
-_SCREEN_MAP: dict[str, GameScreen] = {
-    "MENU": GameScreen.MAIN_MENU,
-    "MAIN_MENU": GameScreen.MAIN_MENU,
-    "MODAL": GameScreen.MAIN_MENU,
-    "CHARACTER_SELECT": GameScreen.CHARACTER_SELECT,
-    "MAP": GameScreen.MAP,
-    "COMBAT": GameScreen.COMBAT,
-    "SHOP": GameScreen.SHOP,
-    "REST": GameScreen.REST,
-    "REST_SITE": GameScreen.REST,
-    "EVENT": GameScreen.EVENT,
-    "TREASURE": GameScreen.CHEST,
-    "CHEST": GameScreen.CHEST,
-    "BUNDLE_SELECTION": GameScreen.BUNDLE_SELECTION,
-    "CONFIRM_BUNDLE": GameScreen.BUNDLE_SELECTION,
-    "BOSS_REWARD": GameScreen.BOSS_REWARD,
-    # 战后奖励主界面（STS2-Agent api.md 协议 2026-03-11）与卡牌奖励选择子界面
-    # （deck_card_select，真实屏幕名 CARD_SELECTION，v0.7.2+）统一归入 CARD_REWARD，
-    # 否则会被映射成 UNKNOWN 导致导航卡死。
-    "REWARD": GameScreen.CARD_REWARD,
-    "CARD_REWARD": GameScreen.CARD_REWARD,
-    "CARD_SELECTION": GameScreen.CARD_REWARD,
-    "RELIC_REWARD": GameScreen.RELIC_REWARD,
-    "GAME_OVER": GameScreen.GAME_OVER,
-    "VICTORY": GameScreen.VICTORY,
-    "CRASHED": GameScreen.CRASHED,
-}
+# 屏幕名归一映射已收敛至 adapters.semantics.SCREEN_NAME_TO_GAME_SCREEN。
+_SCREEN_MAP = SCREEN_NAME_TO_GAME_SCREEN
 
 
 class AgentMcpClientProtocol(Protocol):
@@ -499,16 +480,7 @@ class AgentAdapter:
                     await self._request("GET", self._state_path)
                 )
             except STS2Error as exc:
-                if (
-                    exc.category == ErrorCategory.TIMEOUT_ERROR
-                    or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT
-                ):
-                    return ActionResult(
-                        status="timeout", state_changed=False, detail=exc.message
-                    )
-                return ActionResult(
-                    status="failure", state_changed=False, detail=exc.message
-                )
+                return self._action_error(exc)
 
             option_index = _resolve_map_node_index_by_type(
                 state_data.get("map") or {},
@@ -535,16 +507,7 @@ class AgentAdapter:
                     detail=data.get("error", "choose_map_node failed"),
                 )
             except STS2Error as exc:
-                if (
-                    exc.category == ErrorCategory.TIMEOUT_ERROR
-                    or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT
-                ):
-                    return ActionResult(
-                        status="timeout", state_changed=False, detail=exc.message
-                    )
-                return ActionResult(
-                    status="failure", state_changed=False, detail=exc.message
-                )
+                return self._action_error(exc)
         if action == "start_new_run":
             result = await self._start_new_run()
             return result
@@ -677,9 +640,7 @@ class AgentAdapter:
             try:
                 data = await self._request("POST", self._act_path, console_payload)
             except STS2Error as exc:
-                if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                    return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-                return ActionResult(status="failure", state_changed=False, detail=exc.message)
+                return self._action_error(exc)
 
             if data.get("ok", False):
                 return ActionResult(status="success", state_changed=True)
@@ -705,9 +666,7 @@ class AgentAdapter:
         try:
             data = await self._request("POST", self._act_path, payload)
         except STS2Error as exc:
-            if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error(exc)
 
         if data.get("ok", False):
             result = ActionResult(status="success", state_changed=True)
@@ -727,12 +686,7 @@ class AgentAdapter:
 
     @staticmethod
     def _action_error(exc: STS2Error) -> ActionResult:
-        if (
-            exc.category == ErrorCategory.TIMEOUT_ERROR
-            or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT
-        ):
-            return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-        return ActionResult(status="failure", state_changed=False, detail=exc.message)
+        return classify_action_error(exc)
 
     async def _finish_interstitials(self, initial: ActionResult) -> ActionResult:
         """完成动作后可确定的事件、选牌和奖励后续步骤。
@@ -815,9 +769,7 @@ class AgentAdapter:
         try:
             available = await self.get_available_actions()
         except STS2Error as exc:
-            if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error(exc)
 
         # v0.7.2: Agent always returns continue_run/abandon_run/open_timeline at MAIN_MENU,
         # even without a saved run. Check if we're at MAIN_MENU and try open_character_select
@@ -1002,9 +954,7 @@ class AgentAdapter:
         try:
             data = await self._request("POST", self._act_path, payload)
         except STS2Error as exc:
-            if exc.category == ErrorCategory.TIMEOUT_ERROR or exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-                return ActionResult(status="timeout", state_changed=False, detail=exc.message)
-            return ActionResult(status="failure", state_changed=False, detail=exc.message)
+            return self._action_error(exc)
         if data.get("ok", False):
             return ActionResult(status="success", state_changed=True)
         return ActionResult(
@@ -1122,18 +1072,7 @@ class AgentAdapter:
         Returns a dict with keys: game_state, available_actions, timestamp.
         Falls back to UNKNOWN / empty list if the adapter raises.
         """
-        try:
-            state = await self.get_state()
-            actions = await self.get_available_actions()
-        except STS2Error:
-            state = GameState(screen=GameScreen.UNKNOWN)
-            actions = []
-
-        return {
-            "game_state": state,
-            "available_actions": actions,
-            "timestamp": datetime.now(UTC),
-        }
+        return await compose_bug_snapshot(self)
 
     async def cleanup(self) -> None:
         """Close the HTTP client session. Idempotent — safe to call multiple times.
@@ -1162,30 +1101,12 @@ class AgentAdapter:
 
         Raises STS2Error(ADAPTER_ERROR) on parse failure or major mismatch.
         """
-        match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version_str.strip())
-        if not match:
-            raise STS2Error(
-                category=ErrorCategory.ADAPTER_ERROR,
-                message=f"Cannot parse version from: {version_str!r}",
-                detail={
-                    "subtype": AdapterErrorSubType.JSON_PARSE_FAILURE,
-                    "raw_output": version_str,
-                },
-            )
-        major = int(match.group(1))
-        if major != self._supported_version:
-            raise STS2Error(
-                category=ErrorCategory.ADAPTER_ERROR,
-                message=(
-                    f"Adapter major version {major} is incompatible "
-                    f"(supported: {self._supported_version}). "
-                    f"Please upgrade STS2-Agent."
-                ),
-                detail={
-                    "subtype": AdapterErrorSubType.VERSION_MISMATCH,
-                    "raw_output": version_str,
-                },
-            )
+        check_version_compatibility(
+            version_str,
+            supported_major=self._supported_version,
+            command_hint="STS2-Agent version endpoint",
+            upgrade_target="STS2-Agent",
+        )
         self._version_checked = True
 
 
@@ -1194,7 +1115,7 @@ class AgentAdapter:
 
 def _map_screen(screen_raw: str) -> GameScreen:
     """Map STS2-Agent screen name to GameScreen enum, falling back to UNKNOWN."""
-    return _SCREEN_MAP.get(screen_raw, GameScreen.UNKNOWN)
+    return map_screen_name(screen_raw)
 
 
 def _extract_error_message(payload: Any, fallback: str) -> str:
@@ -1276,14 +1197,8 @@ def _normalize_action_args(action: str, resolved: dict[str, Any]) -> dict[str, A
 
 
 def _filter_state_extra(data: dict[str, Any]) -> dict[str, Any]:
-    """Extract extra fields from agent state response for GameState model.
-
-    GameState(screen=..., extra="allow") accepts arbitrary fields,
-    but we skip the 'screen' key (already consumed) and 'error' key
-    (not a state field).
-    """
-    skip_keys = {"screen", "error"}
-    return {k: v for k, v in data.items() if k not in skip_keys}
+    """Extract extra fields from agent state response (shared semantics)."""
+    return filter_state_extra(data)
 
 
 def _resolve_map_node_index_by_type(

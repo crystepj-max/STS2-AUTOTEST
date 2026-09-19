@@ -1,17 +1,19 @@
 import json
-from sts2_autotest.dsl.fluent import define
+
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.dsl.assertions import (
     advance_dialogue,
     choose_event,
     embark,
     game_reached_state,
-    no_crash_detected,
     has_travelable_node,
+    no_crash_detected,
     return_to_menu,
     select_character,
     start_new_run,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
+
 
 # Given: 已安装并可连接 STS2-Cli-Mod
 # Given: 游戏可被启动
@@ -20,8 +22,7 @@ def test_tc_prepare_new_run(autotest, _session_loop):
     """进入新局地图"""
     result = (
         define("TC-PREPARE-NEW-RUN", autotest, _session_loop)
-        .require_start_state("""- 任意可恢复状态
-- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN""")
+        .require_start_state("- 任意可恢复状态\n- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN", requirements={'allowed_screens': ['MAIN_MENU', 'CHARACTER_SELECT', 'MAP', 'COMBAT', 'EVENT', 'GAME_OVER', 'VICTORY', 'UNKNOWN'], 'exempt_first_battle_finished': False, 'exempt_neow_resolved': False, 'exempt_recoverable_reward': True, 'needs_travelable_node': False, 'screen': None})
         .setup(
             return_to_menu(),
             start_new_run(),

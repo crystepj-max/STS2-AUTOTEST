@@ -46,6 +46,9 @@ RUN_PHASES = (
     "COMPLETED",
 )
 
+RUN_RESULT_FILENAME = "run-result.json"
+
+
 TERMINAL_STATUSES = frozenset({
     "PASSED",
     "FAILED_PRODUCT",
@@ -448,7 +451,7 @@ class RunStore:
         result_dir = evidence_root / run_id / "reports"
         try:
             result_dir.mkdir(parents=True, exist_ok=True)
-            (result_dir / "run-result.json").write_text(
+            (result_dir / RUN_RESULT_FILENAME).write_text(
                 json.dumps(
                     {
                         "run_id": run_id,
@@ -643,8 +646,17 @@ def spawn_worker(store: RunStore, record: RunRecord, argv: list[str]) -> int:
     worker_env.pop("CODEBUDDY_SESSION_ID", None)
     worker_env.pop("CLAUDE_SESSION_ID", None)
     try:
+        # 入口分叉：旅程类任务由任务运行时模块自举（排队、阶段位、执行、收口
+        # 都在 run_executor interface 之后，且不加载整个 CLI）；套件类任务仍
+        # 经 cli.main 分派给 orchestrator。旗标协议两侧逐字一致（共用
+        # run_executor.add_journey_arguments 单源定义）。
+        worker_module = (
+            "sts2_autotest.core.run_executor"
+            if "--journey" in argv or "--target-scene" in argv
+            else "sts2_autotest.cli.main"
+        )
         process = subprocess.Popen(
-            [sys.executable, "-m", "sts2_autotest.cli.main", *argv],
+            [sys.executable, "-m", worker_module, *argv],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
@@ -658,3 +670,117 @@ def spawn_worker(store: RunStore, record: RunRecord, argv: list[str]) -> int:
 
 def records_summary(records: Iterable[RunRecord]) -> list[dict[str, Any]]:
     return [serialize_record(record) for record in records]
+
+
+def compose_worker_argv(request: RunRequest, run_id: str) -> list[str]:
+    """从结构化请求组装 worker 命令行（CLI 与 MCP 提交面共用的唯一定义）。
+
+    旗标协议与历史 _child_argv/_request_argv 兼容：journey 组取自 metadata；
+    仅 CLI 侧使用的 failed/no_resume/all/output_dir 由提交方写入 metadata 后
+    在此统一输出。--evidence 在取值非默认 full 时输出（worker 侧 argparse
+    缺省同为 full，行为等价）。
+    """
+    md = request.metadata
+    argv = ["run"]
+    has_explicit_target = bool(request.cases or request.suite or md.get("journey"))
+    if md.get("all") or not has_explicit_target:
+        argv.append("--all")
+    if request.cases:
+        argv.extend(["--cases", *request.cases])
+    if request.suite:
+        argv.extend(["--suite", str(request.suite)])
+    if md.get("failed"):
+        argv.append("--failed")
+    if request.mode == "resume" or md.get("resume"):
+        argv.append("--resume")
+    if md.get("no_resume"):
+        argv.append("--no-resume")
+    if request.timeout is not None:
+        argv.extend(["--timeout", str(int(request.timeout))])
+    if request.project:
+        argv.extend(["--project", str(request.project)])
+    if request.spec_dir:
+        argv.extend(["--spec-dir", str(request.spec_dir)])
+    if md.get("output_dir"):
+        argv.extend(["--output-dir", str(md["output_dir"])])
+    if request.adapter:
+        argv.extend(["--adapter", str(request.adapter)])
+    if request.evidence and request.evidence != "full":
+        argv.extend(["--evidence", str(request.evidence)])
+    if request.idempotency_key:
+        argv.extend(["--idempotency-key", str(request.idempotency_key)])
+    if md.get("journey"):
+        argv.extend(["--journey", str(md["journey"])])
+    if md.get("character_id"):
+        argv.extend(["--character-id", str(md["character_id"])])
+    if md.get("target_scene"):
+        argv.extend(["--target-scene", str(md["target_scene"])])
+    if md.get("route_policy"):
+        argv.extend(["--route-policy", str(md["route_policy"])])
+    if md.get("combat_mode"):
+        argv.extend(["--combat-mode", str(md["combat_mode"])])
+    if md.get("card_id"):
+        argv.extend(["--card-id", str(md["card_id"])])
+    argv.extend(["--internal-run-id", run_id])
+    return argv
+
+
+def submit_run(store: "RunStore", request: RunRequest) -> "tuple[RunRecord, str]":
+    """统一持久任务提交：入队 → 组装 argv → 拉起 worker。
+
+    返回 (记录, 结果)：
+    - ``"spawned"``：新任务，worker 已拉起，记录处于 QUEUED；
+    - ``"reused"``：幂等键命中，返回既有记录（不重复提交）；
+    - ``"spawn_failed"``：worker 进程拉起失败，记录已标记
+      FAILED_PLATFORM/COMPLETED。
+    """
+    record = store.create(request)
+    if record.request is not request:
+        return record, "reused"
+    request.argv = compose_worker_argv(request, record.run_id)
+    store.update(record.run_id, request=request)
+    # 修复四：恢复任务在新 run_id 上显式记录继承来源。
+    resumed_from = request.metadata.get("resumed_from")
+    if resumed_from:
+        store.update(record.run_id, resumed_from=str(resumed_from))
+    try:
+        spawn_worker(store, record, request.argv)
+    except OSError as exc:
+        store.update(
+            record.run_id,
+            status="FAILED_PLATFORM",
+            phase="COMPLETED",
+            finished_at=_now(),
+            message=f"Cannot start detached worker: {exc}",
+        )
+        return store.load(record.run_id) or record, "spawn_failed"
+    return record, "spawned"
+
+
+def build_resume_request(old: RunRecord) -> RunRequest:
+    """从已终态的原任务构造恢复请求（CLI 与 MCP 提交面共用）。
+
+    前置条件：调用方已通过 resume_precheck 确认原任务可恢复。
+    """
+    return RunRequest(
+        project=old.request.project,
+        suite=old.request.suite,
+        cases=list(old.request.cases),
+        mode="resume",
+        timeout=old.request.timeout,
+        adapter=old.request.adapter,
+        spec_dir=old.request.spec_dir,
+        evidence=old.request.evidence,
+        metadata={**old.request.metadata, "resumed_from": old.run_id},
+    )
+
+
+def resolve_artifact_path(evidence_root: Path, run_id: str) -> Path | None:
+    """定位 run_id 的证据压缩包（最新一份）；不存在返回 None。"""
+    if not (evidence_root / "artifacts").is_dir():
+        return None
+    candidates = sorted(
+        path for path in (evidence_root / "artifacts").glob(f"{run_id}_*.zip")
+        if path.is_file()
+    )
+    return candidates[-1].resolve() if candidates else None

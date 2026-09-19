@@ -118,7 +118,7 @@ class TestCapabilitiesRuntimeVerification:
         def _boom(_type: str):
             raise RuntimeError("adapter build failed")
 
-        monkeypatch.setattr("sts2_autotest.cli.main._create_adapter", _boom)
+        monkeypatch.setattr("sts2_autotest.core.runtime_factory.create_adapter_from_env", _boom)
         result = mt.handle_capabilities({})
         assert result["game_control_ready"] is False
         assert result["debug_actions_verified"] is False
@@ -144,7 +144,7 @@ class TestPersistentRunTools:
         with pytest.raises(McpError, match="Unknown tool"):
             registry.dispatch("nonexistent", {})
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_submit_run_persists_and_is_idempotent(self, mock_worker, monkeypatch, tmp_path):
         from sts2_autotest.cli import mcp_tools
 
@@ -167,7 +167,7 @@ class TestPersistentRunTools:
         assert first["status"] == "QUEUED"
         mock_worker.assert_called_once()
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_submit_suite_does_not_append_all_target(self, mock_worker, monkeypatch, tmp_path):
         from sts2_autotest.cli import mcp_tools
 
@@ -183,7 +183,7 @@ class TestPersistentRunTools:
         assert "--suite" in argv
         assert "--all" not in argv
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_target_scene_defaults_to_agent_adapter(self, mock_worker, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run
@@ -383,7 +383,7 @@ class TestPersistentRunTools:
         outside.mkdir()
         monkeypatch.setattr(mcp_tools, "_ALLOWED_ROOTS", [allowed])
         monkeypatch.setattr(
-            "sts2_autotest.cli.main._resolve_project_base_dir",
+            "sts2_autotest.core.workspace.resolve_project_base_dir",
             lambda _project: outside,
         )
 
@@ -479,7 +479,7 @@ class TestPersistentRunTools:
         assert captured["project_dir"] is not None
         assert str(mod_dir) in str(captured["project_dir"])
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_resume_run_preserves_resume_mode_in_worker_argv(self, mock_worker, monkeypatch, tmp_path):
         from sts2_autotest.cli import mcp_tools
 
@@ -504,7 +504,7 @@ class TestPersistentRunTools:
         assert resumed["run_id"] != original["run_id"]
         assert mock_worker.call_count == 2
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_resume_run_rejected_while_original_not_finished(
         self, mock_worker, monkeypatch, tmp_path
     ):
@@ -740,7 +740,7 @@ class TestDeathAndCardTestContract:
         assert result["card_test"]["requires_debug_actions"] is True
         assert "card_id" in result["submit_parameters"]
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_submit_accepts_death_combat_mode(self, mock_worker, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run
@@ -777,7 +777,7 @@ class TestDeathAndCardTestContract:
                 "target_scene": "COMBAT",
             })
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_submit_card_test_passes_card_id_to_worker(self, mock_worker, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import handle_submit_run
@@ -798,7 +798,7 @@ class TestDeathAndCardTestContract:
         # 否则 worker 会退化成 cli 适配器并误报调试能力不可用。
         assert argv[argv.index("--adapter") + 1] == "agent"
 
-    @patch("sts2_autotest.cli.mcp_tools.spawn_worker")
+    @patch("sts2_autotest.core.run_service.spawn_worker")
     def test_resume_run_preserves_card_id(self, mock_worker, monkeypatch, tmp_path):
         monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
         from sts2_autotest.cli.mcp_tools import (

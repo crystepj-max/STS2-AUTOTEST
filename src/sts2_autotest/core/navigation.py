@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
+
+from sts2_autotest.common.state import state_fingerprint
+from sts2_autotest.adapters.semantics import (
+    CARD_REWARD_SKIP_ACTIONS,
+    EVENT_CHOICE_ACTIONS,
+)
 
 ActionSpec = tuple[str, dict[str, Any]]
 ActionCallback = Callable[[str, dict[str, Any]], Coroutine[Any, Any, Any]]
@@ -365,11 +370,8 @@ def _rest_action(state: dict[str, Any], actions: list[str]) -> ActionSpec | None
     return "choose_rest_option", {"option_index": 0}
 
 
-def _state_fingerprint(state: dict[str, Any]) -> str:
-    """去掉读取编号后比较业务状态，避免把重复读取误判为进展。"""
-    volatile = {"state_version", "request_id", "timestamp", "updated_at"}
-    cleaned = {key: value for key, value in state.items() if key not in volatile}
-    return json.dumps(cleaned, sort_keys=True, ensure_ascii=False, default=str)
+# 状态指纹单源于 common.state.state_fingerprint（历史拷贝已删除）。
+_state_fingerprint = state_fingerprint
 
 
 def _detect_card_reward_no_progress(
@@ -498,10 +500,13 @@ def choose_progress_action(
         if selected_card is not None:
             return selected_card
         # 2) 卡牌奖励子界面：无法识别候选时才跳过
-        if "skip_reward_cards" in actions:
-            return "skip_reward_cards", {}
-        if "reward_skip_card" in actions:
-            return "reward_skip_card", {"type": "card", "nth": 0}
+        skip_action = next(
+            (name for name in CARD_REWARD_SKIP_ACTIONS if name in actions), None
+        )
+        if skip_action == "skip_reward_cards":
+            return skip_action, {}
+        if skip_action == "reward_skip_card":
+            return skip_action, {"type": "card", "nth": 0}
         # 3) 奖励主界面：无人值守推进（收取并离开到地图）
         if "collect_rewards_and_proceed" in actions:
             return "collect_rewards_and_proceed", {}
@@ -559,10 +564,13 @@ def choose_progress_action(
         event = state.get("event") or {}
         options = event.get("options") or []
         if options:
-            if "choose_event" in actions:
-                return "choose_event", {"index": _first_unlocked_option(options)}
-            if "choose_event_option" in actions:
-                return "choose_event_option", {"option_index": _first_unlocked_option(options)}
+            choice_action = next(
+                (name for name in EVENT_CHOICE_ACTIONS if name in actions), None
+            )
+            if choice_action == "choose_event":
+                return choice_action, {"index": _first_unlocked_option(options)}
+            if choice_action == "choose_event_option":
+                return choice_action, {"option_index": _first_unlocked_option(options)}
         if "choose_neow_blessing" in actions:
             return "choose_neow_blessing", {}
 

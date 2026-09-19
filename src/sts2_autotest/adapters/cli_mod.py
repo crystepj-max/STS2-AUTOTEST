@@ -17,14 +17,23 @@ Exit codes: 0=success, 1=connection error, 2=invalid state,
 
 import asyncio
 import json
-import re
 import subprocess
 import time
 from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import ActionResult, DebugVerification, HealthStatus
+from sts2_autotest.common.types import Capabilities
 from sts2_autotest.adapters.discovery import discover_sts2_cli
+from sts2_autotest.adapters.semantics import (
+    CONVERGED_SCREENS,
+    INTERSTITIAL_SCREENS,
+    SCREEN_NAME_TO_GAME_SCREEN,
+    check_version_compatibility,
+    classify_action_error,
+    filter_state_extra,
+    map_screen_name,
+)
 from sts2_autotest.common.errors import AdapterErrorSubType, ErrorCategory, STS2Error
 from sts2_autotest.common.logging import get_logger
 from sts2_autotest.common.state import GameScreen, GameState
@@ -75,37 +84,8 @@ def _is_degraded_combat_state(state: GameState) -> bool:
     combat = getattr(state, "combat", None)
     return isinstance(combat, dict) and not combat
 
-# CLI 命令返回的 screen 值 → GameScreen 枚举映射
-_SCREEN_MAP: dict[str, GameScreen] = {
-    "MENU": GameScreen.MAIN_MENU,
-    "SINGLEPLAYER_SUBMENU": GameScreen.MAIN_MENU,
-    "CHARACTER_SELECT": GameScreen.CHARACTER_SELECT,
-    "MAP": GameScreen.MAP,
-    "COMBAT": GameScreen.COMBAT,
-    "SHOP": GameScreen.SHOP,
-    "REST": GameScreen.REST,
-    "REST_SITE": GameScreen.REST,
-    "EVENT": GameScreen.EVENT,
-    "GRID_CARD_SELECT": GameScreen.EVENT,
-    "TREASURE": GameScreen.CHEST,
-    "CHEST": GameScreen.CHEST,
-    "BOSS_REWARD": GameScreen.BOSS_REWARD,
-    "REWARD": GameScreen.CARD_REWARD,
-    "CARD_REWARD": GameScreen.CARD_REWARD,
-    # 防御性：STS2-Agent / 新版本可能以 CARD_SELECTION 上报战后选牌子界面
-    "CARD_SELECTION": GameScreen.CARD_REWARD,
-    "RELIC_REWARD": GameScreen.RELIC_REWARD,
-    # 卡包选择页（Scroll Boxes 遗物触发）：CLI 可能以这些名字直接上报。
-    # 与 _get_state_sync 的数据驱动重映射（UNKNOWN + bundle_select 载荷）形成双保险。
-    "BUNDLE_SELECTION": GameScreen.BUNDLE_SELECTION,
-    "BUNDLE_SELECT": GameScreen.BUNDLE_SELECTION,
-    "CONFIRM_BUNDLE": GameScreen.BUNDLE_SELECTION,
-    # 三选一卡牌事件屏（tri_select_card / tri_select_skip）。CLI 直接以
-    # "TRI_SELECT" 上报；不映射会让导航器看到 UNKNOWN + 空动作而空转超时。
-    "TRI_SELECT": GameScreen.TRI_SELECT,
-    "GAME_OVER": GameScreen.GAME_OVER,
-    "VICTORY": GameScreen.VICTORY,
-}
+# 屏幕名归一映射已收敛至 adapters.semantics.SCREEN_NAME_TO_GAME_SCREEN。
+_SCREEN_MAP = SCREEN_NAME_TO_GAME_SCREEN
 
 
 class CliModAdapter:
@@ -300,6 +280,29 @@ class CliModAdapter:
 
     # ── public async interface ──────────────────────────────
 
+    @property
+    def capabilities(self) -> Capabilities:
+        """跨 Agent 能力协商：CLI 传输不暴露调试控制台，快速结束战斗不可用。
+
+        与 AgentAdapter.capabilities 对称；调用方从此可以在两个适配器上用
+        同一接口成员读取能力，不再单侧依赖 getattr 鸭子探测。
+        """
+        return Capabilities(
+            supports_multiplayer=False,
+            supports_metadata=False,
+            supports_debug_actions=False,
+        )
+
+    def mark_state_stale(self) -> None:
+        """丢弃缓存的状态与动作列表（改状态动作后必须调用）。
+
+        顺序约束：任何可能改变游戏状态的动作之后都要双清缓存——
+        状态缓存置 stale、动作缓存清空。历史上这是靠记性维护的
+        两行惯用语，收敛为一个方法后约束有了唯一实现。
+        """
+        self._cache_stale = True
+        self._available_actions_cache = None
+
     async def health_check(self) -> HealthStatus:
         """Check adapter health by pinging the CLI mod."""
         return await asyncio.to_thread(self._health_check_sync)
@@ -329,8 +332,7 @@ class CliModAdapter:
     async def cleanup(self) -> None:
         """Release resources. Clear cache, mark stale."""
         self._cached_state = None
-        self._cache_stale = True
-        self._available_actions_cache = None
+        self.mark_state_stale()
 
     async def verify_debug_actions(self) -> DebugVerification:
         """CliMod 路径不暴露调试控制台，因此调试能力永远 NOT_SUPPORTED。
@@ -447,21 +449,19 @@ class CliModAdapter:
         combat_hint["combat"] = {}
         state = GameState(screen=GameScreen.COMBAT, **combat_hint)
         # 不缓存降级状态；仅失效动作缓存，保证下一次状态读取重新走 CLI。
-        self._cache_stale = True
-        self._available_actions_cache = None
+        self.mark_state_stale()
         return state
 
     def _action_error_result(self, exc: STS2Error, state_changed: bool) -> ActionResult:
-        """把动作命令的 STS2Error 映射为 ActionResult。
+        """把动作命令的 STS2Error 映射为 ActionResult（共享归类策略）。
 
         命中「移除 get_IsPlayPhase」错误时降级为成功（动作已下发、游戏仍在推进，
         交由上层重读状态确认真实转移）；超时与其余错误保持原有语义。
         """
-        if _is_play_phase_removed_error(exc):
-            return ActionResult(status="success", state_changed=True, detail=exc.message)
-        if exc.detail.get("subtype") == AdapterErrorSubType.TIMEOUT:
-            return ActionResult(status="timeout", state_changed=state_changed, detail=exc.message)
-        return ActionResult(status="failure", state_changed=state_changed, detail=exc.message)
+        return classify_action_error(
+            exc, state_changed=state_changed,
+            treat_as_success=_is_play_phase_removed_error,
+        )
 
     def _get_available_actions_sync(self) -> list[str]:
         """Derive available actions from current game screen state."""
@@ -503,22 +503,17 @@ class CliModAdapter:
                 cur = self._get_state_sync()
             except STS2Error:
                 cur = self._cached_state
-            if cur.screen in {GameScreen.MAP, GameScreen.COMBAT}:
+            if cur.screen in CONVERGED_SCREENS:
                 return ActionResult(status="success", state_changed=False)
-            if cur.screen in {
-                GameScreen.CARD_REWARD,
-                GameScreen.TRI_SELECT,
-                GameScreen.EVENT,
-                GameScreen.BUNDLE_SELECTION,
-            }:
+            if cur.screen in INTERSTITIAL_SCREENS:
                 # 循环跳过奖励/三选一、选 grid 卡、点击 Proceed、选包裹直至 MAP/COMBAT；
                 # 对普通事件选项（非 Proceed、非 grid）保守 no-op，不替上层 choose_event。
                 return self._advance_dialogue_to_map_sync()
         if action == "choose_event":
             # 短路：已越过事件屏（MAP/COMBAT/CARD_REWARD）时为空操作成功。
-            if self._cached_state is not None and self._cached_state.screen in {
-                GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD
-            }:
+            if self._cached_state is not None and self._cached_state.screen in (
+                CONVERGED_SCREENS | {GameScreen.CARD_REWARD}
+            ):
                 return ActionResult(status="success", state_changed=False)
             idx = 0
             if args and args.get("index") is not None:
@@ -536,7 +531,7 @@ class CliModAdapter:
                 cur = self._cached_state
             if cur.screen == GameScreen.COMBAT:
                 return ActionResult(status="success", state_changed=False)
-            if cur.screen in {GameScreen.CARD_REWARD, GameScreen.TRI_SELECT, GameScreen.BUNDLE_SELECTION}:
+            if cur.screen in INTERSTITIAL_SCREENS - {GameScreen.EVENT}:
                 # Neow 祝福带出奖励/三选一/包裹选择屏时，先推进到 MAP 再选节点
                 # （真机曾卡在 CARD_REWARD：choose_map_node 短路为空操作 → 后续
                 # give_card 无法执行；BUNDLE_SELECTION 下发选节点报 Game not
@@ -555,8 +550,7 @@ class CliModAdapter:
                 try:
                     event_result = self._advance_event_until_map_sync()
                 except STS2Error as exc:
-                    self._cache_stale = True
-                    self._available_actions_cache = None
+                    self.mark_state_stale()
                     return self._action_error_result(exc, state_changed=True)
                 if event_result.screen in {GameScreen.COMBAT, GameScreen.CARD_REWARD}:
                     return ActionResult(status="success", state_changed=True)
@@ -602,19 +596,16 @@ class CliModAdapter:
             try:
                 raw = self._run_cli("reward_skip_card")
                 self._parse_response(raw)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 return ActionResult(status="success", state_changed=True)
             except STS2Error:
                 try:
                     raw = self._run_cli("proceed")
                     self._parse_response(raw)
-                    self._cache_stale = True
-                    self._available_actions_cache = None
+                    self.mark_state_stale()
                     return ActionResult(status="success", state_changed=True)
                 except STS2Error as exc:
-                    self._cache_stale = True
-                    self._available_actions_cache = None
+                    self.mark_state_stale()
                     return self._action_error_result(exc, state_changed=False)
         if action == "return_to_menu" and self._cached_state is not None:
             try:
@@ -631,12 +622,10 @@ class CliModAdapter:
         try:
             raw = self._run_cli(*cli_args)
             self._parse_response(raw)
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             return ActionResult(status="success", state_changed=True)
         except STS2Error as exc:
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             return self._action_error_result(exc, state_changed=False)
 
     def _choose_event_sync(self, index: int) -> ActionResult:
@@ -651,12 +640,10 @@ class CliModAdapter:
             try:
                 raw = self._run_cli("choose_event", str(index))
                 self._parse_response(raw)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 return ActionResult(status="success", state_changed=True)
             except STS2Error as exc:
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 if _is_ui_not_ready_error(exc) and time.monotonic() < deadline:
                     time.sleep(self.poll_interval)
                     continue
@@ -667,15 +654,13 @@ class CliModAdapter:
         try:
             raw = self._run_cli("embark")
             self._parse_response(raw)
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
 
             deadline = time.monotonic() + min(self.timeout, 10.0)
             state = self._get_state_sync()
             while state.screen == GameScreen.CHARACTER_SELECT and time.monotonic() < deadline:
                 time.sleep(0.5)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 state = self._get_state_sync()
 
             if state.screen == GameScreen.CHARACTER_SELECT:
@@ -686,8 +671,7 @@ class CliModAdapter:
                 )
             return ActionResult(status="success", state_changed=True)
         except STS2Error as exc:
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             return self._action_error_result(exc, state_changed=False)
 
     def _bundle_select_and_confirm_sync(self, index: int) -> ActionResult:
@@ -702,18 +686,15 @@ class CliModAdapter:
         try:
             raw = self._run_cli("bundle_select", str(index))
             self._parse_response(raw)
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             # Give the preview a moment to register, then confirm.
             time.sleep(0.3)
             raw2 = self._run_cli("bundle_confirm")
             self._parse_response(raw2)
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             return ActionResult(status="success", state_changed=True)
         except STS2Error as exc:
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             return self._action_error_result(exc, state_changed=True)
 
     def _combat_basic_policy_sync(self) -> ActionResult:
@@ -726,8 +707,7 @@ class CliModAdapter:
         wait_interval = self.poll_interval
         try:
             while time.monotonic() < deadline and steps < 80:
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 state = self._get_state_sync()
                 if state.screen != GameScreen.COMBAT:
                     return ActionResult(status="success", state_changed=True)
@@ -760,14 +740,12 @@ class CliModAdapter:
                     raw = self._run_cli("end_turn")
                     self._parse_response(raw)
                     consecutive_play_failures = 0
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 steps += 1
 
             return ActionResult(status="timeout", state_changed=True, detail="combat_basic_policy timed out")
         except STS2Error as exc:
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             return self._action_error_result(exc, state_changed=True)
 
     def _start_new_run_sync(self) -> ActionResult:
@@ -782,26 +760,22 @@ class CliModAdapter:
                     if "saved run" in (exc.message or "").lower() or "abandon" in (exc.message or "").lower():
                         raw = self._run_cli("abandon_run")
                         self._parse_response(raw)
-                        self._cache_stale = True
-                        self._available_actions_cache = None
+                        self.mark_state_stale()
                         raw = self._run_cli("new_run")
                         self._parse_response(raw)
                     else:
                         raise
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 state = self._poll_state_after_new_run()
 
             if getattr(state, "singleplayer_submenu", None) is not None:
                 raw = self._run_cli("choose_game_mode", "standard")
                 self._parse_response(raw)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
 
             return ActionResult(status="success", state_changed=True)
         except STS2Error as exc:
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             return self._action_error_result(exc, state_changed=False)
 
     def _poll_state_after_new_run(self) -> GameState:
@@ -813,8 +787,7 @@ class CliModAdapter:
             and time.monotonic() < deadline
         ):
             time.sleep(0.2)
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             state = self._get_state_sync()
         return state
 
@@ -827,8 +800,7 @@ class CliModAdapter:
             # 会提前短路、漏掉真正的地图节点选择；短暂等待后重读直至真实状态。
             if _is_degraded_combat_state(state):
                 time.sleep(self.poll_interval)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 state = self._get_state_sync()
                 continue
             if state.screen in {GameScreen.MAP, GameScreen.COMBAT, GameScreen.CARD_REWARD}:
@@ -838,8 +810,7 @@ class CliModAdapter:
 
             raw = self._run_cli(*_event_progress_cli_args(state))
             self._parse_response(raw)
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             state = self._get_state_sync()
 
         return state
@@ -865,8 +836,7 @@ class CliModAdapter:
             if state is None or _is_degraded_combat_state(state):
                 # 降级占位 COMBAT：游戏仍在过渡，短暂等待后重读。
                 time.sleep(self.poll_interval)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 try:
                     state = self._get_state_sync()
                 except STS2Error:
@@ -884,8 +854,7 @@ class CliModAdapter:
                     self._parse_response(raw)
                 except STS2Error:
                     pass
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 try:
                     state = self._get_state_sync()
                 except STS2Error:
@@ -896,8 +865,7 @@ class CliModAdapter:
                         self._parse_response(raw)
                     except STS2Error:
                         pass
-                    self._cache_stale = True
-                    self._available_actions_cache = None
+                    self.mark_state_stale()
                     try:
                         state = self._get_state_sync()
                     except STS2Error:
@@ -910,8 +878,7 @@ class CliModAdapter:
                 except STS2Error:
                     raw = self._run_cli("proceed")
                     self._parse_response(raw)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 state = self._get_state_sync()
                 continue
             if state.screen == GameScreen.BUNDLE_SELECTION:
@@ -933,8 +900,7 @@ class CliModAdapter:
                     if isinstance(first, dict) and first.get("card_id"):
                         raw = self._run_cli("grid_select_card", str(first["card_id"]))
                         self._parse_response(raw)
-                        self._cache_stale = True
-                        self._available_actions_cache = None
+                        self.mark_state_stale()
                         state = self._get_state_sync()
                         continue
                 # 残留 Proceed 确认（is_finished=True）：点击它收尾进 MAP。
@@ -945,8 +911,7 @@ class CliModAdapter:
                     if proceed_idx is not None:
                         raw = self._run_cli("choose_event", str(proceed_idx))
                         self._parse_response(raw)
-                        self._cache_stale = True
-                        self._available_actions_cache = None
+                        self.mark_state_stale()
                         state = self._get_state_sync()
                         continue
                     if options and not event.get("is_in_dialogue", False):
@@ -955,14 +920,12 @@ class CliModAdapter:
                 # 对话中（is_in_dialogue=True）或无选项：下发 advance_dialogue 推进。
                 raw = self._run_cli("advance_dialogue")
                 self._parse_response(raw)
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 state = self._get_state_sync()
                 continue
             # 其它过渡态（UNKNOWN 加载中等）：短暂等待后重读。
             time.sleep(self.poll_interval)
-            self._cache_stale = True
-            self._available_actions_cache = None
+            self.mark_state_stale()
             try:
                 state = self._get_state_sync()
             except STS2Error:
@@ -979,8 +942,7 @@ class CliModAdapter:
         while time.monotonic() < deadline:
             health = self._health_check_sync()
             if health.healthy:
-                self._cache_stale = True
-                self._available_actions_cache = None
+                self.mark_state_stale()
                 actions = self._get_available_actions_sync()
                 if actions:
                     return True
@@ -1009,49 +971,23 @@ class CliModAdapter:
 
         Raises STS2Error(ADAPTER_ERROR) on parse failure or major mismatch.
         """
-        match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version_output.strip())
-        if not match:
-            raise STS2Error(
-                category=ErrorCategory.ADAPTER_ERROR,
-                message=f"Cannot parse version from: {version_output!r}",
-                detail={
-                    "subtype": AdapterErrorSubType.JSON_PARSE_FAILURE,
-                    "command": "sts2 --version",
-                    "raw_output": version_output,
-                },
-            )
-        major = int(match.group(1))
-        if major != self.SUPPORTED_MAJOR_VERSION:
-            raise STS2Error(
-                category=ErrorCategory.ADAPTER_ERROR,
-                message=(
-                    f"Adapter major version {major} is incompatible "
-                    f"(supported: {self.SUPPORTED_MAJOR_VERSION}). "
-                    f"Please upgrade STS2-Cli-Mod."
-                ),
-                detail={
-                    "subtype": AdapterErrorSubType.VERSION_MISMATCH,
-                    "command": "sts2 --version",
-                    "raw_output": version_output,
-                },
-            )
+        check_version_compatibility(
+            version_output,
+            supported_major=self.SUPPORTED_MAJOR_VERSION,
+            command_hint="sts2 --version",
+            upgrade_target="STS2-Cli-Mod",
+        )
         self._version_checked = True
 
     @staticmethod
     def _map_screen(screen_raw: str) -> GameScreen:
         """Map CLI screen name to GameScreen enum with fallback to UNKNOWN."""
-        return _SCREEN_MAP.get(screen_raw, GameScreen.UNKNOWN)
+        return map_screen_name(screen_raw)
 
 
 def _filter_state_extra(data: dict[str, Any]) -> dict[str, Any]:
-    """Extract extra fields from CLI state response for GameState model.
-
-    GameState(screen=..., extra="allow") accepts arbitrary fields,
-    but we skip the 'screen' key (already consumed) and 'error' key
-    (not a state field).
-    """
-    skip_keys = {"screen", "error"}
-    return {k: v for k, v in data.items() if k not in skip_keys}
+    """Extract extra fields from CLI state response (shared semantics)."""
+    return filter_state_extra(data)
 
 
 def _screen_to_actions(screen: GameScreen) -> list[str]:
