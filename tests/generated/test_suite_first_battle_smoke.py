@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
-from sts2_autotest.dsl.fluent import define
+
+from sts2_autotest.common.state import GameScreen
 from sts2_autotest.dsl.assertions import (
     advance_dialogue,
     choose_event,
@@ -9,14 +10,15 @@ from sts2_autotest.dsl.assertions import (
     embark,
     enter_combat,
     game_reached_state,
-    no_crash_detected,
     has_travelable_node,
+    no_crash_detected,
     return_to_menu,
     select_character,
     skip_card_reward,
     start_new_run,
 )
-from sts2_autotest.common.state import GameScreen
+from sts2_autotest.dsl.fluent import define
+
 
 def test_suite_first_battle_smoke(autotest, _session_loop):
     """首次战斗冒烟"""
@@ -46,13 +48,13 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
     # Case: TC-PREPARE-NEW-RUN - 进入新局地图
     result_tc_prepare_new_run = (
         define("TC-PREPARE-NEW-RUN", autotest, _session_loop)
-        .require_start_state("""- 任意可恢复状态
-- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN""")
+        .require_start_state("- 任意可恢复状态\n- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN", requirements={'allowed_screens': ['MAIN_MENU', 'CHARACTER_SELECT', 'MAP', 'COMBAT', 'EVENT', 'GAME_OVER', 'VICTORY', 'UNKNOWN'], 'exempt_first_battle_finished': False, 'exempt_neow_resolved': False, 'exempt_recoverable_reward': True, 'needs_travelable_node': False, 'screen': None})
         .setup(
             return_to_menu(),
             start_new_run(),
             select_character("IRONCLAD"),
             embark(),
+            choose_event(0),
         )
         .execute(
             advance_dialogue(),
@@ -68,7 +70,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
         "title": "进入新局地图",
         "start_state": "- 任意可恢复状态\n- 允许当前处于 MAIN_MENU / CHARACTER_SELECT / EVENT / MAP / COMBAT / VICTORY / GAME_OVER / UNKNOWN",
         "end_state": "- 到达 Act 1 地图\n- 当前可选择首个可达节点",
-        "steps": ["返回主菜单", "开始新 run", "选择 Ironclad", "开始冒险", "推进事件对话"],
+        "steps": ["返回主菜单", "开始新 run", "选择 Ironclad", "开始冒险", "选择开局事件的第 0 个选项", "推进事件对话"],
         "passed": result_tc_prepare_new_run.passed,
         "failures": result_tc_prepare_new_run.failures,
         "detail": result_tc_prepare_new_run.detail,
@@ -81,8 +83,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
     # Case: TC-RESOLVE-NEOW - 处理开局祝福事件
     result_tc_resolve_neow = (
         define("TC-RESOLVE-NEOW", autotest, _session_loop)
-        .require_start_state("""- 已进入新 run
-- 当前位于开局事件界面，且事件可交互""")
+        .require_start_state("- 已进入新 run\n- 当前位于开局事件界面，且事件可交互", requirements={'allowed_screens': [], 'exempt_first_battle_finished': False, 'exempt_neow_resolved': True, 'exempt_recoverable_reward': False, 'needs_travelable_node': False, 'screen': 'EVENT'})
         .setup(
         )
         .execute(
@@ -112,8 +113,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
     # Case: TC-FINISH-FIRST-BATTLE - 完成首次战斗
     result_tc_finish_first_battle = (
         define("TC-FINISH-FIRST-BATTLE", autotest, _session_loop)
-        .require_start_state("""- 当前位于地图界面
-- 存在至少一个可到达的普通战斗节点""")
+        .require_start_state("- 当前位于地图界面\n- 存在至少一个可到达的普通战斗节点", requirements={'allowed_screens': ['MAP', 'COMBAT'], 'exempt_first_battle_finished': True, 'exempt_neow_resolved': False, 'exempt_recoverable_reward': False, 'needs_travelable_node': True, 'screen': None})
         .setup(
             choose_map_node(2, 1),
             enter_combat(),

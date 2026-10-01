@@ -14,6 +14,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sts2_autotest.adapters.base import GameAdapterProtocol
+from sts2_autotest.core.main_menu_state import frame_dirty, menu_actions, state_view
+from sts2_autotest.common.state import state_fingerprint
+from sts2_autotest.adapters.semantics import (
+    EVENT_ADVANCE_ACTIONS,
+    RETURN_TO_MENU_ACTIONS,
+    REWARD_PROCEED_ACTIONS,
+)
 from sts2_autotest.core.navigation import (
     NavigationBlocked,
     _first_live_enemy,
@@ -99,14 +106,10 @@ def _extract_floor(state: dict[str, Any]) -> int | None:
     return None
 
 
-def _fingerprint(state: dict[str, Any]) -> str:
-    volatile = {"state_version", "request_id", "timestamp", "updated_at"}
-    return json.dumps(
-        {key: value for key, value in state.items() if key not in volatile},
-        sort_keys=True,
-        ensure_ascii=False,
-        default=str,
-    )
+# 状态指纹单源于 common.state.state_fingerprint（历史拷贝已删除）；
+# 公开别名：跨模块消费者（core/run_executor 等）使用公开名。
+extract_chapter = _extract_chapter
+_fingerprint = state_fingerprint
 
 
 class GenericJourneys:
@@ -336,12 +339,22 @@ class GenericJourneys:
                 state = await self.snapshot()
                 screen = str(state.get("screen") or "").upper()
                 if screen == "MAIN_MENU":
+                    # 判定口径统一（LOC-005 决策 B）：has_run_save 三态优先的脏
+                    # 检查——残留旧局的主菜单不算完成复位；可放弃则放弃后由下一
+                    # 轮复核，无放弃能力时保持旧行为放行（清理不可达，不新增失败面）。
+                    view = state_view(state)
+                    menu_act = menu_actions(view)
+                    if not frame_dirty(view, menu_act):
+                        return state
+                    if "abandon_run" in menu_act:
+                        await self._act_confirmed("abandon_run")
+                        continue
                     return state
                 actions = list(state.get("available_actions") or [])
                 return_action = next(
                     (
                         name
-                        for name in ("return_to_menu", "return_to_main_menu")
+                        for name in RETURN_TO_MENU_ACTIONS
                         if name in actions
                     ),
                     None,
@@ -362,11 +375,7 @@ class GenericJourneys:
                     reward_action = next(
                         (
                             name
-                            for name in (
-                                "collect_rewards_and_proceed",
-                                "resolve_rewards",
-                                "proceed",
-                            )
+                            for name in REWARD_PROCEED_ACTIONS
                             if name in actions
                         ),
                         None,
@@ -404,11 +413,8 @@ class GenericJourneys:
                         # 就直接选第一个推进，避免卡在事件页无法回主菜单。
                         event_action = next(
                             (
-                                a for a in (
-                                    "choose_event",
-                                    "choose_event_option",
-                                    "choose_neow_blessing",
-                                ) if a in actions
+                                a for a in EVENT_ADVANCE_ACTIONS
+                                if a in actions
                             ),
                             None,
                         )

@@ -25,6 +25,7 @@ from sts2_autotest.common.visual_qa import (
     DEFAULT_LOW_BRIGHTNESS_THRESHOLD,
     DEFAULT_LOW_VARIANCE_THRESHOLD,
 )
+from sts2_autotest.core import run_executor
 
 
 class TestCLIParser:
@@ -156,18 +157,19 @@ class TestCLICommands:
             "sts2_autotest.cli.main._create_adapter",
             lambda _type, project=None: adapter,
         )
-        with patch(
-            "sts2_autotest.cli.main._run_journey_foreground", return_value=0
-        ) as journey:
+        with patch("sts2_autotest.cli.main.JourneyExecutor") as executor_cls:
+            executor_cls.return_value.execute.return_value.exit_code = 0
             assert run_cmd(args) == 0
-        journey.assert_called_once_with(
-            adapter,
-            journey="first_battle",
-            character_id="IRONCLAD",
-            timeout=30.0,
-            run_id=None,
-            precheck=True,
-        )
+        executor_cls.assert_called_once()
+        call_args, call_kwargs = executor_cls.call_args
+        assert call_args[0] is adapter
+        request = call_args[1]
+        assert request.journey == "first_battle"
+        assert request.character_id == "IRONCLAD"
+        assert request.timeout == 30.0
+        assert request.precheck is True
+        assert call_kwargs.get("run_id") is None
+        executor_cls.return_value.execute.assert_called_once_with()
 
     def test_run_all_pipeline_targets_suite_files_when_suites_exist(
         self, tmp_path: Path
@@ -349,17 +351,24 @@ class TestCLICommands:
 
 
 class TestCreateAdapter:
-    def test_child_argv_forwards_card_id_for_card_test(self) -> None:
+    def test_compose_worker_argv_forwards_card_id_for_card_test(self, tmp_path, monkeypatch) -> None:
         """card_test 经 CLI --detach 提交时 --card-id 必须传入工作进程。"""
-        from sts2_autotest.cli.main import _child_argv
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(tmp_path / "runs"))
+        from sts2_autotest.cli.main import _submit_detached_run
 
+        spawned: dict = {}
+        monkeypatch.setattr(
+            "sts2_autotest.core.run_service.spawn_worker",
+            lambda store, record, argv: spawned.setdefault("argv", argv) or 0,
+        )
         args = _create_parser().parse_args([
             "run", "--journey", "card_test", "--card-id", "gawain:strike_gawain",
             "--adapter", "agent", "--detach",
         ])
 
-        argv = _child_argv(args, "run-test-1")
+        assert _submit_detached_run(args) == 0
 
+        argv = spawned["argv"]
         assert "--card-id" in argv
         assert argv[argv.index("--card-id") + 1] == "gawain:strike_gawain"
 
@@ -790,26 +799,6 @@ class TestResume:
 class TestCancelLifecycle:
     """修复三：取消是完整生命周期，收尾失败要正确归类。"""
 
-    def test_classify_control_loss_maps_to_blocked_environment_reason(self) -> None:
-        from sts2_autotest.cli.main import _classify_cancel_cleanup_error
-        from sts2_autotest.common.errors import CancelFailureReason
-
-        exc = RuntimeError("connection refused while abandoning run")
-        assert (
-            _classify_cancel_cleanup_error(exc)
-            == CancelFailureReason.GAME_CONTROL_UNAVAILABLE.value
-        )
-
-    def test_classify_generic_cleanup_failure_maps_to_cleanup_failed(self) -> None:
-        from sts2_autotest.cli.main import _classify_cancel_cleanup_error
-        from sts2_autotest.common.errors import CancelFailureReason
-
-        exc = RuntimeError("could not reach MAIN_MENU: unexpected screen")
-        assert (
-            _classify_cancel_cleanup_error(exc)
-            == CancelFailureReason.CANCEL_CLEANUP_FAILED.value
-        )
-
     def test_cancel_cmd_requests_graceful_cancel_without_terminating(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -877,7 +866,7 @@ class TestCombatModeDebugDoubleCheck:
     def _resolve(adapter: object, combat_mode: str) -> tuple[str, str | None]:
         import asyncio
 
-        from sts2_autotest.cli.main import _resolve_combat_mode_with_debug_check
+        from sts2_autotest.core.run_executor import _resolve_combat_mode_with_debug_check
 
         loop = asyncio.new_event_loop()
         try:
@@ -958,41 +947,42 @@ class TestEnvironmentPrecheck:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """无法构造生命周期管理（游戏非本框架管理）→ 跳过预检，返回 None。"""
-        from sts2_autotest.cli import main as cli_main
 
         monkeypatch.setattr(
             "sts2_autotest.core.runtime_factory.build_lifecycle_manager",
             lambda *a, **k: None,
         )
-        assert cli_main._run_environment_precheck(object()) is None  # type: ignore[arg-type]
+        assert run_executor._run_environment_precheck(object()) is None  # type: ignore[arg-type]
 
     def test_returns_none_when_environment_ready(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """生命周期报告 ready=True → 预检通过，返回 None。"""
-        from sts2_autotest.cli import main as cli_main
         from sts2_autotest.core.lifecycle import EnvironmentReadiness
 
         class _Lifecycle:
-            async def ensure_environment_ready(self) -> EnvironmentReadiness:
+            async def ensure_environment_ready(
+                self, *, api_timeout: float | None = None
+            ) -> EnvironmentReadiness:
                 return EnvironmentReadiness(ready=True)
 
         monkeypatch.setattr(
             "sts2_autotest.core.runtime_factory.build_lifecycle_manager",
             lambda *a, **k: _Lifecycle(),
         )
-        assert cli_main._run_environment_precheck(object()) is None  # type: ignore[arg-type]
+        assert run_executor._run_environment_precheck(object()) is None  # type: ignore[arg-type]
 
     def test_returns_reason_when_not_ready(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """生命周期报告 ready=False → 返回阻塞原因字符串。"""
-        from sts2_autotest.cli import main as cli_main
         from sts2_autotest.common.errors import EnvironmentBlockReason
         from sts2_autotest.core.lifecycle import EnvironmentReadiness
 
         class _Lifecycle:
-            async def ensure_environment_ready(self) -> EnvironmentReadiness:
+            async def ensure_environment_ready(
+                self, *, api_timeout: float | None = None
+            ) -> EnvironmentReadiness:
                 return EnvironmentReadiness(
                     ready=False,
                     reason=EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE,
@@ -1002,71 +992,37 @@ class TestEnvironmentPrecheck:
             "sts2_autotest.core.runtime_factory.build_lifecycle_manager",
             lambda *a, **k: _Lifecycle(),
         )
-        reason = cli_main._run_environment_precheck(object())  # type: ignore[arg-type]
+        reason = run_executor._run_environment_precheck(object())  # type: ignore[arg-type]
         assert reason == EnvironmentBlockReason.GAME_CONTROL_UNAVAILABLE.value
 
     def test_precheck_error_never_raises(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """ensure_environment_ready 抛错也绝不冒泡 → 归类为 PRECHECK_ERROR。"""
-        from sts2_autotest.cli import main as cli_main
 
         class _Lifecycle:
-            async def ensure_environment_ready(self) -> object:
+            async def ensure_environment_ready(self, *, api_timeout: float | None = None) -> object:
                 raise RuntimeError("boom")
 
         monkeypatch.setattr(
             "sts2_autotest.core.runtime_factory.build_lifecycle_manager",
             lambda *a, **k: _Lifecycle(),
         )
-        reason = cli_main._run_environment_precheck(object())  # type: ignore[arg-type]
+        reason = run_executor._run_environment_precheck(object())  # type: ignore[arg-type]
         assert reason is not None
         assert reason.startswith("PRECHECK_ERROR:")
 
 
-class TestJourneyPrecheckGate:
-    """预检开关：仅真实 CLI 入口（precheck=True）执行预检；内部单测默认跳过。
-
-    precheck=False 的跳过行为由 test_journey_foreground.py 的端到端旅程用例覆盖
-    （本机/CI 自托管 runner 均设 STS2_GAME_DIR，若预检误运行这些用例会返回 2）。
-    """
-
-    def test_precheck_true_blocks_before_journey(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """precheck=True 且环境不就绪 → 旅程执行前返回 2（BLOCKED_ENVIRONMENT）。"""
-        from sts2_autotest.cli import main as cli_main
-
-        monkeypatch.setenv("STS2_AUTOTEST_EVIDENCE", "none")
-        monkeypatch.setenv("STS2_AUTOTEST_EVIDENCE_DIR", str(tmp_path / "evidence"))
-        monkeypatch.setattr(
-            "sts2_autotest.core.runtime_factory.build_lifecycle_manager",
-            lambda *args, **kwargs: None,
-        )
-        monkeypatch.setattr(
-            cli_main, "_run_environment_precheck", lambda _adapter: "GAME_CONTROL_UNAVAILABLE"
-        )
-
-        rc = cli_main._run_journey_foreground(
-            object(),  # type: ignore[arg-type]  # 预检在触碰 adapter 前就返回，无需真实适配器
-            journey="first_battle",
-            character_id="IRONCLAD",
-            timeout=1.0,
-            run_id="test-precheck-gate",
-            precheck=True,
-        )
-        assert rc == 2
 
     def test_recover_main_menu_via_restart_returns_main_menu(self) -> None:
         """受控重启恢复：回到干净主菜单 → ok / 恰好启动一次 / 结构化返回值。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_CLEAN_ACTIONS),                       # _wait_for_main_menu 首帧
             *[_menu_state(_CLEAN_ACTIONS) for _ in range(3)],  # 稳定读取
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=2,
         )
@@ -1080,11 +1036,10 @@ class TestJourneyPrecheckGate:
 
     def test_recover_main_menu_via_restart_blocked_when_menu_unreachable(self) -> None:
         """受控重启恢复：一次启动后仍读不到主菜单 → 环境阻塞（不返回 None、不再启动）。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([RuntimeError("game control lost")] * 50)
         lifecycle = _CountingLifecycle(ready=False, reason="game_control_lost")
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(), sleep=_no_sleep, menu_timeout=0.05
         )
         assert result is not None
@@ -1163,7 +1118,7 @@ class _CountingLifecycle:
     def _game_process_present(self) -> bool:
         return False
 
-    async def ensure_environment_ready(self):
+    async def ensure_environment_ready(self, *, api_timeout: float | None = None):
         import types
 
         self.ensure_calls += 1
@@ -1193,7 +1148,6 @@ class TestCleanMainMenuRecovery:
 
     def test_late_saved_run_signal_triggers_abandon_and_clean(self) -> None:
         """首帧无旧局、稳定帧晚到 continue_run：必须执行放弃并最终判干净。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_CLEAN_ACTIONS),                       # _wait_for_main_menu 首帧
@@ -1209,7 +1163,7 @@ class TestCleanMainMenuRecovery:
             _menu_state(_CLEAN_ACTIONS),
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1221,7 +1175,6 @@ class TestCleanMainMenuRecovery:
 
     def test_transient_clean_frame_after_abandon_is_not_false_clean(self) -> None:
         """放弃后第一帧瞬态干净、随后旧局复现：不得判干净（V10 假阳性复现）。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_DIRTY_ACTIONS, has_run_save=True),    # _wait_for_main_menu 首帧
@@ -1235,7 +1188,7 @@ class TestCleanMainMenuRecovery:
             _menu_state(_DIRTY_ACTIONS, has_run_save=True),
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1245,7 +1198,6 @@ class TestCleanMainMenuRecovery:
 
     def test_unclearable_saved_run_is_platform_failure_not_env_block(self) -> None:
         """能控制游戏但旧局清不掉 → FAILED_PLATFORM（blocked=False），不是环境阻塞。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_DIRTY_ACTIONS, has_run_save=True),
@@ -1255,7 +1207,7 @@ class TestCleanMainMenuRecovery:
             *[_menu_state(_DIRTY_ACTIONS, has_run_save=True) for _ in range(3)],
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1265,14 +1217,13 @@ class TestCleanMainMenuRecovery:
 
     def test_ok_requires_new_run_capability_not_just_main_menu_screen(self) -> None:
         """主菜单可操作但无开新局能力（且无旧局）→ 无法确认干净，判平台失败。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(["open_timeline", "probe"]),           # 可操作但无开新局能力
             *[_menu_state(["open_timeline", "probe"]) for _ in range(3)],
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1284,14 +1235,13 @@ class TestCleanMainMenuRecovery:
     def test_stale_continue_abandon_actions_tolerated_when_save_field_false(self) -> None:
         """V11 实测：has_run_save 显式 False 时 continue/abandon 动作是菜单重建
         陈旧伪影（此时 start_new_run 可直接开局无确认框）→ 必须判干净。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_DIRTY_ACTIONS, has_run_save=False),   # 陈旧动作 + 内省无存档
             *[_menu_state(_DIRTY_ACTIONS, has_run_save=False) for _ in range(3)],
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1301,7 +1251,6 @@ class TestCleanMainMenuRecovery:
 
     def test_actions_only_dirty_when_save_field_unpublished(self) -> None:
         """内省字段未发布时退回动作列表判断：出现 continue_run 即旧局，须放弃。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_DIRTY_ACTIONS, has_run_save=None),    # 字段缺失 + continue_run
@@ -1315,7 +1264,7 @@ class TestCleanMainMenuRecovery:
             _menu_state(_CLEAN_ACTIONS, has_run_save=None),
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1326,7 +1275,6 @@ class TestCleanMainMenuRecovery:
 
     def test_menu_republish_after_abandon_eventually_clean(self) -> None:
         """V11 假阴性复现：放弃后先遇空动作重建帧、随后菜单发布 → 必须等到干净。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_DIRTY_ACTIONS, has_run_save=True),
@@ -1341,7 +1289,7 @@ class TestCleanMainMenuRecovery:
             _menu_state(_DIRTY_ACTIONS, has_run_save=False),
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=4,
         )
@@ -1351,7 +1299,6 @@ class TestCleanMainMenuRecovery:
 
     def test_mod_loading_empty_menu_waits_until_operational(self) -> None:
         """V11 实测：重启后画面先到主菜单但模组仍在加载（动作空）→ 必须等到可操作。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state([]),                                   # 到达帧：主菜单但模组加载中
@@ -1360,7 +1307,7 @@ class TestCleanMainMenuRecovery:
             *[_menu_state(_CLEAN_ACTIONS) for _ in range(3)],  # 稳定读取
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1370,11 +1317,10 @@ class TestCleanMainMenuRecovery:
 
     def test_mod_never_operational_is_environment_blocked(self) -> None:
         """模组始终不发布动作（菜单永不可操作）→ 环境阻塞，不得判平台失败。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([_menu_state([])] * 60)
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
             operational_timeout=0.05,
@@ -1404,14 +1350,13 @@ class TestCleanMainMenuRecoveryCliAdapter:
 
     def test_cli_clean_menu_judged_clean_via_adapter_actions(self) -> None:
         """V11 根因：CliMod 状态无内嵌动作 → 必须经 get_available_actions 判干净。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter(
             [_cli_menu_state(has_run_save=False) for _ in range(4)],
             adapter_actions=_CLI_STATIC_ACTIONS,
         )
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1422,7 +1367,6 @@ class TestCleanMainMenuRecoveryCliAdapter:
 
     def test_cli_dirty_menu_abandoned_and_cleaned(self) -> None:
         """CliMod 路径：内省字段有旧局 → 放弃 → 字段转无 → 判干净。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter(
             [
@@ -1439,7 +1383,7 @@ class TestCleanMainMenuRecoveryCliAdapter:
             adapter_actions=_CLI_STATIC_ACTIONS,
         )
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1458,7 +1402,6 @@ class TestCleanMainMenuRecoveryCliAdapter:
 
     def test_cli_actions_unavailable_during_mod_loading(self) -> None:
         """CliMod 模组加载期协议方法返回空 → 等到可操作（不误判也不误放弃）。"""
-        from sts2_autotest.cli import main as cli_main
 
         class _LoadingAdapter(_ScriptedAdapter):
             def __init__(self, states):
@@ -1477,7 +1420,7 @@ class TestCleanMainMenuRecoveryCliAdapter:
         )
         adapter.adapter_actions = list(_CLI_STATIC_ACTIONS)
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=3,
         )
@@ -1487,12 +1430,11 @@ class TestCleanMainMenuRecoveryCliAdapter:
 
     def test_single_restart_only_and_restart_count_is_honest(self) -> None:
         """启动后未到主菜单：禁止第二次启动；restart_count 必须等于真实启动次数。"""
-        from sts2_autotest.cli import main as cli_main
 
         # get_state 始终抛异常（端口失联）→ 首启动后永远等不到主菜单。
         adapter = _ScriptedAdapter([RuntimeError("port dead")] * 50)
         lifecycle = _CountingLifecycle(ready=False, reason="game_control_lost")
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(), sleep=_no_sleep, menu_timeout=0.05
         )
         assert lifecycle.ensure_calls == 1, "一次取消最多启动一次游戏，禁止再次启动"
@@ -1501,14 +1443,13 @@ class TestCleanMainMenuRecoveryCliAdapter:
 
     def test_restart_count_matches_actual_starts_on_success(self) -> None:
         """成功路径：恰好启动一次，restart_count=1。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_CLEAN_ACTIONS),
             *[_menu_state(_CLEAN_ACTIONS) for _ in range(3)],
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=2,
         )
@@ -1518,14 +1459,13 @@ class TestCleanMainMenuRecoveryCliAdapter:
 
     def test_report_keeps_full_recovered_state(self) -> None:
         """取消报告必须保留恢复后完整状态，供审计独立核对（P1-1）。"""
-        from sts2_autotest.cli import main as cli_main
 
         adapter = _ScriptedAdapter([
             _menu_state(_CLEAN_ACTIONS),
             *[_menu_state(_CLEAN_ACTIONS) for _ in range(3)],
         ])
         lifecycle = _CountingLifecycle()
-        result = cli_main._recover_main_menu_via_restart(
+        result = run_executor.recover_main_menu_via_restart(
             lifecycle, adapter, _SyncLoop(),
             sleep=_no_sleep, settle_tries=3, post_abandon_tries=2,
         )

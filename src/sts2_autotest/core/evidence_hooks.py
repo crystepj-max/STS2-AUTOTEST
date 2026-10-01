@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 from sts2_autotest.common.evidence import FailureInfo
 from sts2_autotest.common.logging import get_logger
-from sts2_autotest.common.types import ScreenCaptureProtocol
+from sts2_autotest.common.types import CaptureResult, ScreenCaptureProtocol
 from sts2_autotest.core.action_model import TestResult
 
 logger = get_logger("core.evidence_hooks")
@@ -55,6 +55,8 @@ class EvidenceHooks(Protocol):
     def on_crash(self, case_id: str, error: Exception) -> None: ...
     def on_session_end(self, summary: dict[str, Any]) -> None: ...
     def capture_state(self, case_id: str, state: dict[str, Any]) -> None: ...
+    def collect_on_failure_logs(self, case_id: str) -> None: ...
+    def capture_failure_screenshot(self, case_id: str) -> CaptureResult | None: ...
 
 
 class StubEvidenceHooks:
@@ -74,6 +76,12 @@ class StubEvidenceHooks:
 
     def capture_state(self, case_id: str, state: dict[str, Any]) -> None:
         pass
+
+    def collect_on_failure_logs(self, case_id: str) -> None:
+        pass
+
+    def capture_failure_screenshot(self, case_id: str) -> CaptureResult | None:
+        return None
 
 
 def build_evidence_hooks(
@@ -133,6 +141,17 @@ class RealEvidenceHooks:
 
     def on_case_start(self, case_id: str) -> None:
         logger.debug("Case %s started", case_id)
+
+    def collect_on_failure_logs(self, case_id: str) -> None:
+        """失败时收集过滤后的日志（无日志收集器时为 no-op）。"""
+        if self._log_collector is not None:
+            self._log_collector.collect_on_failure(case_id)
+
+    def capture_failure_screenshot(self, case_id: str) -> CaptureResult | None:
+        """失败时截取带校验的截图；未配置截图能力时返回 None。"""
+        if self._capture is None:
+            return None
+        return self._capture.capture_with_validation(self._window_title, case_id)
 
     def on_case_end(self, result: TestResult) -> None:
         """Capture screenshot + log on case end. Failure gets filtered logs."""
