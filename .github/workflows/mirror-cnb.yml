@@ -1,0 +1,77 @@
+name: Mirror to CNB (disaster backup)
+
+# GitHub 是主源，CNB 是灾备镜像。
+# 只允许快进，绝不强推：若 CNB 上出现 GitHub 没有的提交（例如 GitHub 中断期
+# 有人直接在 CNB 上继续开发），本 workflow 会失败并停下等人工回灌，
+# 而不是用 --mirror/--force 摧毁灾备副本。
+#
+# 缺 CNB_TOKEN secret 时明确报错退出，不静默跳过 —— 静默跳过会让
+# "有备份"这个假设失真。
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    # 每日兜底，补上 push 事件漏掉的窗口（如 GitHub 侧直接改分支）
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-cnb
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CNB_URL: https://cnb.cool/chris.ai/STS2-AUTOTEST.git
+    steps:
+      - name: Checkout GitHub main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          # 需要完整历史与标签，否则推给 CNB 时会缺对象
+          fetch-depth: 0
+
+      - name: Fast-forward CNB main
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CNB_TOKEN:-}" ]; then
+            echo "::error title=镜像未执行::仓库缺少 CNB_TOKEN secret。请在 CNB「设置 > 访问令牌」创建具备代码读写权限的令牌，再执行 gh secret set CNB_TOKEN。"
+            exit 1
+          fi
+
+          git remote add cnb "$CNB_URL"
+          auth=(-c "http.extraHeader=Authorization: Bearer $CNB_TOKEN")
+
+          if ! git "${auth[@]}" fetch --quiet cnb main; then
+            echo "::error title=无法读取 CNB::令牌可能已过期，或 CNB 不可达。"
+            exit 1
+          fi
+
+          gh_sha="$(git rev-parse HEAD)"
+          cnb_sha="$(git rev-parse cnb/main)"
+          echo "GitHub main: $gh_sha"
+          echo "CNB    main: $cnb_sha"
+
+          if [ "$gh_sha" = "$cnb_sha" ]; then
+            echo "两侧一致，无需推送。"
+            exit 0
+          fi
+
+          if ! git merge-base --is-ancestor cnb/main "$gh_sha"; then
+            echo "::error title=已拒绝强推::CNB main 含有 GitHub 没有的提交（$cnb_sha）。为保护灾备副本已停止。请把 CNB 侧的工作先回灌到 GitHub，再重跑本 workflow。"
+            exit 1
+          fi
+
+          echo "CNB 是 GitHub 的严格祖先，执行快进推送。"
+          git "${auth[@]}" push cnb "main:main"
+          git "${auth[@]}" push cnb --tags
