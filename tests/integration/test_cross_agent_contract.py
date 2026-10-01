@@ -45,7 +45,7 @@ def test_mcp_submit_query_report_contract_is_client_neutral(monkeypatch, tmp_pat
     monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(run_root))
 
     server = McpServer(host="127.0.0.1", port=0)
-    with patch("sts2_autotest.cli.mcp_tools.spawn_worker") as worker:
+    with patch("sts2_autotest.core.run_service.spawn_worker") as worker:
         first = _call_tool(
             server,
             1,
