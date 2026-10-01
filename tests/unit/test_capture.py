@@ -832,15 +832,18 @@ class TestCaptureScreenshotHandler:
             status="ok", path=Path("/tmp/handler.png")
         )
 
-        # Create orchestrator with RealEvidenceHooks
+        # handlers 应把截图请求转发给证据钩子的公开方法（私有 _capture
+        # 字段穿越已在架构候选 6 中折叠）。
         mock_adapter = MagicMock()
         hooks = MagicMock()
-        hooks._capture = mock_capture
+        hooks.capture_failure_screenshot.return_value = CaptureResult(
+            status="ok", path=Path("/tmp/handler.png")
+        )
         orch = TestOrchestrator(adapter=mock_adapter, evidence=hooks)
 
         # Should not raise
         capture_screenshot(orch, "test-case")
-        mock_capture.capture_with_validation.assert_called_once()
+        hooks.capture_failure_screenshot.assert_called_once_with("test-case")
 
     def test_without_capture_fallback(self) -> None:
         from sts2_autotest.core.evidence_hooks import StubEvidenceHooks

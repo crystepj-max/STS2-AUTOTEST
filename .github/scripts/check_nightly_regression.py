@@ -193,20 +193,28 @@ def validate_workflow(workflow_path: Path, classifier_path: Path) -> list[str]:
         violations.append(f"分类器不存在：{classifier_path}")
 
     env_check_script = Path("scripts/nightly-env-check.sh")
+    probe_script = Path("scripts/probe_game_control.py")
     if env_check_script.is_file():
         env_text = env_check_script.read_text(encoding="utf-8")
-        if "STS2_CLI_PATH" not in env_text:
-            violations.append(
-                "nightly-env-check.sh 必须优先检查 STS2_CLI_PATH（与 discover_sts2_cli 对齐）"
-            )
         if "FAIL=1" not in env_text:
             violations.append("nightly-env-check.sh 必须在失败时设置 FAIL=1")
-        if "command -v sts2" not in env_text and "STS2_CLI_PATH" not in env_text:
-            violations.append("nightly-env-check.sh 必须检测 sts2 CLI")
-        if "PROBE_TIMEOUT" not in env_text and "timeout=" not in env_text:
-            violations.append("nightly-env-check.sh 游戏控制探测必须带 timeout")
+        if "probe_game_control.py" not in env_text:
+            violations.append(
+                "nightly-env-check.sh 必须调用 probe_game_control.py"
+                "（CLI 解析单源复用 discover_sts2_cli）"
+            )
     else:
         violations.append("缺少 scripts/nightly-env-check.sh")
+    if not probe_script.is_file():
+        violations.append("缺少 scripts/probe_game_control.py（游戏控制面探针）")
+    else:
+        probe_text = probe_script.read_text(encoding="utf-8")
+        if "discover_sts2_cli" not in probe_text:
+            violations.append(
+                "probe_game_control.py 必须复用 discover_sts2_cli（禁止复刻解析顺序）"
+            )
+        if "timeout" not in probe_text:
+            violations.append("probe_game_control.py 游戏控制探测必须带 timeout")
 
     if "game-control.json" not in text and "Capture game evidence" not in text:
         violations.append("ci-nightly.yml 必须在分类前采集游戏证据标记（game-control.json）")

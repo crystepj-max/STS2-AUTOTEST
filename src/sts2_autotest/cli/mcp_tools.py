@@ -26,10 +26,12 @@ from sts2_autotest.cli.mcp_protocol import (
     McpTool,
 )
 from sts2_autotest.core.run_service import (
+    RUN_RESULT_FILENAME,
     RunRequest,
     RunStore,
+    build_resume_request,
     serialize_record,
-    spawn_worker,
+    submit_run,
 )
 
 # ── Path whitelist ──
@@ -139,9 +141,9 @@ def _probe_runtime_capabilities() -> dict[str, Any]:
     def _worker() -> None:
         try:
             # 游戏控制入口（8080）与调试控制台都由 AgentAdapter 承载。
-            from sts2_autotest.cli.main import _create_adapter
+            from sts2_autotest.core.runtime_factory import create_adapter_from_env
 
-            adapter = _create_adapter("agent")
+            adapter = create_adapter_from_env("agent")
         except Exception:
             return
 
@@ -240,41 +242,6 @@ def handle_capabilities(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _request_argv(args: dict[str, Any], run_id: str, *, mode: str = "new") -> list[str]:
-    argv = ["run"]
-    if mode == "resume" or args.get("resume"):
-        argv.append("--resume")
-    has_explicit_target = bool(args.get("cases") or args.get("suite") or args.get("journey"))
-    if args.get("all") or not has_explicit_target:
-        argv.append("--all")
-    if args.get("cases"):
-        argv.extend(["--cases", *[str(item) for item in args["cases"]]])
-    if args.get("suite"):
-        argv.extend(["--suite", str(args["suite"])])
-    if args.get("spec_dir"):
-        argv.extend(["--spec-dir", str(args["spec_dir"])])
-    if args.get("project"):
-        argv.extend(["--project", str(args["project"])])
-    if args.get("adapter"):
-        argv.extend(["--adapter", str(args["adapter"])])
-    if args.get("journey"):
-        argv.extend(["--journey", str(args["journey"])])
-    if args.get("target_scene"):
-        argv.extend(["--target-scene", str(args["target_scene"])])
-    if args.get("route_policy"):
-        argv.extend(["--route-policy", str(args["route_policy"])])
-    if args.get("combat_mode"):
-        argv.extend(["--combat-mode", str(args["combat_mode"])])
-    if args.get("card_id"):
-        argv.extend(["--card-id", str(args["card_id"])])
-    if args.get("character_id"):
-        argv.extend(["--character-id", str(args["character_id"])])
-    if args.get("timeout") is not None:
-        argv.extend(["--timeout", str(int(args["timeout"]))])
-    argv.extend(["--internal-run-id", run_id])
-    return argv
-
-
 def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     evidence = str(args.get("evidence", "full")).lower()
     if evidence not in {"none", "minimal", "full"}:
@@ -290,7 +257,6 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
     adapter = args.get("adapter")
     if adapter is None and (target_scene or journey in {"goal_scene", "act_traversal", "card_test"}):
         adapter = "agent"
-    request_args = {**args, "adapter": adapter} if adapter else args
     request = RunRequest(
         project=args.get("project"),
         suite=args.get("suite"),
@@ -311,35 +277,16 @@ def _submit_persistent_run(args: dict[str, Any], *, mode: str = "new", metadata:
             **({"card_id": args["card_id"]} if args.get("card_id") else {}),
         },
     )
-    record = store.create(request)
-    if record.request is not request:
-        return serialize_record(record)
-    request.argv = _request_argv(request_args, record.run_id, mode=mode)
-    store.update(record.run_id, request=request)
-    # 修复四：恢复任务在新 run_id 上显式记录它继承自哪个原任务。
-    resumed_from = (metadata or {}).get("resumed_from")
-    if resumed_from:
-        store.update(record.run_id, resumed_from=str(resumed_from))
-    try:
-        spawn_worker(store, record, request.argv)
-    except OSError as exc:
-        store.update(
-            record.run_id,
-            status="FAILED_PLATFORM",
-            phase="COMPLETED",
-            finished_at=datetime.now(UTC).isoformat(),
-            message=f"Cannot start worker: {exc}",
-        )
+    record, _outcome = submit_run(store, request)
     return serialize_record(store.load(record.run_id))
 
 
 def handle_submit_run(args: dict[str, Any]) -> dict[str, Any]:
     """异步提交统一测试任务，立即返回 run_id。"""
+    from sts2_autotest.core.journeys import TARGET_SCENES
+
     spec_dir = args.get("spec_dir")
-    target_scenes = {
-        "MAIN_MENU", "CHARACTER_SELECT", "MAP", "EVENT", "COMBAT",
-        "REST", "SHOP", "CHEST", "CARD_REWARD", "NEXT_ACT",
-    }
+    target_scenes = set(TARGET_SCENES)
     if args.get("target_scene") and str(args["target_scene"]).upper() not in target_scenes:
         raise McpError(INVALID_PARAMS, f"Unsupported target_scene: {args['target_scene']}")
     if args.get("route_policy", "leftmost") not in {"leftmost", "target"}:
@@ -387,36 +334,20 @@ def handle_resume_run(args: dict[str, Any]) -> dict[str, Any]:
     from sts2_autotest.core.run_service import resume_precheck
 
     run_id = _required_run_id(args)
-    record = _run_store().load(run_id)
-    if record is None:
+    store = _run_store()
+    old = store.load(run_id)
+    if old is None:
         raise McpError(INVALID_PARAMS, f"Unknown run_id: {run_id}")
     # 修复四：恢复必须等待原任务的取消/失败完全结束（终态 + 证据已封存）。
-    ok, reason = resume_precheck(record)
+    ok, reason = resume_precheck(old)
     if not ok:
         raise McpError(
             INVALID_PARAMS,
-            f"Run {run_id} cannot be resumed (status={record.status}, "
-            f"evidence_sealed={record.evidence_sealed}): {reason}",
+            f"Run {run_id} cannot be resumed (status={old.status}, "
+            f"evidence_sealed={old.evidence_sealed}): {reason}",
         )
-    return _submit_persistent_run(
-        {
-            "project": record.request.project,
-            "suite": record.request.suite,
-            "cases": record.request.cases,
-            "spec_dir": record.request.spec_dir,
-            "adapter": record.request.adapter,
-            "timeout": record.request.timeout,
-            "journey": record.request.metadata.get("journey"),
-            "character_id": record.request.metadata.get("character_id"),
-            "target_scene": record.request.metadata.get("target_scene"),
-            "route_policy": record.request.metadata.get("route_policy", "leftmost"),
-            "combat_mode": record.request.metadata.get("combat_mode", "traversal"),
-            "card_id": record.request.metadata.get("card_id"),
-            "evidence": record.request.evidence,
-        },
-        mode="resume",
-        metadata={"resumed_from": run_id},
-    )
+    record, _outcome = submit_run(store, build_resume_request(old))
+    return serialize_record(store.load(record.run_id))
 
 
 # ── Wrapper functions (mocked in tests) ──
@@ -573,7 +504,7 @@ def run_tests_in_dir(
             duration_ms=int((time.monotonic() - started) * 1000),
         )
         shutil.copy2(junit_xml, pack_dir / "reports" / "junit.xml")
-        (pack_dir / "reports" / "run-result.json").write_text(
+        (pack_dir / "reports" / RUN_RESULT_FILENAME).write_text(
             json.dumps(
                 {
                     "run_id": run_id,
@@ -785,7 +716,7 @@ def read_run_report(run_id: str) -> dict[str, Any]:
     manifest, manifest_path = _read_report_json(roots, artifact, "evidence-manifest.json")
     trace, trace_path = _read_report_json(roots, artifact, "journey-trace.json")
     journey_failure, failure_path = _read_report_json(roots, artifact, "journey-failure.json")
-    run_result, run_result_path = _read_report_json(roots, artifact, "run-result.json")
+    run_result, run_result_path = _read_report_json(roots, artifact, RUN_RESULT_FILENAME)
     failure = _compact_failure(summary.get("failure"))
     if failure is None and record is not None:
         failure = _compact_failure(record.result.get("failure"))
@@ -913,9 +844,9 @@ def _resolve_and_validate_project(args: dict[str, Any]) -> Path | None:
         find_project_config_file,
         load_project_spec_output,
     )
-    from sts2_autotest.cli.main import _resolve_project_base_dir
+    from sts2_autotest.core.workspace import resolve_project_base_dir
 
-    base_dir = _resolve_project_base_dir(project)
+    base_dir = resolve_project_base_dir(project)
     if base_dir is None:
         raise McpError(
             INVALID_PARAMS,
