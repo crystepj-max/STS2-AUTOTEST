@@ -30,9 +30,12 @@ os.environ.setdefault("STS2_GAME_EXE", os.path.join(os.environ["STS2_GAME_DIR"],
 from sts2_autotest.adapters.agent import AgentAdapter  # noqa: E402
 from PIL import Image  # noqa: E402  （PrintWindow 捕获用）
 
-OUT = Path(r"D:\STS2-WORKSPACE\STS2-GAWAIN\automation\autotest\output\gawain-visual-scenes-20261006")
+# 产物放仓库内不被 gitignore 的 tests/output/（对齐 e2e_first_battle.py 约定），
+# task-id 带时间戳避免覆盖上一轮证据。
+RUN_STAMP = time.strftime("%Y%m%d-%H%M%S")
+OUT = Path(__file__).resolve().parent / "output" / f"gawain-visual-scenes-{RUN_STAMP}"
 WINDOW_TITLE = "Slay the Spire 2"
-TASK_ID = "gawain-visual-scenes-20261006"
+TASK_ID = f"gawain-visual-scenes-{RUN_STAMP}"
 # 四系仆从召唤牌（id 子串 → 展示名）
 MINION_CARDS = {
     "emergency_recruit": "塞西尔民兵（防御系）",
@@ -42,8 +45,6 @@ MINION_CARDS = {
 }
 GAWAIN_KEY = "gawain"
 
-SUMMON_KEYS = ("recruit", "summon", "cecil")
-ATTACK_KEYS = ("strike", "attack", "slash")
 DRAW_KEYS = ("magic_draw", "draw", "drain")
 
 
@@ -51,7 +52,7 @@ def log(msg: str) -> None:
     print(f"  {msg}", flush=True)
 
 
-async def read_context(adapter: CliModAdapter):
+async def read_context(adapter):
     state = await adapter.get_state()
     actions = await adapter.get_available_actions()
     payload = json.loads(state.model_dump_json())
@@ -80,21 +81,6 @@ async def wait_for_screen(adapter, target, timeout=30.0):
     return last
 
 
-async def wait_for_player_turn(adapter, timeout=20.0):
-    deadline = time.monotonic() + timeout
-    last = None
-    while time.monotonic() < deadline:
-        last = await read_context(adapter)
-        screen, _a, payload = last
-        if screen != "COMBAT":
-            return last
-        combat = payload.get("combat", {})
-        if combat.get("is_player_turn") and not combat.get("is_player_actions_disabled") and combat.get("hand"):
-            return last
-        await asyncio.sleep(0.5)
-    return last
-
-
 async def settle_unknown(adapter, timeout=10.0):
     deadline = time.monotonic() + timeout
     last = await read_context(adapter)
@@ -102,7 +88,6 @@ async def settle_unknown(adapter, timeout=10.0):
         await asyncio.sleep(0.5)
         last = await read_context(adapter)
     return last
-
 
 
 class PrintWindowCapture:
@@ -194,7 +179,7 @@ class SceneDriver:
                 "image_paths": [i for i in images if i]}
 
 
-async def bootstrap_fresh_start(adapter, driver: SceneDriver):
+async def bootstrap_fresh_start(adapter):
     """动作驱动式 bootstrap：UNKNOWN/MODAL 等未映射画面也按可用动作推进。"""
     screen, actions, payload = await read_context(adapter)
     log(f"当前画面: {screen}, 动作={actions[:8]}")
@@ -244,21 +229,25 @@ async def scene_character_select(adapter, driver: SceneDriver) -> None:
         chars = cs.get("available_characters") or cs.get("characters") or []
         ids = [str(c.get("character_id") or c.get("id") or c) for c in chars] if chars else []
         gawain_id = next((i for i in ids if GAWAIN_KEY in i.lower()), None)
-        if not gawain_id and cs.get("selected_character"):
-            gawain_id = str(cs["selected_character"])
-        if not gawain_id:
-            # 兜底：直接用 MOD 声明的角色 id
+        if gawain_id is None:
+            # 可选列表没有 gawain：MOD 可能未加载。仍按 MOD 声明 id 尝试选择，
+            # 但本步记阻塞；最终判定只看 selected_character，避免假通过。
             gawain_id = "gawain:character"
-        steps.append(driver.step("读取可选角色", "通过",
-                                 f"available={ids or '(界面未列出，使用 MOD 声明 id)'}，选中 gawain_id={gawain_id}", []))
+            steps.append(driver.step(
+                "在可选角色列表中查找 gawain", "阻塞",
+                f"列表未出现 gawain（available={ids or '(空)'}），MOD 可能未加载；"
+                f"仍按 MOD 声明 id 尝试选择", []))
+        else:
+            steps.append(driver.step("在可选角色列表中查找 gawain", "通过",
+                                     f"gawain_id={gawain_id}", []))
         _, screen, actions, payload = await act(adapter, "select", "select_character",
                                                 {"character_id": gawain_id})
         await asyncio.sleep(1.0)
         shot_sel = driver.shot("scene1_gawain_selected")
         screen, actions, payload = await read_context(adapter)
         selected = str(payload.get("character_select", {}).get("selected_character", ""))
-        ok = GAWAIN_KEY in selected.lower() or GAWAIN_KEY in gawain_id.lower()
-        steps.append(driver.step("选中 Gawain", "通过" if ok else "失败",
+        ok = GAWAIN_KEY in selected.lower()
+        steps.append(driver.step("选中 Gawain 并核对选中态", "通过" if ok else "失败",
                                  f"selected_character={selected}", [shot_sel]))
         if not ok:
             result, actual = "失败", f"selected_character={selected}"
@@ -270,13 +259,10 @@ async def scene_character_select(adapter, driver: SceneDriver) -> None:
     driver.record(tc, name, scenario, assertions, steps, actual, result)
 
 
-
-
-
 async def advance_reward_screens(adapter, screen, actions, payload):
     """跳过卡牌/遗物奖励页，直到非奖励界面。"""
     for _ in range(10):
-        if screen in {"CARD_REWARD", "RELIC_SELECT", "BOSS_RELIC_SELECT"}:
+        if screen in {"CARD_REWARD", "RELIC_REWARD", "BOSS_REWARD"}:
             if "proceed" in actions:
                 _, screen, actions, payload = await act(
                     adapter, "reward", "proceed", None, required=False)
@@ -313,7 +299,7 @@ async def scene_embark_to_map(adapter, driver: SceneDriver) -> str:
                 _, screen, actions, payload = await act(adapter, "map-progress", "advance_dialogue")
                 await asyncio.sleep(0.6)
                 continue
-        if screen in {"CARD_REWARD", "RELIC_SELECT", "BOSS_RELIC_SELECT"}:
+        if screen in {"CARD_REWARD", "RELIC_REWARD", "BOSS_REWARD"}:
             screen, actions, payload = await advance_reward_screens(adapter, screen, actions, payload)
             continue
         if screen == "UNKNOWN":
@@ -326,7 +312,6 @@ async def scene_embark_to_map(adapter, driver: SceneDriver) -> str:
 
 
 async def scene_relic_bar(adapter, driver: SceneDriver) -> str:
-    tc = "TC-VIS-02"
     name = "遗物栏（地图 HUD）"
     scenario = ("选中 Gawain 并 embark 后到达地图，验证初始遗物「魔网终端」（magic_terminal）"
                 "出现在遗物栏且渲染正常。")
@@ -356,76 +341,6 @@ async def scene_relic_bar(adapter, driver: SceneDriver) -> str:
         result, actual = "失败", str(exc)[:400]
         steps.append(driver.step("异常", "失败", actual, [driver.shot("scene2_error")]))
     driver.record("TC-VIS-02", name, scenario, assertions, steps, actual, result)
-    return screen
-
-
-async def scene_magic_web_ui(adapter, driver: SceneDriver) -> str:
-    tc = "TC-VIS-03"
-    name = "魔网 UI（战斗 HUD）"
-    scenario = "进入 Gawain 战斗，验证魔网 HUD（magic_web 面板）与战斗界面渲染正常。"
-    assertions = ["进入 COMBAT 界面", "魔网 HUD 截图成功（以截图为准）"]
-    steps: list[dict] = []
-    result = "通过"
-    actual = ""
-    screen = "UNKNOWN"
-    try:
-        deadline = time.monotonic() + 40.0
-        while time.monotonic() < deadline and screen != "COMBAT":
-            screen, actions, payload = await read_context(adapter)
-            if screen != "COMBAT" and "enter_combat" in actions:
-                _, screen, actions, payload = await act(
-                    adapter, "to-combat", "enter_combat", None, required=False)
-                continue
-            if screen == "MAP" and "choose_map_node" in actions:
-                travelable = payload.get("map", {}).get("travelable_coords", [])
-                if travelable:
-                    coord = travelable[0]
-                    _, screen, actions, payload = await act(
-                        adapter, "to-combat", "choose_map_node",
-                        {"col": coord.get("col"), "row": coord.get("row")})
-                    continue
-            if screen == "EVENT":
-                if "choose_event" in actions:
-                    _, screen, actions, payload = await act(
-                        adapter, "to-combat", "choose_event", {"option_index": 0}, required=False)
-                    await asyncio.sleep(0.6)
-                    continue
-                if "advance_dialogue" in actions:
-                    _, screen, actions, payload = await act(adapter, "to-combat", "advance_dialogue")
-                    await asyncio.sleep(0.6)
-                    continue
-            if screen in {"CARD_REWARD", "RELIC_SELECT", "BOSS_RELIC_SELECT"}:
-                screen, actions, payload = await advance_reward_screens(adapter, screen, actions, payload)
-                continue
-            if screen == "REST" and "choose_rest_option" in actions:
-                _, screen, actions, payload = await act(
-                    adapter, "to-combat", "choose_rest_option", {"option_id": "REST"}, required=False)
-                continue
-            if screen == "UNKNOWN":
-                screen, actions, payload = await settle_unknown(adapter, timeout=8.0)
-            await asyncio.sleep(1.0)
-        screen, actions, payload = await wait_for_screen(adapter, "COMBAT", timeout=20.0)
-        # 等战斗开场动画结束：手牌出现即战斗 UI（含魔网 HUD）激活
-        hand_seen = False
-        intro_deadline = time.monotonic() + 25.0
-        while time.monotonic() < intro_deadline and screen == "COMBAT":
-            if hand_ids(payload):
-                hand_seen = True
-                break
-            await asyncio.sleep(1.0)
-            screen, actions, payload = await read_context(adapter)
-        await asyncio.sleep(2.0)
-        shot = driver.shot("scene3_magic_web_hud")
-        ok = screen == "COMBAT" and hand_seen
-        ok = screen == "COMBAT"
-        steps.append(driver.step("进入战斗并等开场结束，截图魔网 HUD", "通过" if ok else "失败",
-                                 f"screen={screen}, hand_seen={hand_seen}", [shot]))
-        if not ok:
-            result, actual = "失败", f"screen={screen}, hand_seen={hand_seen}"
-    except Exception as exc:
-        result, actual = "失败", str(exc)[:400]
-        steps.append(driver.step("异常", "失败", actual, [driver.shot("scene3_error")]))
-    driver.record(tc, name, scenario, assertions, steps, actual, result)
     return screen
 
 
@@ -483,18 +398,19 @@ async def scene_magic_web_and_minions(adapter, driver: SceneDriver) -> None:
             await asyncio.sleep(1.0)
             screen, actions, payload = await read_context(adapter)
         # MAP：不依赖 available_actions，直接带坐标调 choose_map_node
-        for attempt in range(8):
+        for attempt in range(10):
             if screen != "MAP":
                 break
-            m = payload.get("map", {})
-            travelable = m.get("travelable_coords", [])
-            if travelable:
-                coord = {"col": travelable[0].get("col"), "row": travelable[0].get("row")}
-            else:
-                coord = {"col": attempt % 4, "row": attempt // 4}
+            travelable = payload.get("map", {}).get("travelable_coords", [])
+            if not travelable:
+                # 地图动画未就绪：等待后重读，不伪造坐标
+                await asyncio.sleep(1.5)
+                screen, actions, payload = await read_context(adapter)
+                continue
+            coord = {"col": travelable[0].get("col"), "row": travelable[0].get("row")}
             r, screen, actions, payload = await act(
                 adapter, "enter-combat", "choose_map_node", coord, required=False)
-            if screen == "MAP" and "choose_map_node" in actions:
+            if screen == "MAP":
                 await asyncio.sleep(1.0)
                 screen, actions, payload = await read_context(adapter)
         if screen != "COMBAT":
@@ -614,113 +530,6 @@ async def scene_magic_web_and_minions(adapter, driver: SceneDriver) -> None:
                   ["成功打出攻击牌", "连拍 3 帧"], steps5, a5, r5)
 
 
-async def scene_summon_all(adapter, driver: SceneDriver, collected: set[str]) -> None:
-    tc, name = "TC-VIS-04", "四系仆从召唤与头像"
-    scenario = ("战斗中依次打出已收集的四系召唤牌（民兵/骑士/法师/学徒），"
-                "每系召唤后截图仆从扇区，验证各仆从头像透明度效果。")
-    assertions = ["各召唤牌成功打出", "每系召唤后 2s 截图"]
-    steps: list[dict] = []
-    result = "通过"
-    actual = ""
-    wanted = [k for k in MINION_CARDS if k in collected] or ["emergency_recruit"]
-    summoned: list[str] = []
-    try:
-        for key in wanted:
-            played_this = False
-            for cycle in range(1, 21):
-                screen, actions, payload = await read_context(adapter)
-                if screen != "COMBAT":
-                    break
-                ids = hand_ids(payload)
-                target = next((i for i in ids if key in i.lower()), None)
-                if target:
-                    r, screen, actions, payload = await act(
-                        adapter, f"summon-{key}", "play_card", {"card_id": target}, required=False)
-                    if r.status == "success":
-                        played_this = True
-                        break
-                if "end_turn" in actions:
-                    _, screen, actions, payload = await act(
-                        adapter, f"summon-{key}", "end_turn", None, required=False)
-                await asyncio.sleep(1.0)
-            if played_this:
-                summoned.append(key)
-                await asyncio.sleep(2.0)  # 等召唤动画与头像出现
-                shot_m = driver.shot(f"scene4_minion_{key}")
-                steps.append(driver.step(
-                    f"召唤 {MINION_CARDS.get(key, key)}", "通过",
-                    f"card played（{len(summoned)}/{len(wanted)}）", [shot_m]))
-            else:
-                steps.append(driver.step(
-                    f"召唤 {MINION_CARDS.get(key, key)}", "失败", "多回合内未抽到/未打成", []))
-        if len(summoned) < len(wanted):
-            result = "失败" if not summoned else "通过"
-            actual = f"已召唤 {len(summoned)}/{len(wanted)}: {summoned}"
-        else:
-            actual = f"四系仆从全部召唤并截图：{summoned}"
-        if screen != "COMBAT" and not summoned:
-            result = "失败"
-    except Exception as exc:
-        result, actual = "失败", str(exc)[:400]
-        steps.append(driver.step("异常", "失败", actual, [driver.shot("scene4_error")]))
-    driver.record(tc, name, scenario, assertions, steps, actual, result)
-
-
-async def scene_vfx(adapter, driver: SceneDriver) -> None:
-    tc = "TC-VIS-05"
-    name = "VFX（出牌特效）"
-    scenario = "战斗中打出攻击/充能类卡牌，验证卡牌特效（device.play / energy_gain 等）渲染正常。"
-    assertions = ["成功打出特效类卡牌", "打出后 1 秒内连拍特效帧"]
-    steps: list[dict] = []
-    result = "通过"
-    actual = ""
-    try:
-        played = False
-        played_ids: list[str] = []
-        blind_cards = ["gawain:strike_gawain", "gawain:magic_draw", "gawain:mana_drain",
-                       "gawain:defend_gawain", "gawain:emergency_recruit"]
-        for cycle in range(1, 25):
-            screen, actions, payload = await read_context(adapter)
-            if screen != "COMBAT":
-                break
-            ids = hand_ids(payload)
-            target_card = next((i for i in ids if any(k in i.lower() for k in ATTACK_KEYS + DRAW_KEYS)), None)
-            candidates = ([target_card] if target_card else []) + [c for c in blind_cards if c not in played_ids]
-            for card_id in candidates:
-                combat = payload.get("combat", {})
-                enemies = [e for e in combat.get("enemies", []) if e.get("is_alive")]
-                args = {"card_id": card_id}
-                if enemies and isinstance(enemies[0].get("combat_id"), int):
-                    args["target"] = enemies[0]["combat_id"]
-                r, screen, actions, payload = await act(
-                    adapter, f"cycle{cycle}", "play_card", args, required=False)
-                if r.status == "success":
-                    played = True
-                    played_ids.append(card_id)
-                    frames = []
-                    for j, delay in enumerate((0.3, 0.8, 1.5)):
-                        await asyncio.sleep(delay)
-                        frames.append(driver.shot(f"scene5_vfx_frame{j + 1}"))
-                    steps.append(driver.step("打牌并连拍特效帧", "通过",
-                                             f"played card={card_id}", frames))
-                    break
-            if played:
-                break
-            if "end_turn" in actions:
-                _, screen, actions, payload = await act(
-                    adapter, f"cycle{cycle}", "end_turn", None, required=False)
-            await asyncio.sleep(1.2)
-        if not played:
-            steps.append(driver.step("打牌并连拍特效帧", "失败",
-                                     "多回合内未打成攻击/充能牌", []))
-        if not played:
-            result, actual = "失败", "多回合内未打成攻击/充能牌"
-    except Exception as exc:
-        result, actual = "失败", str(exc)[:400]
-        steps.append(driver.step("异常", "失败", actual, [driver.shot("scene5_error")]))
-    driver.record(tc, name, scenario, assertions, steps, actual, result)
-
-
 async def advance_event_and_rewards(adapter, screen, actions, payload,
                                     missing: set[str] | None = None):
     """EVENT（对话/选项）、三选一与奖励页的通用推进。"""
@@ -764,130 +573,13 @@ async def advance_event_and_rewards(adapter, screen, actions, payload,
                     adapter, "flow", "reward_skip_card", {"type": "card"}, required=False)
                 await asyncio.sleep(0.8)
                 continue
-        if screen in {"RELIC_SELECT", "BOSS_RELIC_SELECT"} and "relic_skip" in actions:
+        if screen in {"RELIC_REWARD", "BOSS_REWARD"} and "relic_skip" in actions:
             _, screen, actions, payload = await act(
                 adapter, "flow", "relic_skip", None, required=False)
             await asyncio.sleep(0.6)
             continue
         break
     return screen, actions, payload
-
-
-async def collect_minion_cards(adapter, driver: SceneDriver, missing: set[str]) -> tuple[set[str], str]:
-    """地图节点循环：商店购买 / 战斗奖励拾取，凑齐缺失的召唤牌。"""
-    got: set[str] = set()
-    screen = "MAP"
-    for hop in range(1, 17):
-        screen, actions, payload = await read_context(adapter)
-        if screen != "MAP":
-            screen, actions, payload = await advance_event_and_rewards(adapter, screen, actions, payload)
-        if screen == "GAME_OVER":
-            return missing - got, screen
-        if screen != "MAP":
-            await asyncio.sleep(1.0)
-            screen, actions, payload = await read_context(adapter)
-            if screen != "MAP":
-                screen, actions, payload = await advance_event_and_rewards(adapter, screen, actions, payload)
-        if screen != "MAP":
-            continue
-        travelable = payload.get("map", {}).get("travelable_coords", [])
-        if not travelable:
-            log("没有可走节点，收集阶段结束。")
-            break
-        prefer = "SHOP" if missing - got else "MONSTER"
-        coord = choose_map_node(payload, prefer=prefer) or choose_map_node(payload)
-        _, screen, actions, payload = await act(adapter, f"hop{hop}", "choose_map_node", coord)
-
-        if screen == "SHOP":
-            shop = payload.get("shop", {})
-            offers = [str(c.get("card_id") or c.get("id") or c) for c in shop.get("cards", [])]
-            gold = int(payload.get("player", {}).get("gold") or payload.get("gold") or 0)
-            for offer in offers:
-                key = next((k for k in missing - got if k in offer.lower()), None)
-                if key is None:
-                    continue
-                price = next((int(c.get("price", 999)) for c in shop.get("cards", [])
-                              if str(c.get("card_id") or c.get("id") or c) == offer), 999)
-                if gold < price:
-                    log(f"[收集] {key} 售价 {price} 超过金币 {gold}，跳过")
-                    continue
-                r, screen, actions, payload = await act(
-                    adapter, f"hop{hop}", "shop_buy_card", {"card_id": offer}, required=False)
-                if r.status == "success":
-                    got.add(key)
-                    gold -= price
-                    log(f"[收集] 商店购得 {key}")
-            if "proceed" in actions:
-                _, screen, actions, payload = await act(
-                    adapter, f"hop{hop}", "proceed", None, required=False)
-            continue
-
-        if screen in {"COMBAT", "UNKNOWN"}:
-            if screen == "UNKNOWN":
-                screen, actions, payload = await wait_for_screen(adapter, "COMBAT", timeout=25.0)
-            if screen != "COMBAT":
-                screen, actions, payload = await advance_event_and_rewards(adapter, screen, actions, payload)
-                continue
-            for turn in range(1, 31):
-                screen, actions, payload = await read_context(adapter)
-                if screen != "COMBAT":
-                    break
-                hand = hand_ids(payload)
-                atk = next((i for i in hand if any(k in i.lower() for k in ("strike", "slash"))), None)
-                played = False
-                if atk:
-                    combat = payload.get("combat", {})
-                    enemies = [e for e in combat.get("enemies", []) if e.get("is_alive")]
-                    args = {"card_id": atk}
-                    if enemies and isinstance(enemies[0].get("combat_id"), int):
-                        args["target"] = enemies[0]["combat_id"]
-                    r, screen, actions, payload = await act(
-                        adapter, f"hop{hop}-t{turn}", "play_card", args, required=False)
-                    played = r.status == "success"
-                if screen != "COMBAT":
-                    break
-                if "end_turn" in actions:
-                    _, screen, actions, payload = await act(
-                        adapter, f"hop{hop}-t{turn}", "end_turn", None, required=False)
-                if not played:
-                    await asyncio.sleep(1.0)
-            screen, actions, payload = await read_context(adapter)
-            for _ in range(8):
-                if screen == "CARD_REWARD":
-                    offers = []
-                    for rw in payload.get("rewards", {}).get("rewards", []):
-                        if str(rw.get("type", "")).upper() == "CARD":
-                            offers = [str(c.get("card_id") or c.get("id") or c)
-                                      for c in rw.get("cards", [])]
-                    pick = next((o for o in offers
-                                 if any(k in o.lower() for k in missing - got)), None)
-                    if pick and "reward_choose_card" in actions:
-                        r, screen, actions, payload = await act(
-                            adapter, f"hop{hop}", "reward_choose_card",
-                            {"card_ids": [pick]}, required=False)
-                        if r.status == "success":
-                            key = next(k for k in missing - got if k in pick.lower())
-                            got.add(key)
-                            log(f"[收集] 奖励拾得 {key}")
-                    if "reward_skip_card" in actions:
-                        _, screen, actions, payload = await act(
-                            adapter, f"hop{hop}", "reward_skip_card",
-                            {"type": "card"}, required=False)
-                        await asyncio.sleep(0.6)
-                    continue
-                if screen in {"RELIC_SELECT", "BOSS_RELIC_SELECT"} and "relic_skip" in actions:
-                    _, screen, actions, payload = await act(
-                        adapter, f"hop{hop}", "relic_skip", None, required=False)
-                    await asyncio.sleep(0.6)
-                    continue
-                if "proceed" in actions:
-                    _, screen, actions, payload = await act(
-                        adapter, f"hop{hop}", "proceed", None, required=False)
-                    await asyncio.sleep(0.6)
-                    continue
-                break
-            screen, actions, payload = await read_context(adapter)
-    return missing - got, screen
 
 
 async def main() -> None:
@@ -899,6 +591,7 @@ async def main() -> None:
     print("=" * 60, flush=True)
 
     proc = None
+    game_log_handle = None
     try:
         screen, actions, payload = await read_context(adapter)
         log(f"游戏已在运行，直接复用（screen={screen}）。")
@@ -911,8 +604,9 @@ async def main() -> None:
         env = dict(os.environ)
         env["STS2_API_PORT"] = "8080"
         env["STS2_ENABLE_DEBUG_ACTIONS"] = "1"
+        game_log_handle = open(game_log, "ab", buffering=0)
         proc = subprocess.Popen([game_exe], cwd=game_dir, env=env,
-                                stdout=open(game_log, "ab", buffering=0),
+                                stdout=game_log_handle,
                                 stderr=subprocess.STDOUT)
         log(f"游戏已启动 PID={proc.pid}，等待调试 API...")
         api_ok = False
@@ -927,11 +621,11 @@ async def main() -> None:
                     break
                 await asyncio.sleep(3.0)
         if not api_ok:
-            raise RuntimeError("调试 API 180s 内仍未就绪（详见 game-stdout.log）")
+            raise RuntimeError("调试 API 300s 内仍未就绪（详见 game-stdout.log）")
         log("调试 API 就绪。")
 
     try:
-        await bootstrap_fresh_start(adapter, driver)
+        await bootstrap_fresh_start(adapter)
         await scene_character_select(adapter, driver)
         final_screen = await scene_relic_bar(adapter, driver)
         if final_screen != "MAP":
@@ -955,9 +649,12 @@ async def main() -> None:
         if proc is not None and proc.poll() is None:
             proc.kill()
             log("游戏已关闭。")
+        if game_log_handle is not None:
+            game_log_handle.close()
 
     passed = sum(1 for c in driver.cases if c["result"] == "通过")
     print(f"\n场景通过 {passed}/{len(driver.cases)}")
+    sys.exit(0 if passed == len(driver.cases) and driver.cases else 1)
 
 
 if __name__ == "__main__":
