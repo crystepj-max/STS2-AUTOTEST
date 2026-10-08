@@ -1,10 +1,16 @@
-"""Gawain MOD 视觉场景端到端测试：角色选择 / 遗物栏 / 魔网 UI / 仆从头像 / VFX。
+"""Gawain MOD 视觉场景端到端测试：魔网 HUD + 四系仆从召唤 + VFX。
 
-前置：deploy-gawain.ps1 已部署最新 MOD（gawain.pck 52,751 KB）。
-产物：{GAWAIN}/automation/autotest/output/gawain-visual-scenes-20261006/
-      - test-results.json（框架 gen-report 约定结构）
-      - 各场景截图 PNG
-报告：autotest gen-report --task-id gawain-visual-scenes-20261006
+前置：
+1. deploy-gawain.ps1 已部署最新 MOD；
+2. pip install pillow（本脚本截图落盘依赖）；
+3. 游戏带调试 API 启动（STS2_API_PORT=8080），或已运行则直接复用。
+
+流程：bootstrap → 角色选择（Gawain）→ embark → 地图（遗物栏截图）→
+      choose_map_node 进入战斗 → 魔网 HUD 截图 → give_card 注入四系召唤牌
+      （民兵/骑士/法师/学徒）→ 逐系召唤并截图 → VFX 连拍。
+
+产物：tests/evidence/<task-id>/（test-results.json + 截图，随分支提交可核对）
+报告：autotest gen-report --config <产物目录>/test-results.json --output <产物目录>/test-report.html
 """
 
 from __future__ import annotations
@@ -30,13 +36,20 @@ os.environ.setdefault("STS2_GAME_EXE", os.path.join(os.environ["STS2_GAME_DIR"],
 from sts2_autotest.adapters.agent import AgentAdapter  # noqa: E402
 from PIL import Image  # noqa: E402  （PrintWindow 捕获用）
 
-# 产物放仓库内不被 gitignore 的 tests/output/（对齐 e2e_first_battle.py 约定），
-# task-id 带时间戳避免覆盖上一轮证据。
+# 产物放 tests/evidence/（实测不在 .gitignore 规则内，可随分支提交作为验收证据）；
+# OUT 与 TASK_ID 共用同一 RUN_STAMP，避免目录名与 task-id 漂移。
 RUN_STAMP = time.strftime("%Y%m%d-%H%M%S")
-OUT = Path(__file__).resolve().parent / "output" / f"gawain-visual-scenes-{RUN_STAMP}"
-WINDOW_TITLE = "Slay the Spire 2"
 TASK_ID = f"gawain-visual-scenes-{RUN_STAMP}"
+OUT = Path(__file__).resolve().parent / "evidence" / TASK_ID
+WINDOW_TITLE = "Slay the Spire 2"
 # 四系仆从召唤牌（id 子串 → 展示名）
+# 四系召唤牌的本地化名（游戏 zhs 词表；Agent 手牌条目 id=null 只带 name/index）
+MINION_NAME_ZH = {
+    "emergency_recruit": "紧急征召",
+    "cecil_knight": "塞西尔骑士",
+    "cecil_mage": "塞西尔法师",
+    "magic_apprentice": "魔导学徒",
+}
 MINION_CARDS = {
     "emergency_recruit": "塞西尔民兵（防御系）",
     "cecil_knight": "塞西尔骑士（进攻系）",
@@ -45,7 +58,6 @@ MINION_CARDS = {
 }
 GAWAIN_KEY = "gawain"
 
-DRAW_KEYS = ("magic_draw", "draw", "drain")
 
 
 def log(msg: str) -> None:
@@ -97,16 +109,41 @@ class PrintWindowCapture:
     PrintWindow(PW_RENDERFULLCONTENT) 可直接从 DWM 取窗口内容，实测有效。
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, pid: int | None = None):
         self._dir = Path(output_dir)
+        self._pid = pid
         self._user32 = ctypes.windll.user32
         self._gdi32 = ctypes.windll.gdi32
+
+    def _find_hwnd(self, window_title: str) -> int:
+        """按标题枚举顶层窗口；指定 PID 时只匹配该进程（同标题多实例防抓错）。"""
+        import ctypes.wintypes as wt
+
+        user32 = self._user32
+        found = []
+
+        @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+        def _cb(hwnd, _lparam):
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, buf, 256)
+            if buf.value == window_title and user32.IsWindowVisible(hwnd):
+                pid = wt.DWORD(0)
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                found.append((hwnd, pid.value))
+            return True
+
+        user32.EnumWindows(_cb, 0)
+        if self._pid:
+            for hwnd, pid in found:
+                if pid == self._pid:
+                    return hwnd
+        return found[0][0] if found else 0
 
     def capture_with_validation(self, window_title: str, case_id: str):
         import ctypes.wintypes as wt
         import statistics as _stats
 
-        hwnd = self._user32.FindWindowW(None, window_title)
+        hwnd = self._find_hwnd(window_title)
         if not hwnd:
             return SimpleNamespace(status="skipped", path=None, message="window not found")
         rect = wt.RECT()
@@ -151,9 +188,9 @@ class PrintWindowCapture:
 
 
 class SceneDriver:
-    def __init__(self):
+    def __init__(self, pid: int | None = None):
         OUT.mkdir(parents=True, exist_ok=True)
-        self.capture = PrintWindowCapture(OUT)
+        self.capture = PrintWindowCapture(OUT, pid=pid)
         self.cases: list[dict[str, Any]] = []
         self.shot_n = 0
 
@@ -164,8 +201,20 @@ class SceneDriver:
             rel = Path(result.path).name
             log(f"[截图] {label} -> {rel}")
             return rel
-        log(f"[截图] {label} skipped: {getattr(result, 'message', '')}")
+        self.last_skip_reason = getattr(result, "message", "capture skipped")
+        log(f"[截图] {label} skipped: {self.last_skip_reason}")
         return None
+
+    @staticmethod
+    def with_shot(shot_path: str | None, step_result: str, skip_reason: str | None = None):
+        """视觉证据缺失时把「通过」降级为「阻塞」（仓库红线：无截图不得 PASSED）。"""
+        if shot_path or step_result != "通过":
+            return step_result
+        return "阻塞"
+
+    def skip_note(self) -> str:
+        reason = getattr(self, "last_skip_reason", None)
+        return f"（截图缺失：{reason}）" if reason else "（截图缺失）"
 
     def record(self, tc_id: str, name: str, scenario: str, assertions: list[str],
                steps: list[dict], actual: str, result: str) -> None:
@@ -187,10 +236,40 @@ async def bootstrap_fresh_start(adapter):
     while time.monotonic() < deadline:
         if screen == "CHARACTER_SELECT":
             return screen, actions, payload
-        if "return_to_menu" in actions and screen in {"GAME_OVER", "VICTORY", "UNKNOWN"}:
+        # 已在局内（MAP/COMBAT 等）：存档退出回菜单，弃档重开，保证从选人开始
+        if screen in {"MAP", "COMBAT", "REST", "SHOP", "EVENT"} and "save_and_quit" in actions:
             _, screen, actions, payload = await act(
-                adapter, "boot", "return_to_menu", None, required=False)
+                adapter, "boot", "save_and_quit", None, required=False)
             await asyncio.sleep(1.5)
+            continue
+        # 卡包选择页（Scroll Boxes 遗物残留）：确认跳过
+        if screen in {"BUNDLE_SELECTION", "BUNDLE_SELECT", "CONFIRM_BUNDLE"}:
+            _, screen, actions, payload = await act(
+                adapter, "boot", "bundle_confirm", None, required=False)
+            await asyncio.sleep(1.0)
+            if screen in {"BUNDLE_SELECTION", "BUNDLE_SELECT", "CONFIRM_BUNDLE"}:
+                _, screen, actions, payload = await act(
+                    adapter, "boot", "bundle_cancel", None, required=False)
+                await asyncio.sleep(1.0)
+            continue
+        # 中途奖励页（复用上一局残留时）：同真机序列跳过并前进
+        if screen in {"CARD_REWARD", "REWARD"}:
+            _, screen, actions, payload = await act(
+                adapter, "boot", "skip_reward_cards", None, required=False)
+            await asyncio.sleep(0.8)
+            _, screen, actions, payload = await act(
+                adapter, "boot", "collect_rewards_and_proceed", None, required=False)
+            await asyncio.sleep(1.2)
+            continue
+        if screen in {"GAME_OVER", "VICTORY"}:
+            # 本 Agent build：continue_game_over → return_to_main_menu
+            # （return_to_menu 透传会报 not supported）
+            for cand in ("continue_game_over", "return_to_main_menu", "return_to_menu"):
+                if cand in actions:
+                    _, screen, actions, payload = await act(
+                        adapter, "boot", cand, None, required=False)
+                    await asyncio.sleep(1.5)
+                    break
             continue
         if "start_new_run" in actions or "new_run" in actions:
             name = "start_new_run" if "start_new_run" in actions else "new_run"
@@ -223,7 +302,10 @@ async def scene_character_select(adapter, driver: SceneDriver) -> None:
     actual = ""
     try:
         shot = driver.shot("scene1_character_select")
-        steps.append(driver.step("到达角色选择界面并截图", "通过", "screen=CHARACTER_SELECT", [shot]))
+        steps.append(driver.step("到达角色选择界面并截图",
+                                 driver.with_shot(shot, "通过", driver.skip_note()),
+                                 "screen=CHARACTER_SELECT" + (driver.skip_note() if not shot else ""),
+                                 [shot]))
         screen, actions, payload = await read_context(adapter)
         cs = payload.get("character_select", {})
         chars = cs.get("available_characters") or cs.get("characters") or []
@@ -242,17 +324,35 @@ async def scene_character_select(adapter, driver: SceneDriver) -> None:
                                      f"gawain_id={gawain_id}", []))
         _, screen, actions, payload = await act(adapter, "select", "select_character",
                                                 {"character_id": gawain_id})
-        await asyncio.sleep(1.0)
+        # 选中态回填可能有延迟：最多重读 5s，仍未回填则重选一次
+        selected = ""
+        for _ in range(5):
+            screen, actions, payload = await read_context(adapter)
+            selected = str(payload.get("character_select", {}).get("selected_character", ""))
+            if selected:
+                break
+            await asyncio.sleep(1.0)
+        if not selected:
+            _, screen, actions, payload = await act(adapter, "select", "select_character",
+                                                    {"character_id": gawain_id}, required=False)
+            await asyncio.sleep(2.0)
+            screen, actions, payload = await read_context(adapter)
+            selected = str(payload.get("character_select", {}).get("selected_character", ""))
         shot_sel = driver.shot("scene1_gawain_selected")
-        screen, actions, payload = await read_context(adapter)
-        selected = str(payload.get("character_select", {}).get("selected_character", ""))
         ok = GAWAIN_KEY in selected.lower()
-        steps.append(driver.step("选中 Gawain 并核对选中态", "通过" if ok else "失败",
-                                 f"selected_character={selected}", [shot_sel]))
+        step_res = driver.with_shot(shot_sel, "通过" if ok else "失败", driver.skip_note())
+        steps.append(driver.step("选中 Gawain 并核对选中态", step_res,
+                                 f"selected_character={selected}"
+                                 + (driver.skip_note() if not shot_sel else ""), [shot_sel]))
         if not ok:
             result, actual = "失败", f"selected_character={selected}"
-            return
-        actual = f" Gawain({gawain_id}) 选中成功，选人界面截图 2 张。"
+        elif step_res != "通过":
+            result, actual = step_res, "选中成功但视觉证据缺失，无法核对选人立绘。"
+        elif any(s["result"] == "阻塞" for s in steps):
+            result = "阻塞"
+            actual = "选中成功，但可选列表未出现 gawain（MOD 加载存疑），需人工复核。"
+        else:
+            actual = f" Gawain({gawain_id}) 选中成功，选人界面截图 2 张。"
     except Exception as exc:
         result, actual = "失败", str(exc)[:400]
         steps.append(driver.step("异常", "失败", actual, [driver.shot("scene1_error")]))
@@ -319,6 +419,7 @@ async def scene_relic_bar(adapter, driver: SceneDriver) -> str:
     steps: list[dict] = []
     result = "通过"
     actual = ""
+    screen = "UNKNOWN"
     try:
         screen = await scene_embark_to_map(adapter, driver)
         if screen != "MAP":
@@ -333,40 +434,17 @@ async def scene_relic_bar(adapter, driver: SceneDriver) -> str:
                                  f"screen={screen}, relics(状态)={relic_ids or '(状态未提供列表，以截图为准)'}", [shot]))
         if screen != "MAP":
             result, actual = "失败", f"screen={screen}（未能到达地图）"
-        elif relics and not has_terminal:
+        elif not relics:
+            result, actual = "阻塞", "状态数据未提供遗物列表（无法核对 magic_terminal，仅截图为证）"
+        elif not has_terminal:
             result, actual = "失败", f"遗物列表缺 magic_terminal: {relic_ids}"
         else:
-            actual = "地图 HUD 遗物栏截图完成；magic_terminal 在位（状态确认或以截图为准）。"
+            actual = "遗物列表含 magic_terminal，遗物栏截图完成。"
     except Exception as exc:
         result, actual = "失败", str(exc)[:400]
         steps.append(driver.step("异常", "失败", actual, [driver.shot("scene2_error")]))
     driver.record("TC-VIS-02", name, scenario, assertions, steps, actual, result)
     return screen
-
-
-def choose_map_node(payload: dict[str, Any], prefer: str | None = None):
-    m = payload.get("map", {})
-    travelable = m.get("travelable_coords", [])
-    node_by = {}
-    for node in m.get("nodes", []):
-        c, r = node.get("col"), node.get("row")
-        if isinstance(c, int) and isinstance(r, int):
-            node_by[(c, r)] = str(node.get("type", "")).upper()
-    shop = monster = first = None
-    for coord in travelable:
-        t = node_by.get((coord.get("col"), coord.get("row")), "")
-        key = {"col": coord.get("col"), "row": coord.get("row")}
-        if first is None:
-            first = key
-        if t == "SHOP" and shop is None:
-            shop = key
-        if t in {"MONSTER", "ELITE"} and monster is None:
-            monster = key
-    if prefer == "SHOP" and shop:
-        return shop
-    if prefer == "MONSTER" and monster:
-        return monster
-    return shop or monster or first
 
 
 def hand_ids(payload) -> list[str]:
@@ -397,19 +475,25 @@ async def scene_magic_web_and_minions(adapter, driver: SceneDriver) -> None:
                 screen, actions, payload = await settle_unknown(adapter, timeout=8.0)
             await asyncio.sleep(1.0)
             screen, actions, payload = await read_context(adapter)
-        # MAP：不依赖 available_actions，直接带坐标调 choose_map_node
+        # MAP：Agent 适配器的节点在 map.available_nodes（自带 index，
+        # 适配器把 index 翻译成 option_index）；CLI 形状回落 map.travelable_coords。
+        # 两个列表都为空（地图动画未就绪）时等待重读，不伪造坐标。
         for attempt in range(10):
             if screen != "MAP":
                 break
-            travelable = payload.get("map", {}).get("travelable_coords", [])
-            if not travelable:
-                # 地图动画未就绪：等待后重读，不伪造坐标
-                await asyncio.sleep(1.5)
-                screen, actions, payload = await read_context(adapter)
-                continue
-            coord = {"col": travelable[0].get("col"), "row": travelable[0].get("row")}
+            m = payload.get("map", {})
+            nodes = m.get("available_nodes") or []
+            if nodes and isinstance(nodes[0], dict) and nodes[0].get("index") is not None:
+                args = {"option_index": nodes[0]["index"]}
+            else:
+                travelable = m.get("travelable_coords", [])
+                if not travelable:
+                    await asyncio.sleep(1.5)
+                    screen, actions, payload = await read_context(adapter)
+                    continue
+                args = {"col": travelable[0].get("col"), "row": travelable[0].get("row")}
             r, screen, actions, payload = await act(
-                adapter, "enter-combat", "choose_map_node", coord, required=False)
+                adapter, "enter-combat", "choose_map_node", args, required=False)
             if screen == "MAP":
                 await asyncio.sleep(1.0)
                 screen, actions, payload = await read_context(adapter)
@@ -429,55 +513,90 @@ async def scene_magic_web_and_minions(adapter, driver: SceneDriver) -> None:
         await asyncio.sleep(2.0)
         shot_hud = driver.shot("scene3_magic_web_hud")
         ok3 = screen == "COMBAT" and hand_seen
-        steps3.append(driver.step("enter_combat 并等开场结束，截图魔网 HUD",
-                                  "通过" if ok3 else "失败",
-                                  f"screen={screen}, hand_seen={hand_seen}", [shot_hud]))
+        res3 = driver.with_shot(shot_hud, "通过" if ok3 else "失败", driver.skip_note())
+        steps3.append(driver.step("走地图节点进战斗并等开场结束，截图魔网 HUD", res3,
+                                  f"screen={screen}, hand_seen={hand_seen}"
+                                  + (driver.skip_note() if not shot_hud else ""), [shot_hud]))
         if not ok3:
             r3, a3 = "失败", f"screen={screen}, hand_seen={hand_seen}"
+        elif res3 != "通过":
+            r3, a3 = "阻塞", "战斗状态就绪但魔网 HUD 截图缺失，无法核对。" + driver.skip_note()
 
         given: list[str] = []
-        for key in MINION_CARDS:
-            card_id = f"gawain:{key}"
-            r, screen, actions, payload = await act(
-                adapter, f"give-{key}", "give_card", {"card_id": card_id}, required=False)
-            if r.status == "success":
-                given.append(key)
-            await asyncio.sleep(0.5)
-        steps4.append(driver.step("give_card 注入四系召唤牌", "通过" if given else "失败",
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for key in MINION_CARDS:
+                # MOD 自带调试命令 gawain_card_add（大小写不敏感，示例
+                # gawain_card_add GAWAINMOD-CECIL_MILITIA）；原生 card 命令
+                # 解析不了 MOD 卡 ID（实测 GAWAIN:XXX not found）。
+                resp = await client.post(
+                    "http://127.0.0.1:8080/action",
+                    json={"action": "run_console_command",
+                          "command": f"gawain_card_add GAWAINMOD-{key.upper()}"})
+                data = resp.json()
+                ok = bool(data.get("ok")) and "not found" not in str(data.get("error", {}).get("message", ""))
+                log(f"[give-{key}] gawain_card_add -> ok={ok}")
+                if ok:
+                    given.append(key)
+                await asyncio.sleep(0.5)
+        steps4.append(driver.step("gawain_card_add 注入四系召唤牌",
+                                  "通过" if given else "失败",
                                   f"given={given}", []))
 
         summoned: list[str] = []
         for key in given:
             played_this = False
-            for cycle in range(1, 16):
+            expected_name = MINION_NAME_ZH.get(key, "")
+            # 时间预算制：敌方回合（无 end_turn 可用、hand 为空）等待重读，
+            # 不消耗尝试机会；总预算 120s/张。
+            deadline = time.monotonic() + 120.0
+            while time.monotonic() < deadline:
                 screen, actions, payload = await read_context(adapter)
                 if screen != "COMBAT":
                     break
-                ids = hand_ids(payload)
-                target = next((i for i in ids if key in i.lower()), None)
-                if target:
+                combat = payload.get("combat", {})
+                hand = combat.get("hand", []) or []
+                # Agent 手牌条目 id 为 null，只有 name（本地化）与 index
+                entry = next((c for c in hand
+                              if isinstance(c, dict) and c.get("name") == expected_name
+                              and c.get("playable")), None)
+                if entry is not None and entry.get("index") is not None:
                     r, screen, actions, payload = await act(
                         adapter, f"summon-{key}", "play_card",
-                        {"card_id": target}, required=False)
+                        {"card_id": expected_name, "card_index": entry["index"]},
+                        required=False)
                     if r.status == "success":
                         played_this = True
                         break
                 if "end_turn" in actions:
                     _, screen, actions, payload = await act(
                         adapter, f"summon-{key}", "end_turn", None, required=False)
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(2.0)
             if played_this:
                 summoned.append(key)
                 await asyncio.sleep(2.0)
                 shot_m = driver.shot(f"scene4_minion_{key}")
+                res_m = driver.with_shot(shot_m, "通过", driver.skip_note())
                 steps4.append(driver.step(
-                    f"召唤 {MINION_CARDS.get(key, key)}", "通过",
-                    f"card played（{len(summoned)}/{len(given)}）", [shot_m]))
+                    f"召唤 {MINION_CARDS.get(key, key)}", res_m,
+                    f"card played（{len(summoned)}/{len(given)}）"
+                    + (driver.skip_note() if not shot_m else ""), [shot_m]))
             else:
                 steps4.append(driver.step(
-                    f"召唤 {MINION_CARDS.get(key, key)}", "失败", "手牌内未找到/未打成", []))
-        r4 = "通过" if given and len(summoned) == len(given) else ("失败" if not summoned else "通过")
-        a4 = f"已召唤 {len(summoned)}/{len(given)}: {summoned}"
+                    f"召唤 {MINION_CARDS.get(key, key)}", "失败",
+                    f"手牌内未找到「{expected_name}」/未打成", []))
+        if given and len(summoned) == len(given):
+            shots_missing = sum(1 for s in steps4 if s["result"] == "阻塞")
+            if shots_missing:
+                r4 = "阻塞"
+                a4 = (f"已召唤 {len(summoned)}/{len(given)}，但 {shots_missing} 张头像截图缺失，"
+                      f"视觉验收无法闭环: {summoned}")
+            else:
+                r4 = "通过"
+                a4 = f"四系仆从全部召唤并截图：{summoned}"
+        else:
+            r4 = "失败"
+            a4 = f"已召唤 {len(summoned)}/{len(given) or 0}: {summoned}"
 
         vfx_done = False
         for cycle in range(1, 11):
@@ -500,7 +619,16 @@ async def scene_magic_web_and_minions(adapter, driver: SceneDriver) -> None:
                     for j, delay in enumerate((0.3, 0.8, 1.5)):
                         await asyncio.sleep(delay)
                         frames.append(driver.shot(f"scene5_vfx_frame{j + 1}"))
-                    steps5.append(driver.step("打牌并连拍特效帧", "通过", f"card={atk}", frames))
+                    got_frames = [f for f in frames if f]
+                    if got_frames:
+                        res5 = "通过"
+                    else:
+                        res5 = "阻塞"
+                        r5 = "阻塞"
+                        a5 = "特效牌打出成功但连拍全部缺失，无法核对。" + driver.skip_note()
+                    steps5.append(driver.step("打牌并连拍特效帧", res5,
+                                              f"card={atk}"
+                                              + (driver.skip_note() if not got_frames else ""), frames))
                     break
             if "end_turn" in actions:
                 _, screen, actions, payload = await act(
@@ -522,7 +650,7 @@ async def scene_magic_web_and_minions(adapter, driver: SceneDriver) -> None:
             steps5.append(driver.step("异常", "失败", err, [driver.shot("scene5_error")]))
     driver.record(tc3, name3, "enter_combat 进入 Gawain 战斗并等开场动画结束后截图，"
                             "验证魔网 HUD（magic_web_storage_hud）渲染正常。",
-                  ["进入 COMBAT", "手牌出现", "魔网 HUD 截图"], steps3, a3, r3)
+                  ["到达 MAP 并走节点进战斗", "手牌出现", "魔网 HUD 截图"], steps3, a3, r3)
     driver.record(tc4, name4, "give_card 注入四系召唤牌并依次打出，每系召唤后截图，"
                             "验证各仆从头像透明度效果。",
                   ["四系召唤牌注入成功", "各召唤牌打出", "每系召唤后截图"], steps4, a4, r4)
@@ -534,6 +662,9 @@ async def advance_event_and_rewards(adapter, screen, actions, payload,
                                     missing: set[str] | None = None):
     """EVENT（对话/选项）、三选一与奖励页的通用推进。"""
     for _ in range(16):
+        # 注意：Agent 在 CARD_REWARD / TRI_SELECT 等页面可能不下发
+        # available_actions（实测为空），因此这些页面不 gating 动作列表，
+        # 直接尝试标准动作（required=False，失败无害继续）。
         if screen == "TRI_SELECT":
             offers = [str(c.get("card_id") or c.get("id") or c)
                       for c in payload.get("tri_select", {}).get("cards", [])]
@@ -541,16 +672,15 @@ async def advance_event_and_rewards(adapter, screen, actions, payload,
             if missing:
                 pick = next((o for o in offers
                              if any(k in o.lower() for k in missing)), None)
-            if pick and "tri_select_card" in actions:
+            if pick:
                 _, screen, actions, payload = await act(
                     adapter, "flow", "tri_select_card", {"card_ids": [pick]}, required=False)
                 await asyncio.sleep(0.6)
                 continue
-            if "tri_select_skip" in actions:
-                _, screen, actions, payload = await act(
-                    adapter, "flow", "tri_select_skip", None, required=False)
-                await asyncio.sleep(0.6)
-                continue
+            _, screen, actions, payload = await act(
+                adapter, "flow", "tri_select_skip", None, required=False)
+            await asyncio.sleep(0.6)
+            continue
         if screen == "EVENT":
             if "choose_event" in actions:
                 _, screen, actions, payload = await act(
@@ -563,20 +693,21 @@ async def advance_event_and_rewards(adapter, screen, actions, payload,
                 await asyncio.sleep(0.6)
                 continue
         if screen == "CARD_REWARD":
-            if "proceed" in actions:
-                _, screen, actions, payload = await act(
-                    adapter, "flow", "proceed", None, required=False)
-                await asyncio.sleep(0.8)
-                continue
-            if "reward_skip_card" in actions:
-                _, screen, actions, payload = await act(
-                    adapter, "flow", "reward_skip_card", {"type": "card"}, required=False)
-                await asyncio.sleep(0.8)
-                continue
-        if screen in {"RELIC_REWARD", "BOSS_REWARD"} and "relic_skip" in actions:
+            # 真机实测（Agent build v0.16.2 + 游戏 v0.111）：
+            # 该页可用动作为 resolve_rewards / collect_rewards_and_proceed / claim_reward /
+            # skip_reward_cards，但单独 skip_reward_cards 不离开页面；
+            # 有效序列是先 skip（弃卡）再 collect_rewards_and_proceed（收下并前进）。
+            _, screen, actions, payload = await act(
+                adapter, "flow", "skip_reward_cards", None, required=False)
+            await asyncio.sleep(0.8)
+            _, screen, actions, payload = await act(
+                adapter, "flow", "collect_rewards_and_proceed", None, required=False)
+            await asyncio.sleep(1.2)
+            continue
+        if screen in {"RELIC_REWARD", "BOSS_REWARD"}:
             _, screen, actions, payload = await act(
                 adapter, "flow", "relic_skip", None, required=False)
-            await asyncio.sleep(0.6)
+            await asyncio.sleep(0.8)
             continue
         break
     return screen, actions, payload
@@ -592,47 +723,64 @@ async def main() -> None:
 
     proc = None
     game_log_handle = None
+    boot_error: str | None = None
     try:
-        screen, actions, payload = await read_context(adapter)
-        log(f"游戏已在运行，直接复用（screen={screen}）。")
-    except Exception:
-        # 复用失败 → 自行启动游戏。注意：游戏为 Godot 控制台变体，
-        # stdout 必须重定向到文件（DEVNULL/DETACHED 会在首次日志写入时崩溃）。
-        game_dir = os.environ["STS2_GAME_DIR"]
-        game_exe = os.environ["STS2_GAME_EXE"]
-        game_log = OUT / "game-stdout.log"
-        env = dict(os.environ)
-        env["STS2_API_PORT"] = "8080"
-        env["STS2_ENABLE_DEBUG_ACTIONS"] = "1"
-        game_log_handle = open(game_log, "ab", buffering=0)
-        proc = subprocess.Popen([game_exe], cwd=game_dir, env=env,
-                                stdout=game_log_handle,
-                                stderr=subprocess.STDOUT)
-        log(f"游戏已启动 PID={proc.pid}，等待调试 API...")
-        api_ok = False
-        deadline = time.monotonic() + 300.0
-        while time.monotonic() < deadline:
-            try:
-                await read_context(adapter)
-                api_ok = True
-                break
-            except Exception:
-                if proc.poll() is not None:
+        # 启动阶段并入主 try：任何失败都要落报告并回收进程（阻断 7）。
+        try:
+            screen, actions, payload = await read_context(adapter)
+            log(f"游戏已在运行，直接复用（screen={screen}）。")
+        except Exception:
+            # 复用失败 → 自行启动游戏。注意：游戏为 Godot 控制台变体，
+            # stdout 必须重定向到文件（DEVNULL/DETACHED 会在首次日志写入时崩溃）。
+            game_dir = os.environ["STS2_GAME_DIR"]
+            game_exe = os.environ["STS2_GAME_EXE"]
+            game_log = OUT / "game-stdout.log"
+            env = dict(os.environ)
+            env["STS2_API_PORT"] = "8080"
+            env["STS2_ENABLE_DEBUG_ACTIONS"] = "1"
+            game_log_handle = open(game_log, "ab", buffering=0)
+            proc = subprocess.Popen([game_exe], cwd=game_dir, env=env,
+                                    stdout=game_log_handle,
+                                    stderr=subprocess.STDOUT)
+            log(f"游戏已启动 PID={proc.pid}，等待调试 API...")
+            api_ok = False
+            deadline = time.monotonic() + 300.0
+            while time.monotonic() < deadline:
+                try:
+                    await read_context(adapter)
+                    api_ok = True
                     break
-                await asyncio.sleep(3.0)
-        if not api_ok:
-            raise RuntimeError("调试 API 300s 内仍未就绪（详见 game-stdout.log）")
-        log("调试 API 就绪。")
+                except Exception:
+                    if proc.poll() is not None:
+                        break
+                    await asyncio.sleep(3.0)
+            if not api_ok:
+                boot_error = "调试 API 300s 内仍未就绪（详见 game-stdout.log）"
+                raise RuntimeError(boot_error)
+            log("调试 API 就绪。")
 
-    try:
+        # 从 /health 取受控实例 PID，截图按 PID 匹配窗口（防多实例抓错）
+        import httpx as _hx
+        try:
+            h = await _hx.AsyncClient(timeout=10.0).get("http://127.0.0.1:8080/health")
+            game_pid = int(h.json()["data"]["process_id"])
+            driver.capture = PrintWindowCapture(OUT, pid=game_pid)
+            log(f"受控游戏实例 PID={game_pid}（截图已绑定该实例）")
+        except Exception:
+            log("无法从 /health 取 PID，截图退回标题匹配")
+
         await bootstrap_fresh_start(adapter)
         await scene_character_select(adapter, driver)
         final_screen = await scene_relic_bar(adapter, driver)
         if final_screen != "MAP":
-            # 复位失败兜底：直接从当前状态推进到战斗由 enter_combat 完成
-            log(f"遗物栏场景后画面: {final_screen}，继续由 enter_combat 进战斗")
+            log(f"遗物栏场景后画面: {final_screen}，继续走地图节点进战斗")
         await scene_magic_web_and_minions(adapter, driver)
     finally:
+        if boot_error is not None:
+            driver.record("TC-BOOT", "启动游戏并就绪调试 API",
+                          "复用或启动游戏、等待 STS2-Agent 调试 API 就绪。",
+                          ["游戏进程存活", "API 就绪"], [],
+                          boot_error, "阻塞")
         results = {
             "test_run_id": TASK_ID,
             "metadata": {
