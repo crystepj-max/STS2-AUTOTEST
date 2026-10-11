@@ -21,12 +21,20 @@
 #   BOOTSTRAP_ALLOW_RESTART  1=stale 进程先干净关闭再重启（默认）；
 #                            0=不自动重启，直接失败（人工排查场景）
 #   BOOTSTRAP_KILL_WAIT      TERM 后等待进程退出的秒数（默认 15）
+#   STS2_GAME_LOGS_DIR       游戏引擎日志目录（默认 ~/Library/Application
+#                            Support/SlayTheSpire2/logs），超时取证用
 #
 # 退出码：0=三端点就绪 1=未就绪（原因见输出）
+# 超时失败按三类输出（issue #99），便于区分机器侧问题：
+#   进程从未出现（open 返回成功但 LaunchServices 未拉起）/
+#   进程存在但端点未就绪（游戏卡在启动早期）/
+#   进程出现后消失（启动即退出或崩溃）；
+# 并自动落盘取证：pgrep 快照、近期崩溃报告、Steam 与游戏引擎日志尾部。
 set -uo pipefail
 
 GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2}"
 BUNDLE="$GAME_DIR/SlayTheSpire2.app"
+GAME_LOGS_DIR="${STS2_GAME_LOGS_DIR:-$HOME/Library/Application Support/SlayTheSpire2/logs}"
 BASE_URL="${STS2_AGENT_BASE_URL:-http://127.0.0.1:8080}"
 TOTAL_TIMEOUT="${BOOTSTRAP_TIMEOUT:-180}"
 READY_GRACE="${BOOTSTRAP_READY_GRACE:-30}"
@@ -85,23 +93,67 @@ launch_game() {
     local port="${BASE_URL##*:}"
     port="${port%%/*}"
     log "🚀 open 启动游戏: $BUNDLE (STS2_API_PORT=$port STS2_ENABLE_DEBUG_ACTIONS=1)"
+    local open_rc=0
     env STS2_API_PORT="$port" STS2_ENABLE_DEBUG_ACTIONS=1 STS2_GAME_DIR="$GAME_DIR" \
-        open "$BUNDLE"
+        open "$BUNDLE" || open_rc=$?
+    log "open 退出码: $open_rc"
+    return "$open_rc"
 }
 
-# 启动后轮询三端点直到总预算耗尽。
+# 启动后轮询三端点直到总预算耗尽；同步观察游戏进程（issue #99）。
+# 返回：0=就绪 1=进程存在但端点未就绪 2=进程出现后消失 3=进程从未出现。
 wait_ready() {
-    local waited=0
+    local waited=0 seen=0 pids
     while (( waited < TOTAL_TIMEOUT )); do
+        pids="$(find_game_pids)"
+        if [[ -z "$pids" && "$seen" == "1" ]]; then
+            log "⚠️ 游戏进程启动后消失 (elapsed=${waited}s)"
+            return 2
+        fi
+        if [[ -n "$pids" && "$seen" == "0" ]]; then
+            seen=1
+            log "ℹ️ 游戏进程已出现 (elapsed=${waited}s, pids=$(echo "$pids" | tr '\n' ' '))"
+        fi
         if probe_ready; then
             return 0
         fi
         sleep "$POLL_INTERVAL"
         waited=$((waited + POLL_INTERVAL))
     done
-    log "❌ ${TOTAL_TIMEOUT}s 内三端点未就绪；排查看 Steam 日志："
-    log "   ~/Library/Application Support/Steam/logs/gameprocess_log.txt"
+    if [[ "$seen" == "0" ]]; then
+        return 3
+    fi
     return 1
+}
+
+# 超时/失败后的取证落盘（写入 bootstrap.log，随证据包上传，issue #99）。
+diagnose_failure() {
+    local class="$1" pids_now crashes steam_log
+    log "❌ 三端点未就绪，失败类别："
+    case "$class" in
+        2) log "   进程出现后消失（启动即退出或崩溃）" ;;
+        3) log "   进程从未出现（open 返回成功但 LaunchServices 未拉起）" ;;
+        *) log "   进程存在但端点未就绪（游戏卡在启动早期）" ;;
+    esac
+    log "---- 超时取证 ----"
+    pids_now="$(find_game_pids)"
+    log "pgrep 快照: ${pids_now:-<无进程>}"
+    if [[ -d "${HOME}/Library/Logs/DiagnosticReports" ]]; then
+        crashes="$(find "${HOME}/Library/Logs/DiagnosticReports" -maxdepth 1 \
+            -name '*.ips' -mmin -40 2>/dev/null | head -5)"
+        log "最近 40 分钟崩溃报告: ${crashes:-<无>}"
+    fi
+    steam_log="${HOME}/Library/Application Support/Steam/logs/gameprocess_log.txt"
+    if [[ -f "$steam_log" ]]; then
+        log "Steam gameprocess_log 最近 5 行:"
+        tail -5 "$steam_log" 2>/dev/null | sed 's/^/    /'
+    fi
+    if [[ -d "$GAME_LOGS_DIR" ]]; then
+        log "游戏引擎日志目录最近文件:"
+        ls -t "$GAME_LOGS_DIR" 2>/dev/null | head -3 | sed 's/^/    /'
+    fi
+    log "排查看 Steam 日志："
+    log "   ~/Library/Application Support/Steam/logs/gameprocess_log.txt"
 }
 
 log "== nightly game bootstrap start (base=$BASE_URL)"
@@ -134,8 +186,11 @@ if ! launch_game; then
     exit 1
 fi
 
-if wait_ready; then
+wait_ready
+class=$?
+if [[ "$class" == "0" ]]; then
     log "✅ bootstrap 完成：游戏会话可用"
     exit 0
 fi
+diagnose_failure "$class"
 exit 1
