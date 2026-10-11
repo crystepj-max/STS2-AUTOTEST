@@ -147,6 +147,75 @@ else
     fail "curl 探测缺少 --max-time"
 fi
 
+# issue #99：open 成功但 LaunchServices 未拉起（夜间实测失败类别）。
+# pgrep 始终为空（fake open touch PGREP_EMPTY），端点恒 000。
+test_begin "open 成功但进程从未出现 → 分类「进程从未出现」并取证"
+FAKE="$(new_fake_env)"
+mkdir -p "$FAKE/game/SlayTheSpire2.app"
+touch "$FAKE/state/PGREP_EMPTY" "$FAKE/state/NEVER_READY"
+run_bootstrap "$FAKE" BOOTSTRAP_TIMEOUT=6
+assert_eq "$RUN_RC" "1" "进程从未出现应退出 1"
+assert_contains "$RUN_OUT" "open 退出码: 0" "应记录 open 退出码"
+assert_contains "$RUN_OUT" "进程从未出现" "应分类为进程从未出现"
+assert_contains "$RUN_OUT" "超时取证" "应输出取证段落"
+assert_contains "$RUN_OUT" "pgrep 快照" "应输出 pgrep 快照"
+rm -rf "$FAKE"
+
+# issue #99：进程出现后中途消失（启动即退出/崩溃类别）。
+# pgrep 计数：第 1 次（main 探测）空，第 2 次出现 pid，之后空。
+test_begin "进程出现后消失 → 分类「进程出现后消失」"
+FAKE="$(new_fake_env)"
+mkdir -p "$FAKE/game/SlayTheSpire2.app"
+touch "$FAKE/state/NEVER_READY"
+cat > "$FAKE/bin/pgrep" <<FAKE_PGREP2
+#!/usr/bin/env bash
+COUNT_FILE="$FAKE/state/pgrep.count"
+n="\$(cat "\$COUNT_FILE")"
+n=\$((n + 1))
+printf '%s' "\$n" > "\$COUNT_FILE"
+if (( n == 2 )); then echo 4242; exit 0; fi
+exit 1
+FAKE_PGREP2
+: > "$FAKE/state/pgrep.count"
+cat > "$FAKE/bin/open" <<FAKE_OPEN2
+#!/usr/bin/env bash
+exit 0
+FAKE_OPEN2
+chmod +x "$FAKE/bin/pgrep" "$FAKE/bin/open"
+run_bootstrap "$FAKE" BOOTSTRAP_TIMEOUT=6
+assert_eq "$RUN_RC" "1" "进程消失应退出 1"
+assert_contains "$RUN_OUT" "游戏进程已出现" "应记录进程首次出现"
+assert_contains "$RUN_OUT" "进程出现后消失" "应分类为进程出现后消失"
+rm -rf "$FAKE"
+
+# issue #99：进程出现且端点在预算内就绪 → 成功。
+# pgrep 计数：第 1 次（main 探测）空，之后恒 pid；curl 前 5 次 000。
+test_begin "进程出现且端点就绪 → 成功并记录进程出现"
+FAKE="$(new_fake_env)"
+mkdir -p "$FAKE/game/SlayTheSpire2.app"
+printf '5' > "$FAKE/state/FAIL_N"
+cat > "$FAKE/bin/pgrep" <<FAKE_PGREP3
+#!/usr/bin/env bash
+COUNT_FILE="$FAKE/state/pgrep.count"
+n="\$(cat "\$COUNT_FILE")"
+n=\$((n + 1))
+printf '%s' "\$n" > "\$COUNT_FILE"
+if (( n == 1 )); then exit 1; fi
+echo 4242
+exit 0
+FAKE_PGREP3
+: > "$FAKE/state/pgrep.count"
+cat > "$FAKE/bin/open" <<FAKE_OPEN3
+#!/usr/bin/env bash
+exit 0
+FAKE_OPEN3
+chmod +x "$FAKE/bin/pgrep" "$FAKE/bin/open"
+run_bootstrap "$FAKE"
+assert_eq "$RUN_RC" "0" "进程出现且端点就绪应退出 0"
+assert_contains "$RUN_OUT" "游戏进程已出现" "应记录进程首次出现"
+assert_contains "$RUN_OUT" "bootstrap 完成" "应报告 bootstrap 完成"
+rm -rf "$FAKE"
+
 echo
 echo "nightly game bootstrap 测试完成：$((TEST_COUNT)) 用例，$FAIL_COUNT 失败"
 [[ "$FAIL_COUNT" -eq 0 ]] || exit 1
