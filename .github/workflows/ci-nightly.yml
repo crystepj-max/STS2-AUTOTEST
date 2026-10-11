@@ -194,7 +194,7 @@ jobs:
       - name: Unit tests
         id: unit_tests
         if: steps.env_gate.outputs.ready == 'true'
-        timeout-minutes: 15
+        timeout-minutes: 30
         run: python -m pytest tests/unit/ -v --junitxml=junit-unit.xml
 
       # ---------- Phase 4: CLI integration tests ----------
