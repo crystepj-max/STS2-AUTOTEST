@@ -400,7 +400,7 @@ def compile_spec_file(spec_path: Path, output_dir: Path | None = None, character
         func_name = suite_spec.id.lower().replace("-", "_")
         out_file = resolved_output / f"test_{func_name}.py"
         code = generator.generate_suite_test(suite_spec, {})
-        out_file.write_text(code, encoding="utf-8")
+        out_file.write_text(code, encoding="utf-8", newline="\n")
         return out_file
     else:
         case_spec = parser.parse_case(markdown, str(spec_path))
@@ -517,6 +517,7 @@ def run_tests_in_dir(
                 indent=2,
             ),
             encoding="utf-8",
+            newline="\n",
         )
         if export_artifact:
             packager.export_artifact(run_id, result=pack_result)

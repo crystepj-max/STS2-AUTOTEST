@@ -231,6 +231,7 @@ class RunStore:
         temp.write_text(
             json.dumps(record.to_dict(), ensure_ascii=False, indent=2),
             encoding="utf-8",
+            newline="\n",
         )
         os.replace(temp, path)
 
@@ -463,6 +464,7 @@ class RunStore:
                     indent=2,
                 ),
                 encoding="utf-8",
+                newline="\n",
             )
         except OSError as exc:
             logger.warning("worker-gone: cannot write run-result.json: %s", exc)

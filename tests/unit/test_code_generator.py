@@ -508,6 +508,7 @@ class TestCodeGenerator:
         assert Path(out_path).exists()
         content = Path(out_path).read_text(encoding="utf-8")
         assert "TC-FILE" in content
+        assert b"\r\n" not in Path(out_path).read_bytes()
 
     def test_generated_code_syntax(self, tmp_path: Path) -> None:
         """Verify the generated code can be parsed by Python."""
