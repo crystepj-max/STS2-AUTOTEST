@@ -89,8 +89,11 @@ def _build_import_block(body: str) -> str:
 
 _STEP_TO_ACTION: dict[str, str] = {
     "结束回合": "end_turn()",
-    "使用": "play_card",
 }
+
+# 未映射步骤的静态标记前缀，与断言侧的 ``# TODO: implement assertion for``
+# 共用 ``# TODO: implement`` 头部，门禁只需一条检查即可同时覆盖两侧。
+_UNMAPPED_STEP_MARKER_PREFIX = "# TODO: implement action for"
 
 _CHARACTER_IDS: dict[str, str] = {
     "Ironclad": "IRONCLAD",
@@ -173,6 +176,9 @@ def _assertion_to_call(assertion: str) -> str:
 
 def _step_to_action_call(step: str, character_ids: dict[str, str] | None = None) -> str:
     """Convert a natural-language step into a DSL call or ActionDescriptor.
+
+    映射不到时返回「marker + ActionDescriptor 占位」两行，不是静默兜底：
+    marker 供静态门禁检出，占位动作保证真跑时该步骤不会悄悄消失。
 
     character_ids：角色别名到运行时角色标识的映射。默认仅含原游戏角色；
     MOD 项目可经 project_extension.character_aliases 注入自己的别名。
@@ -288,7 +294,16 @@ def _step_to_action_call(step: str, character_ids: dict[str, str] | None = None)
         if step_lower.startswith(keyword):
             return action
 
-    return f"ActionDescriptor(action_type={step!r})"
+    # 未映射步骤必须同时做到两件事，缺一不可：
+    # 1) 静态可检出——留下 marker，门禁不必执行就能拒收（历史上这里只产出
+    #    语法合法的 ActionDescriptor，`spec_gate` 一类只看断言 marker 的门禁
+    #    会把整条用例判成 READY）；
+    # 2) 真跑不静默少一步——保留 ActionDescriptor，未知 action_type 会在运行期
+    #    响亮失败。若只输出注释，该步骤会被直接丢掉而测试依然"通过"。
+    return (
+        f"{_UNMAPPED_STEP_MARKER_PREFIX} {step!r}\n"
+        f"            ActionDescriptor(action_type={step!r})"
+    )
 
 
 def _case_id_to_function_name(case_id: str) -> str:

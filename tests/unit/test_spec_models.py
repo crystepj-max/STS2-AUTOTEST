@@ -33,8 +33,6 @@ class TestTestSpec:
             givens=["已安装 STS2-Cli-Mod", "游戏可被启动"],
             steps=["启动 Steam", "启动游戏", "选择 Ironclad"],
             assertions=["不应出现 crash", "应位于地图界面"],
-            fallback_policies=["超时重试 3 次"],
-            capability_requirements=["adapter.cli_mod"],
         )
         assert spec.id == "TC-PREPARE-NEW-RUN"
         assert len(spec.steps) == 3
@@ -42,8 +40,10 @@ class TestTestSpec:
 
     def test_default_fields_are_empty_lists(self):
         spec = TestSpec(id="TC-002", title="Test")
-        assert spec.fallback_policies == []
-        assert spec.capability_requirements == []
+        assert spec.tags == []
+        assert spec.givens == []
+        assert spec.steps == []
+        assert spec.assertions == []
 
 
 class TestSuiteSpec:
