@@ -124,11 +124,10 @@ class TestReviewSkipVisibility:
         spec_dir = tmp_path / "specs"
         spec_dir.mkdir()
         (spec_dir / "TC-OK.md").write_text(
-            "# TC-OK 测试\\n\\n## Metadata\\n- id: TC-OK\\n- level: case\\n"
-            .replace("\\\\n", "\\n"),
+            "# TC-OK 测试\n\n## Metadata\n- id: TC-OK\n- level: case\n",
             encoding="utf-8",
         )
-        (spec_dir / "CHECKLIST.md").write_text("# 人工清单\\n", encoding="utf-8")
+        (spec_dir / "CHECKLIST.md").write_text("# 人工清单\n", encoding="utf-8")
         args = _create_parser().parse_args(["review", "--spec-dir", str(spec_dir)])
         review_cmd(args)
         out = capsys.readouterr().out
@@ -138,7 +137,7 @@ class TestReviewSkipVisibility:
         assert "Reviewing 1 case(s)" in out
 
     def test_review_only_unparsed_files_is_not_a_false_pass(self, tmp_path, capsys) -> None:
-        (tmp_path / "CHECKLIST.md").write_text("# 人工清单\\n", encoding="utf-8")
+        (tmp_path / "CHECKLIST.md").write_text("# 人工清单\n", encoding="utf-8")
         args = _create_parser().parse_args(["review", "--spec-dir", str(tmp_path)])
         assert review_cmd(args) == 1
         out = capsys.readouterr().out
