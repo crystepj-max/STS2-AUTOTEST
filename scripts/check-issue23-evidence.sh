@@ -162,8 +162,40 @@ PY
 }
 
 # 提取 JSON 字段：json_field '<json>' '<python 表达式（d 为解析结果）>'
+# 输出必须剥 CR：Windows 上 Python 的文本 stdout 会把 \n 写成 \r\n，带着 CR 与
+# 仓库文本比较会得到「打印完全相同却判不一致」的假失败。
 json_field() {
-    printf '%s' "$1" | "$GATE_PYTHON" -c "import json,sys; d=json.load(sys.stdin); print($2)"
+    printf '%s' "$1" | "$GATE_PYTHON" -c "import json,sys; d=json.load(sys.stdin); print($2)" | tr -d '\r'
+}
+
+# 批量提取：一次解释器进程内按顺序求值多条表达式，各输出一行。
+# 单条 json_field 在 Windows 上要付 ~1.7 秒的解释器冷启动（实测），逐条求值会把
+# 整个门禁顶破 60 秒预算，46 条对账单测因此全判超时。同一 payload 的判据必须合批。
+json_fields() {
+    local payload="$1"
+    shift
+    printf '%s' "$payload" | "$GATE_PYTHON" -c '
+import fnmatch, json, sys
+
+d = json.load(sys.stdin)
+for expr in sys.argv[1:]:
+    print(eval(expr, {"d": d, "json": json, "fnmatch": fnmatch}))
+' "$@" | tr -d '\r'
+}
+
+# 把 json_fields 的多行输出按顺序赋给给定的变量名（bash 3.2 可用，不用 mapfile）
+read_fields() {
+    local _names=("$@") _i=0 _line
+    while IFS= read -r _line; do
+        printf -v "${_names[$_i]}" '%s' "$_line"
+        _i=$((_i + 1))
+    done
+}
+
+# 读仓库文本文件一律剥 CR：Git for Windows 默认 core.autocrlf=true，工作树可能是
+# CRLF 而仓库里是 LF，带着 CR 比较会让两侧「打印完全相同」的列表判成不一致。
+read_repo_text() {
+    tr -d '\r' < "$1"
 }
 
 fail() {
@@ -191,7 +223,7 @@ if [[ ! -f "$EVIDENCE_JSON" ]]; then
     fail "证据 JSON 不存在：$EVIDENCE_JSON"
 else
     expected="$(json_field "$(cat "$EVIDENCE_JSON")" '"\n".join(d["env_guard"]["gitignore"])' | sort)"
-    actual="$(grep -E '^[!/]?\.env' "$REPO_ROOT/.gitignore" | sort)"
+    actual="$(read_repo_text "$REPO_ROOT/.gitignore" | grep -E '^[!/]?\.env' | sort)"
     if [[ "$expected" != "$actual" ]]; then
         fail ".gitignore 与证据 JSON 不一致：JSON=[$(echo "$expected" | tr '\n' ' ')] 实际=[$(echo "$actual" | tr '\n' ' ')]"
     else
@@ -201,7 +233,7 @@ else
         # 扫描所有被跟踪的 .gitignore（子目录同样可能放行 .env）
         neg_rules=""
         while IFS= read -r -d '' gi; do
-            r="$(grep -E '^!' "$REPO_ROOT/$gi" | sed -E 's/\[([^]]*)\]/\1/g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
+            r="$(read_repo_text "$REPO_ROOT/$gi" | grep -E '^!' | sed -E 's/\[([^]]*)\]/\1/g' | grep -E '\.env' | grep -v '^!\.env\.example$' || true)"
             if [[ -n "$r" ]]; then
                 neg_rules="${neg_rules}${gi}: $(echo "$r" | tr '\n' ' ')"
             fi
@@ -241,7 +273,7 @@ else
                         break
                     fi
                 done
-            done < <(grep -E '^!' "$REPO_ROOT/$gi2" || true)
+            done < <(read_repo_text "$REPO_ROOT/$gi2" | grep -E '^!' || true)
         done < <(run_timeout git ls-files -z | grep -z '\.gitignore$' || true)
         if [[ -n "$neg_violations" ]]; then
             fail "否定规则会放行 .env（探针未忽略）：$neg_violations"
@@ -349,50 +381,25 @@ else
 fi
 
 if ruleset_json="$(run_timeout gh api "repos/$REPO/rulesets/$RULESET_ID")"; then
-    enforcement="$(json_field "$ruleset_json" 'd.get("enforcement", "missing")')"
-    thread="$(json_field "$ruleset_json" 'str([r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_review_thread_resolution")).lower()')"
-    bypass_ok="$(json_field "$ruleset_json" 'str(d.get("bypass_actors", []) == [] and d.get("current_user_can_bypass") == "never").lower()')"
-    # ruleset 的必填检查是独立 rule 类型 required_status_checks（strict 策略 + context 列表；
-    # 须绑定 GitHub Actions App（integration_id 15368），防止同名检查由错误来源满足）
-    rsc_ok="$(json_field "$ruleset_json" 'str(any(
-        r.get("type") == "required_status_checks"
-        and r.get("parameters", {}).get("strict_required_status_checks_policy") is True
-        and all(c.get("integration_id") == 15368 for c in r.get("parameters", {}).get("required_status_checks", []))
-        and "PR Check Summary" in [c.get("context") for c in r.get("parameters", {}).get("required_status_checks", [])]
-        for r in d.get("rules", [])
-    )).lower()')"
-    # ruleset 必须实际覆盖默认分支（target=branch 且 include 含 ~DEFAULT_BRANCH、
-    # exclude 不得匹配默认分支——含通配模式 refs/heads/* 等，按 ruleset ref pattern 语义匹配）
-    target="$(json_field "$ruleset_json" 'str(d.get("target") == "branch").lower()')"
-    covers_default="$("$GATE_PYTHON" -c "$(cat <<'PY'
-import fnmatch, json, sys
-
-d = json.loads(sys.argv[1])
-
-
-def pat_matches_main(pat):
-    if pat in ("~DEFAULT_BRANCH", "refs/heads/main", "main"):
-        return True
-    # ruleset ref pattern 语义：*、?、[] 通配（fnmatch 完整 glob 语义）
-    return fnmatch.fnmatchcase("refs/heads/main", pat)
-
-
-cond = d.get("conditions", {}).get("ref_name", {})
-print(
-    str(
-        "~DEFAULT_BRANCH" in cond.get("include", [])
-        and not any(pat_matches_main(p) for p in cond.get("exclude", []))
-    ).lower()
-)
-PY
-)" "$ruleset_json")"
-    # 禁止删除分支 / 非快进推送（治理文档声明；与 branch protection 的 allow_* 配套核验）
-    del_rule_ok="$(json_field "$ruleset_json" 'str(any(r.get("type") == "deletion" for r in d.get("rules", []))).lower()')"
-    nff_rule_ok="$(json_field "$ruleset_json" 'str(any(r.get("type") == "non_fast_forward" for r in d.get("rules", []))).lower()')"
-    # 审批数必须为 0（治理文档：solo 维护者无法自审，PR 形态 + 必填检查已构成门禁）
-    approvals_zero="$(json_field "$ruleset_json" 'str(
-        [r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_approving_review_count") == 0
-    ).lower()')"
+    # 同一 payload 的 9 条判据合批求值：逐条 json_field 每次都要付 ~1.7 秒解释器
+    # 冷启动（Windows 实测），是本门禁顶破 60 秒预算的主要来源。
+    # 判据语义与注释保持原样：
+    #   ruleset 的必填检查是独立 rule 类型 required_status_checks（strict 策略 + context
+    #   列表；须绑定 GitHub Actions App（integration_id 15368），防止同名检查由错误来源满足）
+    #   ruleset 必须实际覆盖默认分支（target=branch 且 include 含 ~DEFAULT_BRANCH、exclude
+    #   不得匹配默认分支——含通配模式 refs/heads/* 等，按 ruleset ref pattern 语义匹配）
+    #   禁止删除分支 / 非快进推送（治理文档声明；与 branch protection 的 allow_* 配套核验）
+    #   审批数必须为 0（治理文档：solo 维护者无法自审，PR 形态 + 必填检查已构成门禁）
+    read_fields enforcement thread bypass_ok rsc_ok target covers_default del_rule_ok nff_rule_ok approvals_zero < <(json_fields "$ruleset_json" \
+        'd.get("enforcement", "missing")' \
+        'str([r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_review_thread_resolution")).lower()' \
+        'str(d.get("bypass_actors", []) == [] and d.get("current_user_can_bypass") == "never").lower()' \
+        'str(any(r.get("type") == "required_status_checks" and r.get("parameters", {}).get("strict_required_status_checks_policy") is True and all(c.get("integration_id") == 15368 for c in r.get("parameters", {}).get("required_status_checks", [])) and "PR Check Summary" in [c.get("context") for c in r.get("parameters", {}).get("required_status_checks", [])] for r in d.get("rules", []))).lower()' \
+        'str(d.get("target") == "branch").lower()' \
+        'str("~DEFAULT_BRANCH" in d.get("conditions", {}).get("ref_name", {}).get("include", []) and not any(p in ("~DEFAULT_BRANCH", "refs/heads/main", "main") or fnmatch.fnmatchcase("refs/heads/main", p) for p in d.get("conditions", {}).get("ref_name", {}).get("exclude", []))).lower()' \
+        'str(any(r.get("type") == "deletion" for r in d.get("rules", []))).lower()' \
+        'str(any(r.get("type") == "non_fast_forward" for r in d.get("rules", []))).lower()' \
+        'str([r for r in d.get("rules", []) if r.get("type") == "pull_request"][0]["parameters"].get("required_approving_review_count") == 0).lower()')
     if [[ "$enforcement" == "active" && "$target" == "true" && "$covers_default" == "true" && "$thread" == "true" && "$bypass_ok" == "true" && "$rsc_ok" == "true" && "$del_rule_ok" == "true" && "$nff_rule_ok" == "true" && "$approvals_zero" == "true" ]]; then
         pass "ruleset $RULESET_ID 实时回读：enforcement=${enforcement}、覆盖默认分支、必填 PR Check Summary、线程=${thread}、无绕过者、禁删除/禁非快进、审批 0"
     else
@@ -405,21 +412,17 @@ fi
 # branch protection 层回读（T7 演练曾临时解除 enforce_admins，只查 ruleset 会漏掉该层仍被削弱；
 # 两层都必须实际要求 PR Check Summary——PR head 残留同名成功 check 不代表保护仍要求它）
 if bp_json="$(run_timeout gh api "repos/$REPO/branches/main/protection")"; then
-    enforce_admins="$(json_field "$bp_json" 'str(d.get("enforce_admins", {}).get("enabled")).lower()')"
-    strict="$(json_field "$bp_json" 'str(d.get("required_status_checks", {}).get("strict")).lower()')"
-    rsc_ok="$(json_field "$bp_json" 'str(
-        "PR Check Summary" in d.get("required_status_checks", {}).get("contexts", [])
-        and any(
-            c.get("context") == "PR Check Summary" and c.get("app_id") == 15368
-            for c in d.get("required_status_checks", {}).get("checks", [])
-        )
-    ).lower()')"
-    # 禁止删除 / 禁止 force push（治理文档声明，须与 ruleset 的 deletion/non_fast_forward 规则配套）
-    no_del="$(json_field "$bp_json" 'str(not d.get("allow_deletions", {}).get("enabled", False)).lower()')"
-    no_ff="$(json_field "$bp_json" 'str(not d.get("allow_force_pushes", {}).get("enabled", False)).lower()')"
-    # 审批要求必须未启用（治理文档：solo 维护者无法自审）。
-    # 注意：未启用审批时 GitHub 返回 required_pull_request_reviews=null，须先或 {} 再取字段
-    approvals_zero="$(json_field "$bp_json" 'str(not (d.get("required_pull_request_reviews") or {}).get("required_approving_review_count", 0)).lower()')"
+    # 同一 payload 的 6 条判据合批（理由同上：逐条求值的解释器冷启动是本门禁的超时主因）。
+    # 禁止删除 / 禁止 force push（治理文档声明，须与 ruleset 的 deletion/non_fast_forward 规则配套）；
+    # 审批要求必须未启用（治理文档：solo 维护者无法自审）——未启用审批时 GitHub 返回
+    # required_pull_request_reviews=null，须先或 {} 再取字段。
+    read_fields enforce_admins strict rsc_ok no_del no_ff approvals_zero < <(json_fields "$bp_json" \
+        'str(d.get("enforce_admins", {}).get("enabled")).lower()' \
+        'str(d.get("required_status_checks", {}).get("strict")).lower()' \
+        'str("PR Check Summary" in d.get("required_status_checks", {}).get("contexts", []) and any(c.get("context") == "PR Check Summary" and c.get("app_id") == 15368 for c in d.get("required_status_checks", {}).get("checks", []))).lower()' \
+        'str(not d.get("allow_deletions", {}).get("enabled", False)).lower()' \
+        'str(not d.get("allow_force_pushes", {}).get("enabled", False)).lower()' \
+        'str(not (d.get("required_pull_request_reviews") or {}).get("required_approving_review_count", 0)).lower()')
     if [[ "$enforce_admins" == "true" && "$strict" == "true" && "$rsc_ok" == "true" && "$no_del" == "true" && "$no_ff" == "true" && "$approvals_zero" == "true" ]]; then
         pass "branch protection 实时回读：enforce_admins=${enforce_admins}、strict=${strict}、必填 PR Check Summary、禁删除/禁 force push、无审批要求"
     else
