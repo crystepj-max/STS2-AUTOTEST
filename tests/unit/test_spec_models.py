@@ -40,6 +40,10 @@ class TestTestSpec:
 
     def test_default_fields_are_empty_lists(self):
         spec = TestSpec(id="TC-002", title="Test")
+        assert spec.tags == []
+        assert spec.givens == []
+        assert spec.steps == []
+        assert spec.assertions == []
 
 
 class TestSuiteSpec:
