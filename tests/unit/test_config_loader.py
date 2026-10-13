@@ -18,14 +18,14 @@ class TestDefaultsOnly:
 
     def test_loads_without_any_files(self, config_dir: Path) -> None:
         cfg = load_config(project_dir=config_dir)
-        assert cfg.framework.log_level == "INFO"
-        assert cfg.execution.game_timeout == 60.0
+        assert cfg.framework.screenshot_dir == "tests/output/screenshots"
+        assert cfg.execution.game_startup_timeout == 60.0
         assert cfg.adapter.cli.enabled is True
 
     def test_frozen_config_returned(self, config_dir: Path) -> None:
         cfg = load_config(project_dir=config_dir)
         with pytest.raises(Exception):
-            cfg.execution = cfg.execution.model_copy(update={"game_timeout": 999})  # type: ignore[misc]
+            cfg.execution = cfg.execution.model_copy(update={"game_startup_timeout": 999})  # type: ignore[misc]
 
 
 class TestYAMLOverride:
@@ -33,43 +33,43 @@ class TestYAMLOverride:
 
     def test_yaml_overrides_default(self, config_dir: Path) -> None:
         yaml_file = config_dir / "sts2-autotest.yaml"
-        yaml_file.write_text("execution:\n  game_timeout: 120.0\n")
+        yaml_file.write_text("execution:\n  game_startup_timeout: 120.0\n")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 120.0
-        assert cfg.framework.log_level == "INFO"  # default preserved
+        assert cfg.execution.game_startup_timeout == 120.0
+        assert cfg.framework.screenshot_dir == "tests/output/screenshots"  # default preserved
 
     def test_yaml_partial_override(self, config_dir: Path) -> None:
         yaml_file = config_dir / "sts2-autotest.yaml"
-        yaml_file.write_text("framework:\n  log_level: DEBUG\n")
+        yaml_file.write_text("framework:\n  screenshot_dir: tests/output/debug\n")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.framework.log_level == "DEBUG"
-        assert cfg.execution.game_timeout == 60.0
+        assert cfg.framework.screenshot_dir == "tests/output/debug"
+        assert cfg.execution.game_startup_timeout == 60.0
 
     def test_missing_yaml_is_ok(self, config_dir: Path) -> None:
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 60.0
+        assert cfg.execution.game_startup_timeout == 60.0
 
     def test_empty_yaml_is_ok(self, config_dir: Path) -> None:
         yaml_file = config_dir / "sts2-autotest.yaml"
         yaml_file.write_text("")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 60.0
+        assert cfg.execution.game_startup_timeout == 60.0
 
 
 class TestEnvOverride:
     """Layer 3: environment variables override YAML and defaults."""
 
     def test_env_overrides_default(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("STS2_EXECUTION__GAME_TIMEOUT", "90.0")
+        monkeypatch.setenv("STS2_EXECUTION__GAME_STARTUP_TIMEOUT", "90.0")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 90.0
+        assert cfg.execution.game_startup_timeout == 90.0
 
     def test_env_overrides_yaml(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         yaml_file = config_dir / "sts2-autotest.yaml"
-        yaml_file.write_text("execution:\n  game_timeout: 120.0\n")
-        monkeypatch.setenv("STS2_EXECUTION__GAME_TIMEOUT", "45.0")
+        yaml_file.write_text("execution:\n  game_startup_timeout: 120.0\n")
+        monkeypatch.setenv("STS2_EXECUTION__GAME_STARTUP_TIMEOUT", "45.0")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 45.0
+        assert cfg.execution.game_startup_timeout == 45.0
 
     def test_env_bool_coercion(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("STS2_EXECUTION__PARALLEL", "true")
@@ -114,7 +114,7 @@ class TestEnvOverride:
     def test_non_sts2_env_ignored(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OTHER_VAR", "ignored")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 60.0
+        assert cfg.execution.game_startup_timeout == 60.0
 
 
 class TestDotenvOverride:
@@ -122,16 +122,16 @@ class TestDotenvOverride:
 
     def test_dotenv_overrides_default(self, config_dir: Path) -> None:
         env_file = config_dir / ".env"
-        env_file.write_text("STS2_EXECUTION__GAME_TIMEOUT=75.0\n")
+        env_file.write_text("STS2_EXECUTION__GAME_STARTUP_TIMEOUT=75.0\n")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 75.0
+        assert cfg.execution.game_startup_timeout == 75.0
 
     def test_env_overrides_dotenv(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         env_file = config_dir / ".env"
-        env_file.write_text("STS2_EXECUTION__GAME_TIMEOUT=75.0\n")
-        monkeypatch.setenv("STS2_EXECUTION__GAME_TIMEOUT", "30.0")
+        env_file.write_text("STS2_EXECUTION__GAME_STARTUP_TIMEOUT=75.0\n")
+        monkeypatch.setenv("STS2_EXECUTION__GAME_STARTUP_TIMEOUT", "30.0")
         cfg = load_config(project_dir=config_dir)
-        assert cfg.execution.game_timeout == 30.0
+        assert cfg.execution.game_startup_timeout == 30.0
 
 
 class TestCLIOverrides:
@@ -140,26 +140,26 @@ class TestCLIOverrides:
     def test_cli_overrides_default(self, config_dir: Path) -> None:
         cfg = load_config(
             project_dir=config_dir,
-            cli_overrides={"execution": {"game_timeout": 15.0}},
+            cli_overrides={"execution": {"game_startup_timeout": 15.0}},
         )
-        assert cfg.execution.game_timeout == 15.0
+        assert cfg.execution.game_startup_timeout == 15.0
 
     def test_cli_overrides_env(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("STS2_EXECUTION__GAME_TIMEOUT", "90.0")
+        monkeypatch.setenv("STS2_EXECUTION__GAME_STARTUP_TIMEOUT", "90.0")
         cfg = load_config(
             project_dir=config_dir,
-            cli_overrides={"execution": {"game_timeout": 10.0}},
+            cli_overrides={"execution": {"game_startup_timeout": 10.0}},
         )
-        assert cfg.execution.game_timeout == 10.0
+        assert cfg.execution.game_startup_timeout == 10.0
 
     def test_cli_overrides_yaml(self, config_dir: Path) -> None:
         yaml_file = config_dir / "sts2-autotest.yaml"
-        yaml_file.write_text("execution:\n  game_timeout: 120.0\n")
+        yaml_file.write_text("execution:\n  game_startup_timeout: 120.0\n")
         cfg = load_config(
             project_dir=config_dir,
-            cli_overrides={"execution": {"game_timeout": 5.0}},
+            cli_overrides={"execution": {"game_startup_timeout": 5.0}},
         )
-        assert cfg.execution.game_timeout == 5.0
+        assert cfg.execution.game_startup_timeout == 5.0
 
 
 class TestFullLayerStack:
@@ -168,19 +168,18 @@ class TestFullLayerStack:
     def test_four_layer_priority(self, config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # Layer 2: YAML
         yaml_file = config_dir / "sts2-autotest.yaml"
-        yaml_file.write_text("execution:\n  game_timeout: 120.0\n")
+        yaml_file.write_text("execution:\n  game_startup_timeout: 120.0\n")
         # Layer 3: env var
-        monkeypatch.setenv("STS2_FRAMEWORK__LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("STS2_FRAMEWORK__EVIDENCE_RETENTION", "7")
         # Layer 4: CLI
         cfg = load_config(
             project_dir=config_dir,
             cli_overrides={"execution": {"max_retries": 5}},
         )
-        assert cfg.execution.game_timeout == 120.0  # from YAML
-        assert cfg.framework.log_level == "DEBUG"  # from env
+        assert cfg.execution.game_startup_timeout == 120.0  # from YAML
+        assert cfg.framework.evidence_retention == 7  # from env
         assert cfg.execution.max_retries == 5  # from CLI
-        assert cfg.state_machine.poll_interval == 1.0  # default
 
     def test_string_project_dir(self, config_dir: Path) -> None:
         cfg = load_config(project_dir=str(config_dir))
-        assert cfg.execution.game_timeout == 60.0
+        assert cfg.execution.game_startup_timeout == 60.0

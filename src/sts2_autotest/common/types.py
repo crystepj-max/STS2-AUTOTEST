@@ -133,17 +133,6 @@ class WatchdogSettings(Protocol):
     heartbeat_timeout: float
 
 
-class ProgressSettings(Protocol):
-    """Protocol for progress persistence configuration — decouples core/ from config/.
-
-    Implemented by config.schema.FrameworkConfig so that progress module
-    can consume config without core/ importing config/.
-    """
-
-    progress_dir: str
-    progress_filename: str
-
-
 class LockManagerSettings(Protocol):
     """Protocol for lock manager configuration — decouples core/ from config/.
 
@@ -152,17 +141,6 @@ class LockManagerSettings(Protocol):
     """
 
     lock_file: str
-
-
-class SessionQueueSettings(Protocol):
-    """Protocol for session queue configuration — decouples core/ from config/.
-
-    Implemented by config.schema.ExecutionConfig so that SessionQueue
-    can consume config without core/ importing config/.
-    """
-
-    session_queue_timeout: float
-    session_queue_max_depth: int
 
 
 class DataValidationSettings(Protocol):
