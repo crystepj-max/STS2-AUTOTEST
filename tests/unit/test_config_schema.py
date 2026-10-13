@@ -23,7 +23,6 @@ class TestFrameworkConfig:
 
     def test_defaults(self) -> None:
         cfg = FrameworkConfig()
-        assert cfg.log_level == "INFO"
         assert cfg.screenshot_dir == "tests/output/screenshots"
         assert cfg.evidence_dir == "tests/output"
         assert cfg.evidence_retention == 20
@@ -67,14 +66,14 @@ class TestFrameworkConfig:
                 visual_qa_high_brightness_threshold=5.0,
             )
 
-    def test_valid_log_levels(self) -> None:
-        for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
-            cfg = FrameworkConfig(log_level=level)
-            assert cfg.log_level == level
+    def test_valid_tool_profiles(self) -> None:
+        for profile in ("guided", "layered", "full"):
+            cfg = AgentAdapterConfig(tool_profile=profile)
+            assert cfg.tool_profile == profile
 
-    def test_invalid_log_level(self) -> None:
+    def test_invalid_tool_profile(self) -> None:
         with pytest.raises(ValidationError):
-            FrameworkConfig(log_level="VERBOSE")
+            AgentAdapterConfig(tool_profile="aggressive")
 
     def test_negative_retention(self) -> None:
         with pytest.raises(ValidationError):
@@ -86,18 +85,18 @@ class TestExecutionConfig:
 
     def test_defaults(self) -> None:
         cfg = ExecutionConfig()
-        assert cfg.game_timeout == 60.0
+        assert cfg.game_startup_timeout == 60.0
         assert cfg.game_startup_timeout == 60.0
         assert cfg.max_retries == 3
         assert cfg.parallel is False
 
     def test_negative_timeout_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            ExecutionConfig(game_timeout=-1)
+            ExecutionConfig(game_startup_timeout=-1)
 
     def test_zero_timeout_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            ExecutionConfig(game_timeout=0)
+            ExecutionConfig(game_startup_timeout=0)
 
     def test_negative_retries_rejected(self) -> None:
         with pytest.raises(ValidationError):
@@ -163,10 +162,9 @@ class TestSTS2Config:
 
     def test_full_defaults(self) -> None:
         cfg = STS2Config()
-        assert cfg.framework.log_level == "INFO"
+        assert cfg.framework.screenshot_dir == "tests/output/screenshots"
         assert cfg.adapter.cli.enabled is True
-        assert cfg.execution.game_timeout == 60.0
-        assert cfg.state_machine.poll_interval == 1.0
+        assert cfg.execution.game_startup_timeout == 60.0
 
     def test_frozen(self) -> None:
         cfg = STS2Config()
@@ -174,6 +172,6 @@ class TestSTS2Config:
             cfg.framework = FrameworkConfig()  # type: ignore[misc]
 
     def test_nested_override(self) -> None:
-        cfg = STS2Config(execution=ExecutionConfig(game_timeout=120.0))
-        assert cfg.execution.game_timeout == 120.0
+        cfg = STS2Config(execution=ExecutionConfig(game_startup_timeout=120.0))
+        assert cfg.execution.game_startup_timeout == 120.0
         assert cfg.execution.max_retries == 3  # default preserved
