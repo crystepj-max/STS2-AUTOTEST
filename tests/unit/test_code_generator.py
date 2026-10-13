@@ -1,6 +1,7 @@
 """Tests for code_generator.py — TestSpec → pytest code generation."""
 from __future__ import annotations
 
+import ast
 import re
 import shutil
 import subprocess
@@ -9,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from sts2_autotest.common.spec_models import SuiteSpec, TestSpec
-from sts2_autotest.core.code_generator import CodeGenerator, _build_import_block
+from sts2_autotest.core.code_generator import (
+    _UNMAPPED_STEP_MARKER_PREFIX,
+    CodeGenerator,
+    _build_import_block,
+)
 from sts2_autotest.core.markdown_parser import MarkdownParser
 
 
@@ -664,3 +669,134 @@ class TestCodeGenerator:
         assert "choose_event(0)" in code
         assert "advance_dialogue()" in code
         assert code.index("choose_event(0)") < code.index("advance_dialogue()")
+
+
+def _action_arguments(code: str) -> list[ast.expr]:
+    """取出生成码里所有传给 .setup()/.execute() 的动作参数节点。"""
+    found: list[ast.expr] = []
+    for node in ast.walk(ast.parse(code)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"setup", "execute"}
+        ):
+            found.extend(node.args)
+    return found
+
+
+# spec_reviewer._SUPPORTED_STEP_PATTERNS 的下标 → 真实中文步骤样例。
+# 这两张表历史上互不校验：白名单放行 + 生成器落兜底 = 静默假 READY（LOC-009）。
+# 每个样例都必须既命中对应正则、又被生成器映射成可执行动作。
+_SUPPORTED_STEP_SAMPLES: dict[int, list[str]] = {
+    0: ["启动游戏", "返回主菜单", "开始新 run"],
+    1: ["选择 Ironclad", "开始冒险"],
+    2: ["选择涅奥祝福", "推进事件对话", "点击 Proceed"],
+    3: ["选择首个营火节点", "选择首个普通战斗节点", "进入首次战斗"],
+    4: ["收取奖励并继续"],
+    5: ["选择待变化的第 1 张牌"],
+    6: ["添加 gawain:defend 到手牌"],
+    7: ["设置种子 12345"],
+    8: ["设置玩家生命 20", "给予玩家 3 点格挡", "直接获胜当前战斗", "启用地图穿行"],
+    9: ["基础策略战斗", "跳过卡牌奖励"],
+    10: ["结束回合", "使用 gawain:defend"],
+}
+
+
+class TestSupportedStepsStayMapped:
+    """白名单里的每条中文步骤，都必须有确定能生成的用例，而不是跑时才翻译。"""
+
+    def setup_method(self) -> None:
+        self.generator = CodeGenerator()
+
+    def test_every_supported_step_pattern_has_a_sample(self) -> None:
+        from sts2_autotest.core.spec_reviewer import _SUPPORTED_STEP_PATTERNS
+
+        assert set(range(len(_SUPPORTED_STEP_PATTERNS))) == set(_SUPPORTED_STEP_SAMPLES), (
+            "spec_reviewer 白名单与本对齐表已漂移：新增/删除模式必须同步补样例"
+        )
+
+    @pytest.mark.parametrize("pattern_index", sorted(_SUPPORTED_STEP_SAMPLES))
+    def test_samples_match_their_pattern(self, pattern_index: int) -> None:
+        from sts2_autotest.core.spec_reviewer import _SUPPORTED_STEP_PATTERNS
+
+        pattern = _SUPPORTED_STEP_PATTERNS[pattern_index]
+        for step in _SUPPORTED_STEP_SAMPLES[pattern_index]:
+            assert pattern.search(step), f"样例 {step!r} 已不再命中模式 {pattern_index}"
+
+    @pytest.mark.parametrize(
+        "step",
+        [s for samples in _SUPPORTED_STEP_SAMPLES.values() for s in samples],
+    )
+    def test_sample_generates_without_unmapped_marker(self, step: str) -> None:
+        spec = TestSpec(
+            id="TC-STEP-ALIGNMENT",
+            title="步骤对齐",
+            steps=["启动游戏", step],
+            assertions=["玩家格挡增加 5"],
+        )
+
+        code = self.generator.generate_case_test(spec)
+
+        assert _UNMAPPED_STEP_MARKER_PREFIX not in code
+        assert all(isinstance(arg, ast.Call) for arg in _action_arguments(code)), code
+
+
+class TestUnmappedStepFailClosed:
+    """未映射步骤必须静态可检出，且不能在运行期悄悄消失。"""
+
+    def setup_method(self) -> None:
+        self.generator = CodeGenerator()
+
+    def _case(self, steps: list[str]) -> TestSpec:
+        return TestSpec(
+            id="TC-FAILOPEN-PROBE",
+            title="fail-open 探针",
+            steps=steps,
+            assertions=["玩家格挡增加 5"],
+        )
+
+    def test_unmapped_step_leaves_detectable_marker(self) -> None:
+        code = self.generator.generate_case_test(
+            self._case(["等待新回合开始（wait_until_actionable）"])
+        )
+
+        assert _UNMAPPED_STEP_MARKER_PREFIX in code
+        ast.parse(code)
+
+    def test_unmapped_step_still_generates_an_action(self) -> None:
+        """只输出注释会让步骤凭空消失而测试照样绿，占位动作必须保留。"""
+        code = self.generator.generate_case_test(self._case(["随便一句没实现的话"]))
+
+        assert "ActionDescriptor(action_type='随便一句没实现的话')" in code
+
+    def test_unmapped_keyword_step_is_not_emitted_as_bare_function_name(self) -> None:
+        """历史缺陷：`使用`+非 ASCII 宾语命中关键字兜底，产出裸函数名 play_card（无括号、未 import）。"""
+        code = self.generator.generate_case_test(self._case(["使用召唤技，取得画面证据。"]))
+
+        assert _UNMAPPED_STEP_MARKER_PREFIX in code
+        assert "\n            play_card,\n" not in code
+
+    def test_suite_generation_marks_unmapped_steps_too(self) -> None:
+        case = TestSpec(
+            id="TC-SUITE-STEP",
+            title="套件内未映射步骤",
+            steps=["等待新回合开始（wait_until_actionable）"],
+            assertions=["玩家格挡增加 5"],
+        )
+        suite = SuiteSpec(
+            id="SUITE-STEP-PROBE",
+            title="套件",
+            goal="覆盖套件侧兜底",
+            includes=[case.id],
+        )
+
+        code = self.generator.generate_suite_test(suite, {case.id: case})
+
+        assert _UNMAPPED_STEP_MARKER_PREFIX in code
+        ast.parse(code)
+
+    def test_marker_shares_prefix_with_assertion_side(self) -> None:
+        """断言侧用 `# TODO: implement assertion for`；两侧共用 `# TODO: implement` 头部，
+        门禁一条字符串检查即可同时覆盖步骤与断言。"""
+        assert _UNMAPPED_STEP_MARKER_PREFIX.startswith("# TODO: implement ")
+

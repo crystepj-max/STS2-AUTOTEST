@@ -31,6 +31,9 @@ _UNIMPLEMENTABLE_KEYWORDS: list[str] = [
     "使用未实现", "未实现的功能",
 ]
 
+# ⚠️ 新增/删改下面任何一条模式时，必须同步 `tests/unit/test_code_generator.py` 的
+# `_SUPPORTED_STEP_SAMPLES`（每条模式配一个真实中文步骤样例）。漂移由
+# `TestSupportedStepsStayMapped::test_every_supported_step_pattern_has_a_sample` 拦住。
 _SUPPORTED_STEP_PATTERNS: list[re.Pattern[str]] = [
     re.compile(pattern)
     for pattern in (
