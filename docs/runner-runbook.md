@@ -109,12 +109,33 @@ scripts/runner-probe.sh
 
 部署定时采集（建议每 10 分钟一次，落盘追加；需部署到 launchd/cron 后生效）：
 
+⚠️ **计划任务的入口脚本不要放在 `/Volumes/...` 下。** launchd 派生的 `/bin/bash`
+没有"访问其他卷"的隐私授权，读该卷一律 `Operation not permitted`（家目录不受影响，
+文件权限位与 ACL 也都正常）。所以先把探针复制到家目录，再让计划任务指向这份副本；
+改过 `scripts/runner-probe.sh` 后必须重跑 `cp` 刷新副本，否则排期跑的仍是旧版。
+
 ```bash
 mkdir -p ~/.sts2-runner-probe
+cp scripts/runner-probe.sh ~/.sts2-runner-probe/runner-probe.sh
 # cron 示例（每 10 分钟）：
-# */10 * * * * /bin/bash $HOME/STS2-WORKSPACE/STS2-AUTOTEST/scripts/runner-probe.sh \
+# */10 * * * * /bin/bash $HOME/.sts2-runner-probe/runner-probe.sh \
 #   >> $HOME/.sts2-runner-probe/probe-$(date +%Y%m%d).jsonl 2>&1
 ```
+
+launchd 版（本机实际采用）：`~/Library/LaunchAgents/com.sts2.autotest.runner-probe.plist`，
+`StartInterval=600`，`ProgramArguments` 指向 `~/.sts2-runner-probe/runner-probe.sh`。
+改完 plist 后重载并验证（跑完立刻出第一行 JSON，不必等 10 分钟）：
+
+```bash
+launchctl bootout gui/$(id -u)/com.sts2.autotest.runner-probe 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sts2.autotest.runner-probe.plist
+tail -1 ~/.sts2-runner-probe/probe-$(date +%Y%m%d).jsonl   # 应为 JSON，不是 bash 报错
+```
+
+> 历史中断：2026-09-06 起采集断过——工作区从 `~/STS2-WORKSPACE` 迁到
+> `/Volumes/4mac/STS2-WORKSPACE` 后先报 `No such file or directory`，把 plist 路径
+> 改对之后又因上述卷授权报 `Operation not permitted`，一直到本次修复。issue-24 T3
+> 要求的"连续 ≥7 天"要从修复日重新起算，9-06 之后的数据不可用。
 
 采集满 7 天后的归因规则：
 
