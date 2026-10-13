@@ -127,18 +127,18 @@ class SteamController:
             self._assign_to_job(pid)
             logger.info("Game is already running (PID %s) — reusing existing session", pid)
             return pid
-        # 与 GameLifecycleManager 一致：macOS 直接打开游戏包并注入调试 API
-        # 环境。open steam://run 经已在运行的 Steam 客户端转发，env 无法
-        # 到达游戏进程，硬重启后会静默丢失调试控制台（2026-07-24 暴露）。
         launch_env = dict(os.environ)
         launch_env.setdefault("STS2_API_PORT", "8080")
         launch_env.setdefault("STS2_ENABLE_DEBUG_ACTIONS", "1")
         if _IS_MACOS:
-            bundle = self._find_game_bundle()
-            if bundle is not None:
-                subprocess.Popen(["open", str(bundle)], env=launch_env)
-            else:
-                subprocess.Popen(["open", f"steam://run/{self.app_id}"], env=launch_env)
+            # 必须由 Steam 亲自拉起。直开 .app 时游戏不经 Steam 启动，若此刻 Steam
+            # 客户端已在运行，其 Steamworks 握手会以 k_ESteamAPIInitResult_NoSteamClient
+            # （"Cannot create IPC pipe to Steam client process"）失败并弹窗退出
+            # （2026-10-13 夜间/PR CI 连续复现）。与 core/lifecycle.py 保持一致。
+            subprocess.Popen(
+                ["open", "-b", "com.valvesoftware.steam", f"steam://run/{self.app_id}"],
+                env=launch_env,
+            )
         else:
             subprocess.Popen([self.steam_exe, "-applaunch", self.app_id], env=launch_env)
         # Wait for game process to appear.
