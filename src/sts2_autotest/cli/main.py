@@ -350,6 +350,7 @@ def _run_orchestrator_with_adapter(
     try:
         summary = loop.run_until_complete(orch.run_all(case_ids))
         if summary.session_id == "failed-start":
+            # 兜底值表示启动前检查未通过但没有可细分的原因；仍属环境阻塞。
             reason = orch.start_failure_reason or "SESSION_START_PRECHECK_FAILED"
             if run_id:
                 raise SessionStartBlocked(reason)
