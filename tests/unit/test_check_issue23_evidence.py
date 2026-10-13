@@ -40,10 +40,12 @@ DEFAULT_RUN_JSON = json.dumps(
 DEFAULT_PR_JSON = json.dumps(
     {
         "head": {"sha": "3a732858af66051db3962a76be4ad7379f1f2c76"},
+        "title": "包含中文的 PR 标题",
         # 台账被绕过 PR #31 的 merge 事实（台账核验会回读比对）
         "merge_commit_sha": "750ba9768159c3e310bf906abf84a1207f292cbe",
         "merged_at": "2026-08-14T05:50:11Z",
-    }
+    },
+    ensure_ascii=False,
 )
 DEFAULT_CHECKS_JSON = json.dumps(
     {
@@ -238,6 +240,19 @@ def test_evidence_gate_accepts_consistent_state(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "全部通过" in proc.stdout
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_accepts_non_ascii_pr_payload(tmp_path: Path) -> None:
+    """Windows 默认编码不是 UTF-8 时，中文 PR 正文不得使 head SHA 解析为空。"""
+    assert "中文" in DEFAULT_PR_JSON
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    proc = _run_script(env)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "check-runs" not in proc.stdout + proc.stderr
 
 
 @pytest.mark.skipif(

@@ -74,14 +74,14 @@ def test_main_passes_config_and_separate_bins(monkeypatch, tmp_path) -> None:
 
     assert rc == 0
     # 基线用 baseline venv 的 mypy + 同一 policy 配置；当前用 current venv 的 mypy
-    assert commands[0][0] == "/venv-baseline/bin/mypy"
+    assert commands[0][0] == str(Path("/venv-baseline/bin/mypy").resolve())
     assert commands[0][1:3] == ["--config-file", str(config_file)]
-    assert commands[1][0] == "/venv-current/bin/mypy"
+    assert commands[1][0] == str(Path("/venv-current/bin/mypy").resolve())
     assert commands[1][1:3] == ["--config-file", str(config_file)]
 
 
 def test_resolve_tool_bin_prefers_explicit() -> None:
-    assert check_mypy_baseline._resolve_tool_bin("/explicit/mypy", "mypy") == "/explicit/mypy"
+    assert check_mypy_baseline._resolve_tool_bin("/explicit/mypy", "mypy") == str(Path("/explicit/mypy").resolve())
 
 
 def _run_main_with_findings(

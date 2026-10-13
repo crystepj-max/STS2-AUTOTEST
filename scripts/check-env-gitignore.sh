@@ -25,6 +25,11 @@ FAILED=0
 # 正常结束 → 返回命令退出码。超时/执行错误与「预期失败结果」必须区分——
 # 只有命令明确返回预期的「未命中/未跟踪」状态码才算 PASS。
 GATE_CMD_TIMEOUT="${CHECK_ENV_GITIGNORE_CMD_TIMEOUT:-10}"
+# 测试注入的 shell 垫片显式由 bash 执行，避免 Windows 无扩展名脚本无法直接启动。
+GATE_GIT=(git)
+if [[ -n "${CHECK_ENV_GITIGNORE_GIT:-}" ]]; then
+    GATE_GIT=(bash "$CHECK_ENV_GITIGNORE_GIT")
+fi
 
 # run_timeout 使用的 Python 解释器：优先项目 venv（psutil 依赖的安装位置），
 # Windows venv（.venv/Scripts/python.exe）与 Unix venv（.venv/bin/python3）均识别；
@@ -164,7 +169,7 @@ while IFS= read -r -d '' gi; do
     if [[ -n "$r" ]]; then
         neg_rules="${neg_rules}${gi}: $(echo "$r" | tr '\n' ' ')"
     fi
-done < <(run_timeout git ls-files -z | grep -z '\.gitignore$' || true)
+done < <(run_timeout "${GATE_GIT[@]}" ls-files -z | grep -z '\.gitignore$' || true)
 if [[ -n "$neg_rules" ]]; then
     echo "FAIL: 存在放行 .env 的否定规则（只允许 !.env.example）：$neg_rules"
     FAILED=1
@@ -196,14 +201,14 @@ while IFS= read -r -d '' gi2; do
                 probe_path="${gi_dir}/${pdir}/${cand}"
             fi
             probe_path="${probe_path#./}"
-            run_timeout git check-ignore -q "$probe_path"
+            run_timeout "${GATE_GIT[@]}" check-ignore -q "$probe_path"
             if [[ $? -ne 0 ]]; then
                 neg_violations="${neg_violations}${gi2}: ${pat}（探针 ${probe_path} 未被忽略） "
                 break
             fi
         done
     done < <(grep -E '^!' "$REPO_ROOT/$gi2" || true)
-done < <(run_timeout git ls-files -z | grep -z '\.gitignore$' || true)
+done < <(run_timeout "${GATE_GIT[@]}" ls-files -z | grep -z '\.gitignore$' || true)
 if [[ -n "$neg_violations" ]]; then
     echo "FAIL: 否定规则会放行 .env（探针未忽略）：$neg_violations"
     FAILED=1
@@ -213,7 +218,7 @@ fi
 #     git status 中，即使文件尚未提交）；-z NUL 分隔解析（空格路径不拆、不引号化）。
 #     注意：bash 命令替换会吞掉 NUL 字节，必须直接管道给 python 解析；
 #     git 退出码经 PIPESTATUS 捕获（失败不得被 || true 掩盖）
-untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
+untracked_env="$(run_timeout "${GATE_GIT[@]}" status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
 import sys
 out = []
 for entry in sys.stdin.buffer.read().split(b"\0"):
@@ -235,7 +240,7 @@ fi
 
 # 1. .env 必须被忽略（git check-ignore 退出码：0=命中忽略，1=未命中；
 #    其他非零码=仓库损坏/I/O 等执行错误，一律判失败，只有 1 才是「未忽略」）
-run_timeout git check-ignore -q .env
+run_timeout "${GATE_GIT[@]}" check-ignore -q .env
 rc=$?
 if [[ $rc -eq 0 ]]; then
     echo "PASS: .env 已被 git 忽略"
@@ -252,7 +257,7 @@ fi
 
 # 2. .env 不得被跟踪（git ls-files --error-unmatch 退出码：0=已跟踪，1=未跟踪；
 #    128 等=仓库损坏/I/O 执行错误，不得视为「未跟踪」）
-run_timeout git ls-files --error-unmatch .env >/dev/null 2>&1
+run_timeout "${GATE_GIT[@]}" ls-files --error-unmatch .env >/dev/null 2>&1
 rc=$?
 if [[ $rc -eq 0 ]]; then
     echo "FAIL: .env 已被 git 跟踪，必须 git rm --cached .env"
@@ -269,7 +274,7 @@ fi
 
 # 3. 已跟踪的环境文件只允许 .env.example（先单独取列表，超时/执行错误直接判失败，
 #    不让 grep/管道掩盖 git 的错误）
-ls_output="$(run_timeout git ls-files)"
+ls_output="$(run_timeout "${GATE_GIT[@]}" ls-files)"
 ls_rc=$?
 if [[ $ls_rc -eq 142 ]]; then
     echo "FAIL: 无法读取 git 跟踪文件列表（git 超时，已终止）"

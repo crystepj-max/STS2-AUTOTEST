@@ -39,7 +39,7 @@ def test_run_ruff_uses_explicit_bin(monkeypatch) -> None:
 
 
 def test_resolve_tool_bin_prefers_explicit() -> None:
-    assert check_ruff_baseline._resolve_tool_bin("/explicit/ruff", "ruff") == "/explicit/ruff"
+    assert check_ruff_baseline._resolve_tool_bin("/explicit/ruff", "ruff") == str(Path("/explicit/ruff").resolve())
 
 
 def test_resolve_tool_bin_falls_back_to_python_dir(monkeypatch, tmp_path) -> None:
@@ -110,8 +110,8 @@ def test_main_passes_separate_bins_to_baseline_and_current(monkeypatch, tmp_path
 
     assert rc == 0
     # 基线用 baseline venv 的 ruff，当前用 current venv 的 ruff
-    assert commands[0][0] == "/venv-baseline/bin/ruff"
-    assert commands[1][0] == "/venv-current/bin/ruff"
+    assert commands[0][0] == str(Path("/venv-baseline/bin/ruff").resolve())
+    assert commands[1][0] == str(Path("/venv-current/bin/ruff").resolve())
 
 
 def _finding(filename: str, code: str, message: str, row: int = 1) -> dict:

@@ -53,7 +53,7 @@ cd "$REPO_ROOT"
 # 超时 → 终止整棵进程树（AGENTS.md 防僵尸/防遗留）并返回 142（128+SIGTERM 惯例）；
 # 正常结束 → 返回命令退出码。
 run_timeout() {
-    "$GATE_PYTHON" - "$CMD_TIMEOUT" "$@" <<'PY'
+    "$GATE_PYTHON" -X utf8 - "$CMD_TIMEOUT" "$@" <<'PY'
 import os, signal
 
 try:
@@ -165,7 +165,7 @@ PY
 # 输出必须剥 CR：Windows 上 Python 的文本 stdout 会把 \n 写成 \r\n，带着 CR 与
 # 仓库文本比较会得到「打印完全相同却判不一致」的假失败。
 json_field() {
-    printf '%s' "$1" | "$GATE_PYTHON" -c "import json,sys; d=json.load(sys.stdin); print($2)" | tr -d '\r'
+    printf '%s' "$1" | "$GATE_PYTHON" -X utf8 -c "import json,sys; d=json.load(sys.stdin); print($2)" | tr -d '\r'
 }
 
 # 批量提取：一次解释器进程内按顺序求值多条表达式，各输出一行。
@@ -174,7 +174,7 @@ json_field() {
 json_fields() {
     local payload="$1"
     shift
-    printf '%s' "$payload" | "$GATE_PYTHON" -c '
+    printf '%s' "$payload" | "$GATE_PYTHON" -X utf8 -c '
 import fnmatch, json, sys
 
 d = json.load(sys.stdin)
