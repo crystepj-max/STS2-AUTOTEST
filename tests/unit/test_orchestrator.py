@@ -109,9 +109,14 @@ class TestSessionLifecycle:
     def test_start_session_fails_unhealthy_adapter(
         self, orchestrator: TestOrchestrator, mock_adapter: Any
     ) -> None:
-        mock_adapter.health_check.return_value = HealthStatus(healthy=False)
+        mock_adapter.health_check.return_value = HealthStatus(
+            healthy=False, message="Game not running or mod not loaded"
+        )
         result = _run(orchestrator.start_session())
         assert result is False
+        assert orchestrator.start_failure_reason == (
+            "ADAPTER_HEALTH_CHECK_FAILED: Game not running or mod not loaded"
+        )
 
     def test_start_session_fails_unknown_state(
         self, orchestrator: TestOrchestrator, mock_adapter: Any
@@ -119,6 +124,7 @@ class TestSessionLifecycle:
         mock_adapter.get_state.side_effect = lambda: GameState(screen=GameScreen.UNKNOWN)
         result = _run(orchestrator.start_session())
         assert result is False
+        assert orchestrator.start_failure_reason == "GAME_STATE_UNKNOWN: cannot read game state"
 
     def test_start_session_fails_when_not_actionable(self) -> None:
         mock_adapter = _make_mock_adapter()
