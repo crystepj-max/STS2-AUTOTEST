@@ -126,7 +126,7 @@ autotest report latest
 
 1. 编写 `specs/cases/*.md` 或 `specs/suites/*.md`
 2. 运行 `autotest review`
-3. 查看审查结果与修订建议
+3. 查看审查结果与修订建议：如有 `[SKIPPED] 文件名: 原因`，表示该 Markdown 未被识别、未被审查，也不计入自动验收；即使其他规格通过也不能把这些文件视为已通过。当前仅 `Metadata` 内声明 `level: case` 或 `level: suite` 的文件属于平台可执行规格；人工验收清单属于项目自行管理，不自动改变测试结论。是否纳入平台回录另见 #104。
 4. 运行 `autotest compile`
 5. 运行 `autotest run --all`
 

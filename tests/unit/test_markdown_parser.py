@@ -1,6 +1,8 @@
 """Tests for markdown_parser.py — Markdown → TestSpec/SuiteSpec."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from sts2_autotest.core.markdown_parser import (
@@ -179,3 +181,19 @@ class TestMarkdownParser:
         cases, suites = self.parser.discover_specs(str(root))
         assert len(cases) == 1
         assert len(suites) == 1
+
+
+def test_discover_specs_reports_unparsed_markdown_without_changing_return_shape(tmp_path) -> None:
+    root = tmp_path / "specs"
+    root.mkdir()
+    (root / "TC-OK.md").write_text(SAMPLE_CASE_MD, encoding="utf-8")
+    (root / "CHECKLIST.md").write_text("# 人工验收清单\n\n| 核对项 | 结论 |\n|---|---|\n", encoding="utf-8")
+    (root / "BROKEN.md").write_text("# TC-BROKEN\n\n## Metadata\n- level: unknown\n", encoding="utf-8")
+    skipped: list[tuple[str, str]] = []
+    cases, suites = MarkdownParser().discover_specs(str(root), skipped=skipped)
+    assert len(cases) == 1
+    assert suites == []
+    assert [(Path(path).name, reason) for path, reason in skipped] == [
+        ("BROKEN.md", "Invalid level: 'unknown'. Must be 'case' or 'suite'."),
+        ("CHECKLIST.md", "No level found: no Metadata section"),
+    ]
