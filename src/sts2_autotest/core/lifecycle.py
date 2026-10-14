@@ -11,6 +11,10 @@
 本模块填补该缺口，提供 ``GameLifecycleManager``：
 - 直接 Popen 游戏可执行文件并注入 ``STS2_API_PORT`` / ``STS2_ENABLE_DEBUG_ACTIONS`` /
   ``STS2_GAME_DIR``，使 8080 API 与调试动作随进程起来；
+- macOS 例外：``open`` 经 Launch Services 启动 .app 时不传递环境变量，而直开 bundle
+  在 Steam 客户端已运行时会撞上 ``k_ESteamAPIInitResult_NoSteamClient``（"Cannot
+  create IPC pipe"）弹窗退出。因此 macOS 一律经 ``steam://run`` 由 Steam 拉起，
+  调试开关改由游戏侧配置承担（详见 ``docs/agent-adapter-guide.md``）。
 - ``wait_for_api`` / ``is_api_up`` 轮询直到游戏可被控制；
 - ``relaunch_run`` 触发崩溃并拉起一个全新对局；
 - 纯函数检测器 ``is_phantom_combat`` / ``travel_hang_expired`` 让驱动判定
@@ -40,6 +44,9 @@ from sts2_autotest.common.logging import get_logger
 
 # 就绪探测瞬态抖动重试间隔（秒）。测试可 monkeypatch 为 0 以保持快速。
 _PROBE_RETRY_GAP_SECONDS = 2.0
+
+# macOS ``open`` 只是把请求转交 Launch Services，正常远小于此值（秒）。
+_OPEN_COMMAND_TIMEOUT_SECONDS = 15.0
 
 logger = get_logger("core.lifecycle")
 
@@ -258,45 +265,72 @@ class GameLifecycleManager:
             pass
         return None
 
-    def _launch_via_open(self) -> int:
-        """Launch the game as a macOS GUI app via ``open``.
+    def _macos_launch_commands(self) -> list[list[str]]:
+        """macOS 启动命令候选，按优先级排列。
 
-        Unlike ``Popen`` of the inner binary, this starts the game the same way
-        a normal user/sandbox launch does — with a stable control API. The debug
-        API env (``STS2_API_PORT`` / ``STS2_ENABLE_DEBUG_ACTIONS`` /
-        ``STS2_GAME_DIR``) is passed explicitly so the relaunched instance keeps
-        the 8080 debug actions working. The process is owned by ``launchd``, not
-        this Python process, so no child handle is tracked.
+        首选让 Steam 亲自拉起游戏。直接 ``open <bundle>`` 时游戏不经 Steam 启动，
+        若此刻 Steam 客户端已经在运行，游戏的 Steamworks 握手会以
+        ``k_ESteamAPIInitResult_NoSteamClient``（"Cannot create IPC pipe to Steam
+        client process"）失败并弹窗退出；由 Steam 启动则握手必然成立。直开 bundle
+        只保留为 Steam 侧命令全部失败时的兜底——那种情况下通常 Steam 根本没在运行，
+        游戏会自己把它带起来，反而能握手成功。
         """
-        env = dict(os.environ)
-        env.update(self.game_env)
-        self._close_game_log()
+        url = f"steam://run/{self.app_id}"
+        cmds: list[list[str]] = [
+            ["open", "-b", "com.valvesoftware.steam", url],
+            ["open", url],
+        ]
         bundle = self._app_bundle_path()
         if bundle and os.path.exists(bundle):
-            cmd: list[str] = ["open", bundle]
+            cmds.append(["open", bundle])
         else:
-            # Last-resort: open by application name.
-            cmd = ["open", "-a", "Slay the Spire 2"]
-        logger.info("launch game via open: %s", " ".join(cmd))
-        subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+            cmds.append(["open", "-a", "Slay the Spire 2"])
+        return cmds
+
+    def _launch_via_open(self) -> int:
+        """Launch the game on macOS through Steam (see ``_macos_launch_commands``).
+
+        进程由 Steam/launchd 持有，本模块不跟踪子进程句柄。注意 ``open`` 经 Launch
+        Services 启动应用时**不传递环境变量**，因此这里不再假装注入 ``game_env``：
+        macOS 上要启用游戏侧调试开关必须直接 exec 内层二进制（见
+        ``docs/agent-adapter-guide.md``），与"稳定的控制接口"不可兼得。
+        """
+        self._close_game_log()
         self._proc = None
         self._pid = None
-        # Best-effort: return the launched game pid for logging/diagnostics.
-        return self._discover_game_pid() or 0
+        for cmd in self._macos_launch_commands():
+            logger.info("launch game via open: %s", " ".join(cmd))
+            try:
+                done = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=_OPEN_COMMAND_TIMEOUT_SECONDS,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                logger.warning("open 启动命令异常，尝试下一种启动方式: %s", exc)
+                continue
+            if done.returncode != 0:
+                logger.warning(
+                    "open 返回 %s，尝试下一种启动方式: %s",
+                    done.returncode,
+                    " ".join(cmd),
+                )
+                continue
+            # Steam 需要一点时间才把游戏带起来，此处探测不到也无妨：
+            # 调用方随后用 wait_for_api / wait_for_controllable 判定就绪。
+            return self._discover_game_pid() or 0
+        return 0
 
     def launch(self) -> int:
-        """Launch the game with debug-API env. Returns the game PID (best-effort).
+        """Launch the game. Returns the game PID (best-effort, 0 when unknown).
 
-        On macOS the game is launched via ``open <bundle>`` (stable control API);
-        on other platforms the inner binary is Popen'd directly. A double-launch
-        guard prevents spawning a second instance (which would trigger Steam's
-        "already running" error).
+        On macOS the game is launched **through Steam** (``steam://run``) so the
+        Steamworks IPC handshake holds; on other platforms the inner binary is
+        Popen'd directly with the debug-API env. A double-launch guard prevents
+        spawning a second instance (which would trigger Steam's "already running"
+        error).
         """
         # Guard: never launch a second instance.
         if self._game_process_present():
