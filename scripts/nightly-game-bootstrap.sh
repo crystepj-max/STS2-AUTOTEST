@@ -8,13 +8,16 @@
 #
 # 就绪契约（对齐 sts2-start-game 技能）：/health、/state、/actions/available
 # 三个 GET 端点全部成功才算就绪；sts2 ping 仅诊断，不作成功依据。
-# 启动方式（对齐 core/lifecycle.py）：macOS 用 `open <SlayTheSpire2.app>` 并注入
-# STS2_API_PORT / STS2_ENABLE_DEBUG_ACTIONS；绝不 Popen 内层二进制。
+# 启动方式（对齐 core/lifecycle.py）：macOS 经 `steam://run/<APP_ID>` 由 Steam 亲自
+# 拉起；绝不 Popen 内层二进制，也不直开 .app —— `open` 不向应用传递环境变量（注入
+# STS2_API_PORT 之类的写法是静默失效的），且 Steam 客户端已在运行时直开 .app 会撞上
+# "Cannot create IPC pipe to Steam client process" 弹窗退出。
 #
 # 用法：scripts/nightly-game-bootstrap.sh
 #
 # 环境变量：
 #   STS2_GAME_DIR            游戏安装目录（默认 Steam macOS 常见路径）
+#   STS2_STEAM_APP_ID        Steam 应用 ID（默认 2868840，用于 steam://run）
 #   STS2_AGENT_BASE_URL      Agent 基地址（默认 http://127.0.0.1:8080）
 #   BOOTSTRAP_TIMEOUT        启动后等待三端点就绪的总预算秒数（默认 180）
 #   BOOTSTRAP_READY_GRACE    进程已存在但未就绪时的宽限等待秒数（默认 30）
@@ -34,6 +37,7 @@ set -uo pipefail
 
 GAME_DIR="${STS2_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2}"
 BUNDLE="$GAME_DIR/SlayTheSpire2.app"
+APP_ID="${STS2_STEAM_APP_ID:-2868840}"
 GAME_LOGS_DIR="${STS2_GAME_LOGS_DIR:-$HOME/Library/Application Support/SlayTheSpire2/logs}"
 BASE_URL="${STS2_AGENT_BASE_URL:-http://127.0.0.1:8080}"
 TOTAL_TIMEOUT="${BOOTSTRAP_TIMEOUT:-180}"
@@ -86,17 +90,34 @@ stop_game() {
 }
 
 launch_game() {
+    # 每次尝试都记录 open 退出码：#99 的「进程从未出现」归因依赖这一行。
+    local open_rc=0
+    # 首选让 Steam 亲自拉起：此时游戏的 Steamworks 握手必然成立。
+    open -b com.valvesoftware.steam "steam://run/${APP_ID}" 2>/dev/null || open_rc=$?
+    log "open 退出码: $open_rc (steam://run via com.valvesoftware.steam)"
+    if [[ "$open_rc" == "0" ]]; then
+        log "🚀 经 Steam 启动游戏: steam://run/${APP_ID}"
+        return 0
+    fi
+    log "⚠️ Steam bundle URL 启动失败，改用通用 steam:// URL"
+    open_rc=0
+    open "steam://run/${APP_ID}" 2>/dev/null || open_rc=$?
+    log "open 退出码: $open_rc (steam://run via URL handler)"
+    if [[ "$open_rc" == "0" ]]; then
+        log "🚀 经 Steam 启动游戏（URL 处理器）: steam://run/${APP_ID}"
+        return 0
+    fi
     if [[ ! -d "$BUNDLE" ]]; then
         log "❌ 未找到游戏 bundle: ${BUNDLE}（可用 STS2_GAME_DIR 覆盖）"
         return 1
     fi
-    local port="${BASE_URL##*:}"
-    port="${port%%/*}"
-    log "🚀 open 启动游戏: $BUNDLE (STS2_API_PORT=$port STS2_ENABLE_DEBUG_ACTIONS=1)"
-    local open_rc=0
-    env STS2_API_PORT="$port" STS2_ENABLE_DEBUG_ACTIONS=1 STS2_GAME_DIR="$GAME_DIR" \
-        open "$BUNDLE" || open_rc=$?
-    log "open 退出码: $open_rc"
+    # 兜底：只有 Steam 压根没起来时才可能握手成功（游戏会自行带起 Steam）。
+    # 不在此注入 STS2_API_PORT 等变量：`open` 经 Launch Services 启动应用时不传递
+    # 环境变量，写了也是静默失效。
+    log "⚠️ Steam URL 全部失败，兜底直开 bundle（Steam 未运行时才可用）: $BUNDLE"
+    open_rc=0
+    open "$BUNDLE" || open_rc=$?
+    log "open 退出码: $open_rc (bundle fallback)"
     return "$open_rc"
 }
 

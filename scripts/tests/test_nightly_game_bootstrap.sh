@@ -60,6 +60,7 @@ FAKE_PGREP
     env | grep '^STS2_' | sort
 } >> "$dir/state/opened.txt"
 touch "$dir/state/PGREP_EMPTY"
+[[ -f "$dir/state/OPEN_FAIL" ]] && exit 1
 exit 0
 FAKE_OPEN
     printf '#!/bin/sh\nexit 0\n' > "$dir/bin/sleep"
@@ -80,16 +81,17 @@ assert_contains "$RUN_OUT" "复用" "应报告复用既有会话"
 [[ -f "$FAKE/state/opened.txt" ]] && fail "复用路径不应调用 open" || pass "复用路径未调用 open"
 rm -rf "$FAKE"
 
-test_begin "无进程且无 bundle → 失败退出 1"
+test_begin "无进程且无 bundle → 仍经 steam://run 拉起（bundle 不是前置条件）"
 FAKE="$(new_fake_env)"
-touch "$FAKE/state/PGREP_EMPTY" "$FAKE/state/NEVER_READY"
+touch "$FAKE/state/PGREP_EMPTY"
+printf '9' > "$FAKE/state/FAIL_N"
 run_bootstrap "$FAKE"
-assert_eq "$RUN_RC" "1" "bundle 缺失应退出 1"
-assert_contains "$RUN_OUT" "未找到游戏 bundle" "应报告 bundle 缺失"
-[[ -f "$FAKE/state/opened.txt" ]] && fail "bundle 缺失不应调用 open" || pass "bundle 缺失未调用 open"
+assert_eq "$RUN_RC" "0" "steam://run 成功即应退出 0"
+assert_contains "$(cat "$FAKE/state/opened.txt")" "steam://run/2868840" "应经 Steam URL 拉起"
+assert_contains "$RUN_OUT" "bootstrap 完成" "应报告 bootstrap 完成"
 rm -rf "$FAKE"
 
-test_begin "无进程且有 bundle → open 拉起并注入调试 API env"
+test_begin "无进程且有 bundle → 经 steam://run 拉起，不直开 .app 也不假装注入 env"
 FAKE="$(new_fake_env)"
 mkdir -p "$FAKE/game/SlayTheSpire2.app"
 touch "$FAKE/state/PGREP_EMPTY"
@@ -97,9 +99,24 @@ printf '9' > "$FAKE/state/FAIL_N"
 run_bootstrap "$FAKE"
 assert_eq "$RUN_RC" "0" "拉起后就绪应退出 0"
 assert_contains "$RUN_OUT" "bootstrap 完成" "应报告 bootstrap 完成"
-assert_contains "$(cat "$FAKE/state/opened.txt")" "SlayTheSpire2.app" "应以 bundle 方式 open"
-assert_contains "$(cat "$FAKE/state/opened.txt")" "STS2_API_PORT=8080" "应注入 STS2_API_PORT"
-assert_contains "$(cat "$FAKE/state/opened.txt")" "STS2_ENABLE_DEBUG_ACTIONS=1" "应注入调试 API 开关"
+OPENED="$(cat "$FAKE/state/opened.txt")"
+assert_contains "$OPENED" "steam://run/2868840" "应经 Steam 拉起"
+# 直开 .app 的游戏不经 Steam，Steam 客户端已在跑时握手会失败并弹 IPC 错误框。
+[[ "$OPENED" == *"SlayTheSpire2.app"* ]] && fail "主路径不得直开 .app：$OPENED" \
+    || pass "主路径未直开 .app"
+# `open` 经 Launch Services 启动应用时不传递环境变量，注入声明是静默失效的假动作。
+[[ "$OPENED" == *"STS2_API_PORT"* ]] && fail "不得假装注入 STS2_API_PORT：$OPENED" \
+    || pass "未假装注入 env"
+[[ "$RUN_OUT" == *"STS2_API_PORT="* ]] && fail "日志不得声称已注入 env" \
+    || pass "日志未声称注入 env"
+rm -rf "$FAKE"
+
+test_begin "steam://run 全部失败且无 bundle → 退出 1 并报告 bundle 缺失"
+FAKE="$(new_fake_env)"
+touch "$FAKE/state/PGREP_EMPTY" "$FAKE/state/NEVER_READY" "$FAKE/state/OPEN_FAIL"
+run_bootstrap "$FAKE"
+assert_eq "$RUN_RC" "1" "三级启动全失败应退出 1"
+assert_contains "$RUN_OUT" "未找到游戏 bundle" "应报告 bundle 缺失"
 rm -rf "$FAKE"
 
 test_begin "stale 进程（宽限耗尽）→ 干净重启后再等就绪"
