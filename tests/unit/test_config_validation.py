@@ -15,15 +15,15 @@ class TestConfigValidationError:
 
     def test_error_contains_field_name(self) -> None:
         try:
-            ExecutionConfig(game_timeout=-1)
+            ExecutionConfig(game_startup_timeout=-1)
         except ValidationError as exc:
             err = ConfigValidationError(exc, "test")
             assert len(err.errors) == 1
-            assert "game_timeout" in err.errors[0].field
+            assert "game_startup_timeout" in err.errors[0].field
 
     def test_error_contains_invalid_value(self) -> None:
         try:
-            ExecutionConfig(game_timeout=-5.0)
+            ExecutionConfig(game_startup_timeout=-5.0)
         except ValidationError as exc:
             err = ConfigValidationError(exc, "yaml")
             assert err.errors[0].invalid_value == -5.0
@@ -31,11 +31,11 @@ class TestConfigValidationError:
 
     def test_error_message_is_readable(self) -> None:
         try:
-            ExecutionConfig(game_timeout=-1)
+            ExecutionConfig(game_startup_timeout=-1)
         except ValidationError as exc:
             err = ConfigValidationError(exc, "env")
             msg = str(err)
-            assert "game_timeout" in msg
+            assert "game_startup_timeout" in msg
             assert "env" in msg
 
 
@@ -44,11 +44,11 @@ class TestLoadConfigValidation:
 
     def test_invalid_yaml_value(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "sts2-autotest.yaml"
-        yaml_file.write_text("execution:\n  game_timeout: -10.0\n")
+        yaml_file.write_text("execution:\n  game_startup_timeout: -10.0\n")
         with pytest.raises(ConfigValidationError) as exc_info:
             load_config(project_dir=tmp_path)
         err = exc_info.value
-        assert any("game_timeout" in e.field for e in err.errors)
+        assert any("game_startup_timeout" in e.field for e in err.errors)
 
     def test_mutual_exclusion_via_yaml(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "sts2-autotest.yaml"
@@ -59,8 +59,9 @@ class TestLoadConfigValidation:
             load_config(project_dir=tmp_path)
         assert any("Mutual exclusion" in e.message for e in exc_info.value.errors)
 
-    def test_invalid_log_level_via_yaml(self, tmp_path: Path) -> None:
+    def test_invalid_tool_profile_via_yaml(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "sts2-autotest.yaml"
-        yaml_file.write_text("framework:\n  log_level: VERBOSE\n")
-        with pytest.raises(ConfigValidationError):
+        yaml_file.write_text("adapter:\n  agent:\n    tool_profile: VERBOSE\n")
+        with pytest.raises(ConfigValidationError) as exc_info:
             load_config(project_dir=tmp_path)
+        assert any("tool_profile" in e.field for e in exc_info.value.errors)

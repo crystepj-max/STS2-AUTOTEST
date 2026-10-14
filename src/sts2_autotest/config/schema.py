@@ -33,7 +33,6 @@ class AgentAdapterConfig(BaseModel):
     enabled: bool = False
     transport: Literal["http", "mcp"] = "http"
     endpoint: str = "http://127.0.0.1:8080"
-    mcp_endpoint: str = "http://127.0.0.1:8765/mcp"
     timeout: float = Field(default=30.0, gt=0)
     tool_profile: str = Field(default="guided", pattern=r"^(guided|layered|full)$")
     health_path: str = "health"
@@ -58,7 +57,6 @@ class FrameworkConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    log_level: str = Field(default="INFO", pattern=r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
     screenshot_dir: str = "tests/output/screenshots"
     evidence_dir: str = "tests/output"
     evidence_retention: int = Field(default=20, ge=1)
@@ -77,8 +75,6 @@ class FrameworkConfig(BaseModel):
     log_retention_days: int = Field(default=7, ge=1)
     log_retention_max_bytes: int = Field(default=10 * 1024 * 1024 * 1024, ge=1)
     strict_validation: bool = False
-    progress_dir: str = "tests/output/.progress"
-    progress_filename: str = "session-progress.json"
     artifact_dir: str = "tests/output/artifacts"
     disk_threshold_mb: int = Field(default=100, ge=1)
     lock_file: str = "tests/output/.sts2-autotest.lock"
@@ -117,26 +113,11 @@ class ExecutionConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    game_timeout: float = Field(default=60.0, gt=0)
     game_startup_timeout: float = Field(default=60.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
     max_consecutive_failures: int = Field(default=3, ge=1)
     heartbeat_timeout: float = Field(default=60.0, gt=0)
-    session_queue_timeout: float = Field(default=60.0, gt=0)
-    session_queue_max_depth: int = Field(default=10, ge=1)
     parallel: bool = False
-
-
-class StateMachineConfig(BaseModel):
-    """State machine polling and timeout configuration."""
-
-    model_config = ConfigDict(frozen=True)
-
-    transition_timeout: float = Field(default=10.0, gt=0)
-    # 阶段 A（issue #37）：状态轮询间隔默认 0.5s → 1.0s（降频）。去重为主、
-    # 轮询间隔为次要调参；适配器内部等待的实时节奏由 CliModAdapter(poll_interval=…)
-    # 控制，此处为状态机轮询的全局默认值。
-    poll_interval: float = Field(default=1.0, gt=0)
 
 
 class NotificationsConfig(BaseModel):
@@ -176,7 +157,6 @@ class ProjectConfigModel(BaseModel):
     source_dirs: list[str] = []
     design_docs: list[str] = []
     suite_dirs: list[str] = []
-    agent_context_dir: str = ".sts2/context"
     default_suite: str = ""
     autotest_config: str = ""
 
@@ -228,7 +208,6 @@ class STS2Config(BaseModel):
     framework: FrameworkConfig = FrameworkConfig()
     adapter: AdapterConfig = AdapterConfig()
     execution: ExecutionConfig = ExecutionConfig()
-    state_machine: StateMachineConfig = StateMachineConfig()
     notifications: NotificationsConfig = NotificationsConfig()
     server: ServerConfig = ServerConfig()
     workspace: WorkspaceConfigModel = WorkspaceConfigModel()

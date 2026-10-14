@@ -142,12 +142,12 @@ autotest report latest
 环境变量必须以 `STS2_` 开头，嵌套字段使用双下划线 `__` 分隔。例如：
 
 ```dotenv
-STS2_FRAMEWORK__LOG_LEVEL=DEBUG
+STS2_FRAMEWORK__LOG_LEVELS=ERROR,WARN,WARNING
 STS2_FRAMEWORK__EVIDENCE_DIR=tests/output
 STS2_ADAPTER__CLI__CLI_PATH=sts2
 STS2_ADAPTER__CLI__TIMEOUT=30.0
 STS2_EXECUTION__MAX_RETRIES=3
-STS2_STATE_MACHINE__POLL_INTERVAL=0.5
+STS2_EXECUTION__GAME_STARTUP_TIMEOUT=90.0
 ```
 
 ### 5.1 YAML 配置示例
@@ -156,7 +156,7 @@ STS2_STATE_MACHINE__POLL_INTERVAL=0.5
 
 ```yaml
 framework:
-  log_level: INFO
+  log_levels: ERROR,WARN,WARNING
   screenshot_dir: tests/output/screenshots
   evidence_dir: tests/output
   evidence_retention: 20
@@ -173,33 +173,27 @@ adapter:
     timeout: 30.0
 
 execution:
-  game_timeout: 60.0
   game_startup_timeout: 60.0
   max_retries: 3
   max_consecutive_failures: 3
   heartbeat_timeout: 60.0
   parallel: false
-
-state_machine:
-  transition_timeout: 10.0
-  poll_interval: 1.0
 ```
 
 ### 5.2 常用配置项
 
 | 配置项 | 默认值 | 说明 |
 |---|---:|---|
-| `framework.log_level` | `INFO` | 日志级别，可选 `DEBUG/INFO/WARNING/ERROR/CRITICAL`。 |
+| `framework.log_levels` | `ERROR,WARN,WARNING` | 失败时收集哪些级别的日志（见 §日志）。 |
 | `framework.screenshot_dir` | `tests/output/screenshots` | 截图输出目录。 |
 | `framework.evidence_dir` | `tests/output` | 证据包根目录。 |
 | `framework.evidence_retention` | `20` | 保留的证据包数量。 |
 | `framework.strict_validation` | `false` | 是否对游戏状态校验失败立即报错。 |
 | `adapter.cli.cli_path` | `sts2` | STS2-Cli-Mod CLI 路径或命令名。 |
 | `adapter.cli.timeout` | `30.0` | 单次 CLI 调用超时时间。 |
-| `execution.game_timeout` | `60.0` | 游戏动作等待超时。 |
+| `execution.game_startup_timeout` | `60.0` | 恢复流程中等待游戏调试 API 就绪的超时（`core/recovery.py:478`/`:504` 用作 `api_timeout`）。 |
 | `execution.max_retries` | `3` | 默认重试次数。 |
 | `execution.max_consecutive_failures` | `3` | 连续相同失败达到阈值后标记为确定性失败。 |
-| `state_machine.poll_interval` | `1.0` | 状态轮询间隔。 |
 
 ## 6. 命令行使用
 

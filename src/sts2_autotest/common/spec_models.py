@@ -80,8 +80,6 @@ class TestSpec:
     givens: list[str] = field(default_factory=list)
     steps: list[str] = field(default_factory=list)
     assertions: list[str] = field(default_factory=list)
-    fallback_policies: list[str] = field(default_factory=list)
-    capability_requirements: list[str] = field(default_factory=list)
     source_path: str = ""
 
 
