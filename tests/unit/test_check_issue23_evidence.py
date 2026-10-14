@@ -895,7 +895,7 @@ def test_gate_detects_force_tracked_env_file(tmp_path: Path) -> None:
 def test_gate_detects_dirty_restoration_snapshot(tmp_path: Path) -> None:
     """已提交快照被未提交地改成「已恢复」形态时对账门禁应失败（工作树修改不算不可变证据）。"""
     snapshot = REPO_ROOT / EVIDENCE_JSON.parent / "t7-ruleset-after.json"
-    original = snapshot.read_text(encoding="utf-8")
+    original = snapshot.read_bytes()
     try:
         snapshot.write_text(
             json.dumps({"bypass_actors": [], "current_user_can_bypass": "never"}),
@@ -906,7 +906,7 @@ def test_gate_detects_dirty_restoration_snapshot(tmp_path: Path) -> None:
         assert proc.returncode != 0
         assert "未提交修改" in proc.stdout + proc.stderr
     finally:
-        snapshot.write_text(original, encoding="utf-8")
+        snapshot.write_bytes(original)
 
 
 @pytest.mark.skipif(
@@ -916,9 +916,9 @@ def test_gate_detects_dirty_restoration_snapshot(tmp_path: Path) -> None:
 def test_gate_detects_gitignore_negation_semantics(tmp_path: Path) -> None:
     """.gitignore 与证据 JSON 协同追加 !.env 时对账门禁应失败（.env 实际未被忽略，声明比较发现不了）。"""
     gitignore = REPO_ROOT / ".gitignore"
-    original = gitignore.read_text(encoding="utf-8")
+    original = gitignore.read_bytes()
     try:
-        gitignore.write_text(original + "\n!.env\n", encoding="utf-8")
+        gitignore.write_bytes(original + b"\n!.env\n")
         # 证据 JSON 同步追加 !.env（两侧协同，声明一致）
         data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
         data["env_guard"]["gitignore"] = [".env", ".env.*", "!.env.example", "!.env"]
@@ -931,7 +931,7 @@ def test_gate_detects_gitignore_negation_semantics(tmp_path: Path) -> None:
         # 否定规则扫描或语义检查任一命中即失败
         assert "否定规则" in proc.stdout + proc.stderr or "未被实际忽略" in proc.stdout + proc.stderr
     finally:
-        gitignore.write_text(original, encoding="utf-8")
+        gitignore.write_bytes(original)
 
 
 @pytest.mark.skipif(
@@ -941,9 +941,9 @@ def test_gate_detects_gitignore_negation_semantics(tmp_path: Path) -> None:
 def test_gate_detects_gitignore_negation_bracket_evasion(tmp_path: Path) -> None:
     """否定规则用括号通配隐藏 .env（!secrets/[.]env）时对账门禁应失败（字面子串会漏过）。"""
     gitignore = REPO_ROOT / ".gitignore"
-    original = gitignore.read_text(encoding="utf-8")
+    original = gitignore.read_bytes()
     try:
-        gitignore.write_text(original + "\n!secrets/[.]env\n", encoding="utf-8")
+        gitignore.write_bytes(original + b"\n!secrets/[.]env\n")
         data = json.loads(EVIDENCE_JSON.read_text(encoding="utf-8"))
         data["env_guard"]["gitignore"] = [".env", ".env.*", "!.env.example", "!secrets/[.]env"]
         broken_json = tmp_path / "t5-bracket.json"
@@ -955,7 +955,7 @@ def test_gate_detects_gitignore_negation_bracket_evasion(tmp_path: Path) -> None
         # 声明不一致或否定规则扫描命中均算失败（核心：!secrets/[.]env 不得放行）
         assert "否定规则" in proc.stdout + proc.stderr or "不一致" in proc.stdout + proc.stderr
     finally:
-        gitignore.write_text(original, encoding="utf-8")
+        gitignore.write_bytes(original)
 
 
 @pytest.mark.skipif(
@@ -966,7 +966,7 @@ def test_gate_detects_subdir_gitignore_negation(tmp_path: Path) -> None:
     """子目录 .gitignore 的否定规则放行 .env 时对账门禁应失败（嵌套凭据重新暴露）。"""
     subdir = REPO_ROOT / "secrets"
     gitignore = REPO_ROOT / ".gitignore"
-    original_gi = gitignore.read_text(encoding="utf-8")
+    original_gi = gitignore.read_bytes()
     try:
         subdir.mkdir(exist_ok=True)
         sub_gi = subdir / ".gitignore"
@@ -982,7 +982,7 @@ def test_gate_detects_subdir_gitignore_negation(tmp_path: Path) -> None:
         nested.unlink(missing_ok=True)
         sub_gi.unlink(missing_ok=True)
         subdir.rmdir()
-        gitignore.write_text(original_gi, encoding="utf-8")
+        gitignore.write_bytes(original_gi)
 
 
 @pytest.mark.skipif(

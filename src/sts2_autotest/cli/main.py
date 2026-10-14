@@ -525,12 +525,12 @@ def _write_review_artifacts(
     root = Path(output_dir)
     revised_dir = root / "revised"
     revised_dir.mkdir(parents=True, exist_ok=True)
-    (root / "review-report.md").write_text(report_markdown + "\n", encoding="utf-8")
+    (root / "review-report.md").write_text(report_markdown + "\n", encoding="utf-8", newline="\n")
 
     source_map: dict[str, dict[str, Any]] = {}
     for draft in drafts:
         draft_path = revised_dir / f"{draft.spec_id}.md"
-        draft_path.write_text(draft.markdown_content, encoding="utf-8")
+        draft_path.write_text(draft.markdown_content, encoding="utf-8", newline="\n")
         source_map[draft.spec_id] = {
             "original_path": draft.original_path,
             "revised_path": str(draft_path),
@@ -539,6 +539,7 @@ def _write_review_artifacts(
     (revised_dir / ".source-map.json").write_text(
         json.dumps(source_map, indent=2, ensure_ascii=False),
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -701,7 +702,7 @@ def compile_cmd(args: Any) -> int:
     for suite in suites:
         suite_code = generator.generate_suite_test(suite, specs_by_id)
         suite_path = os.path.join(output_dir, f"test_{suite.id.lower().replace('-', '_')}.py")
-        with open(suite_path, "w", encoding="utf-8") as f:
+        with open(suite_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(suite_code)
         generated.append(suite_path)
         print(f"  [GENERATED] {suite_path}")
@@ -1543,6 +1544,7 @@ def _report_from_store(evidence_dir: Path, run_id: str, store_run: Path) -> int:
         (out_dir / RUN_RESULT_FILENAME).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
+            newline="\n",
         )
     except OSError as exc:
         print(f"[autotest] Failed to persist synthesized run-result.json: {exc}")
@@ -1684,6 +1686,7 @@ def _write_json_output(path: Path, payload: dict[str, Any]) -> None:
     tmp_file.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
+        newline="\n",
     )
     os.replace(str(tmp_file), str(path))
 
