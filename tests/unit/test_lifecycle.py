@@ -10,6 +10,7 @@ Async methods are driven via asyncio.run (no pytest-asyncio dependency).
 """
 
 import asyncio
+import subprocess
 from unittest.mock import MagicMock
 
 import pytest
@@ -87,7 +88,14 @@ def fake_popen(monkeypatch):
         procs.append(p)
         return p
 
+    def _run(args, **kw):
+        # macOS 经 `open` 启动走 subprocess.run：同样计一次"启动发生"，
+        # 使 len(fake_popen) 的断言在两个平台上语义一致（一次启动 = 一条记录）。
+        procs.append(_make_proc(pid=2000 + len(procs)))
+        return subprocess.CompletedProcess(list(args), 0)
+
     monkeypatch.setattr("sts2_autotest.core.lifecycle.subprocess.Popen", _popen)
+    monkeypatch.setattr("sts2_autotest.core.lifecycle.subprocess.run", _run)
     monkeypatch.setattr(
         "sts2_autotest.core.lifecycle.psutil.Process",
         MagicMock(return_value=MagicMock(is_running=lambda: False)),
@@ -490,3 +498,76 @@ class TestMaxRelaunches:
         assert mgr.relaunch_count == 1
         assert ok2 is False
         assert mgr.relaunch_count == 1  # 已达上限，不再递增
+
+
+# ── macOS 启动方式：必须经 Steam 拉起，不直开 .app ──────────────
+
+
+def _capture_open(monkeypatch, returncodes):
+    """拦截 macOS 启动用的 ``open`` 命令，按顺序返回给定退出码。"""
+    calls: list[list[str]] = []
+
+    def _run(args, **kw):
+        calls.append(list(args))
+        idx = min(len(calls) - 1, len(returncodes) - 1)
+        return subprocess.CompletedProcess(list(args), returncodes[idx])
+
+    monkeypatch.setattr("sts2_autotest.core.lifecycle.subprocess.run", _run)
+    monkeypatch.setattr("sts2_autotest.core.lifecycle._IS_MACOS", True)
+    return calls
+
+
+def test_macos_launch_goes_through_steam(monkeypatch) -> None:
+    """Steam 命令成功即止：不得再直开 .app —— 那会在 Steam 已运行时弹 IPC 错误。"""
+    calls = _capture_open(monkeypatch, [0])
+    mgr = _mgr(FakeAdapter([]))
+    monkeypatch.setattr(mgr, "_game_process_present", lambda: False)
+    monkeypatch.setattr(mgr, "_discover_game_pid", lambda: 4242)
+    assert mgr.launch() == 4242
+    assert calls == [["open", "-b", "com.valvesoftware.steam", "steam://run/2868840"]]
+
+
+def test_macos_launch_falls_back_to_url_handler(monkeypatch) -> None:
+    """首选失败后退到通用 steam:// URL，仍然不落到直开 bundle。"""
+    calls = _capture_open(monkeypatch, [1, 0])
+    mgr = _mgr(FakeAdapter([]))
+    monkeypatch.setattr(mgr, "_game_process_present", lambda: False)
+    monkeypatch.setattr(mgr, "_discover_game_pid", lambda: 0)
+    assert mgr.launch() == 0
+    assert calls == [
+        ["open", "-b", "com.valvesoftware.steam", "steam://run/2868840"],
+        ["open", "steam://run/2868840"],
+    ]
+
+
+def test_macos_launch_uses_app_id_from_manager(monkeypatch) -> None:
+    """app_id 可覆盖，启动 URL 必须跟着变（换游戏/换库时不能写死）。"""
+    calls = _capture_open(monkeypatch, [0])
+    mgr = GameLifecycleManager(
+        FakeAdapter([]), game_exe="/tmp/fake_game",
+        game_dir="/tmp/fake_dir", app_id="9999999",
+    )
+    monkeypatch.setattr(mgr, "_game_process_present", lambda: False)
+    monkeypatch.setattr(mgr, "_discover_game_pid", lambda: 0)
+    mgr.launch()
+    assert calls[0][-1] == "steam://run/9999999"
+
+
+def test_macos_launch_skips_when_game_present(monkeypatch) -> None:
+    """已有游戏进程时一条启动命令都不发：第二个实例抢不到 Steam IPC。"""
+    calls = _capture_open(monkeypatch, [0])
+    mgr = _mgr(FakeAdapter([]))
+    monkeypatch.setattr(mgr, "_game_process_present", lambda: True)
+    monkeypatch.setattr(mgr, "_discover_game_pid", lambda: 777)
+    assert mgr.launch() == 777
+    assert calls == []
+
+
+def test_macos_launch_exhausted_returns_zero(monkeypatch) -> None:
+    """所有启动命令都失败时返回 0 而不是抛错，由就绪探测给出 BLOCKED 原因。"""
+    calls = _capture_open(monkeypatch, [1])
+    mgr = _mgr(FakeAdapter([]))
+    monkeypatch.setattr(mgr, "_game_process_present", lambda: False)
+    monkeypatch.setattr(mgr, "_discover_game_pid", lambda: 0)
+    assert mgr.launch() == 0
+    assert len(calls) == 3  # -b steam / steam:// URL / 直开应用名 三级兜底都试完

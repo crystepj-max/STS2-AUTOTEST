@@ -89,7 +89,11 @@ class TestStartGame:
             assert pid == 54321
             args, kwargs = mock_popen.call_args
             assert args[0][0] == "open"
-            assert args[0][1].endswith("SlayTheSpire2.app") or args[0][1].startswith("steam://run/")
+            assert args[0][1:] == [
+                "-b",
+                "com.valvesoftware.steam",
+                "steam://run/2868840",
+            ]
             assert kwargs["env"]["STS2_ENABLE_DEBUG_ACTIONS"] == "1"
             assert kwargs["env"]["STS2_API_PORT"] == "8080"
         else:
@@ -120,6 +124,28 @@ class TestStartGame:
                     sc.start_game()
         _, kwargs = mock_popen.call_args
         assert kwargs["env"]["STS2_ENABLE_DEBUG_ACTIONS"] == "1"
+
+    def test_start_game_on_macos_never_opens_bundle_directly(self) -> None:
+        """macOS 主路径不得直开 .app：Steam 客户端已在运行时会 IPC 握手失败弹窗退出。
+
+        直开 .app 的游戏不经 Steam 启动，Steamworks 以
+        k_ESteamAPIInitResult_NoSteamClient 失败并弹 "Cannot create IPC pipe"，
+        上层判未就绪后杀掉重拉，形成循环（2026-10-13 复现）。
+        """
+        if not _IS_MACOS:
+            return
+        sc = SteamController()
+        sc.startup_timeout = 1.0
+        with patch("subprocess.Popen") as mock_popen:
+            with patch.object(sc, "_find_game_pids", return_value=set()):
+                with patch.object(sc, "_find_game_pid", return_value=54321):
+                    sc.start_game()
+        cmds = [list(call.args[0]) for call in mock_popen.call_args_list]
+        assert cmds, "start_game 应发出一次启动命令"
+        assert not any(
+            str(arg).endswith("SlayTheSpire2.app") for cmd in cmds for arg in cmd
+        ), f"不得直开 .app：{cmds}"
+        assert any("steam://run/2868840" in cmd for cmd in cmds), f"应经 Steam 拉起：{cmds}"
 
     def test_find_game_bundle_prefers_constructor_game_dir(self, tmp_path, monkeypatch) -> None:
         """构造时传入的安装目录优先于环境变量与默认路径（自定义 Steam 库）。"""
