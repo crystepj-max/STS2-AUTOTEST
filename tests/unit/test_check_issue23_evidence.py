@@ -171,8 +171,22 @@ def _fake_gh(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _run_script(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
-    """运行对账脚本（60s 超时，超时后终止整棵进程树，与门禁测试清理模式一致）。"""
+def _is_utf8(line: bytes) -> bool:
+    try:
+        line.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def _run_script(
+    env: dict[str, str], *, strict_output: bool = False
+) -> subprocess.CompletedProcess[str]:
+    """运行对账脚本（60s 超时，超时后终止整棵进程树，与门禁测试清理模式一致）。
+
+    strict_output=True 时要求输出整体是 UTF-8：门禁自身的中文行若以 GBK 落盘，
+    日志里的 FAIL 行就读不出来了，而 replace 兜底会把这个问题吞掉。
+    """
     proc = psutil.Popen(
         ["bash", SCRIPT],
         cwd=REPO_ROOT,
@@ -203,6 +217,21 @@ def _run_script(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
         pytest.fail("对账脚本超过 60s 未结束（可能外部调用阻塞）")
 
     # 脚本输出为 UTF-8 中文字节，显式按 UTF-8 解码（errors=replace 兜底非 UTF-8 字节）
+    if strict_output:
+        # 断言消息用 ASCII：Windows 下 pytest capture 走 cp936，中文消息自己会乱码
+        for label, raw in (("stdout", stdout_bytes), ("stderr", stderr_bytes)):
+            bad = [i for i, ln in enumerate(raw.split(b"\n"), 1) if not _is_utf8(ln)]
+            if bad:
+                pytest.fail(
+                    f"gate {label} has non-UTF-8 bytes at lines {bad[:8]} "
+                    "(GBK codepage output; add -X utf8 to the embedded python call)"
+                )
+        return subprocess.CompletedProcess(
+            args=["bash", SCRIPT],
+            returncode=proc.returncode,
+            stdout=stdout_bytes.decode("utf-8"),
+            stderr=stderr_bytes.decode("utf-8"),
+        )
     return subprocess.CompletedProcess(
         args=["bash", SCRIPT],
         returncode=proc.returncode,
@@ -253,6 +282,23 @@ def test_gate_accepts_non_ascii_pr_payload(tmp_path: Path) -> None:
     proc = _run_script(env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "check-runs" not in proc.stdout + proc.stderr
+
+
+@pytest.mark.skipif(
+    shutil.which("bash") is None,
+    reason="对账脚本依赖 bash，当前环境无 bash，跳过",
+)
+def test_gate_writes_its_own_output_as_utf8(tmp_path: Path) -> None:
+    """门禁自身的中文输出行必须是 UTF-8 字节。
+
+    内嵌 python 漏掉 -X utf8 时，Windows 默认代码页（cp936）会把该行写成 GBK 字节，
+    台账核验的 30+ 行 PASS/FAIL 在读日志时不可辨——失败项混在乱码里等于没有失败项。
+    断言里有「绕过台账核验」一项，保证被检查的字节确实来自内嵌 python 而非 bash echo。
+    """
+    env = _base_env(_fake_gh(tmp_path), tmp_path)
+    proc = _run_script(env, strict_output=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "绕过台账核验" in proc.stdout
 
 
 @pytest.mark.skipif(

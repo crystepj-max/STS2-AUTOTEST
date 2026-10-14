@@ -35,7 +35,9 @@ def test_run_mypy_uses_config_file_and_explicit_bin(monkeypatch) -> None:
     check_mypy_baseline._run_mypy(Path("."), "/fixed/bin/mypy", Path("/cfg/mypy-policy.ini"), timeout=10.0)
 
     assert recorded[0][0] == "/fixed/bin/mypy"
-    assert recorded[0][1:3] == ["--config-file", "/cfg/mypy-policy.ini"]
+    # 生产侧是 str(config_file)，POSIX 字面量在 Windows 上会被 Path 规范化成分隔符形式，
+    # 断言按同一规范化比较，否则本机必红（#111 家族）。
+    assert recorded[0][1:3] == ["--config-file", str(Path("/cfg/mypy-policy.ini"))]
     assert recorded[0][3] == "src/sts2_autotest"
 
 

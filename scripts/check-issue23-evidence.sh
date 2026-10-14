@@ -34,6 +34,8 @@ CMD_TIMEOUT="${CHECK_ISSUE23_CMD_TIMEOUT:-15}"
 # （psutil 依赖的安装位置），Windows venv（.venv/Scripts/python.exe）与
 # Unix venv（.venv/bin/python3）均识别；可用 CHECK_ISSUE23_PYTHON 显式指定；
 # psutil 缺失时明确失败而非静默挂起。
+# 约束：凡有中文输出的内嵌 python 调用一律带 -X utf8 —— Windows 默认代码页是 GBK，
+# 不加时中文行会以 GBK 字节写进日志，审阅者读到的 FAIL 行随之不可辨。
 GATE_PYTHON="${CHECK_ISSUE23_PYTHON:-}"
 if [[ -z "$GATE_PYTHON" ]]; then
     if [[ -x "$REPO_ROOT/.venv/Scripts/python.exe" ]]; then
@@ -286,7 +288,7 @@ else
                 # -z NUL 分隔解析，空格路径不拆、不引号化；git status 失败须显式失败）
                 # 注意：bash 命令替换会吞掉 NUL 字节（-z 输出条目被拼接），
                 # 必须直接管道给 python 解析；git 退出码经 PIPESTATUS 捕获
-                untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
+                untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -X utf8 -c '
 import sys
 out = []
 for entry in sys.stdin.buffer.read().split(b"\0"):
@@ -488,7 +490,7 @@ else
 fi
 
 # --- 4. 治理文档 Markdown 相对链接 ---
-broken_links="$("$GATE_PYTHON" - "$GOV_DOC" <<'PY'
+broken_links="$("$GATE_PYTHON" -X utf8 - "$GOV_DOC" <<'PY'
 import re, sys, pathlib, urllib.parse
 doc = pathlib.Path(sys.argv[1])
 base = doc.parent
@@ -863,7 +865,7 @@ PY
     # 外层再套 run_timeout 会把「多次调用累计耗时」误判为超时（网络稍慢即误报）
     # git show HEAD:<path> 需要仓库相对路径
     evidence_rel="${EVIDENCE_DIR#"$REPO_ROOT"/}"
-    ledger_out="$("$GATE_PYTHON" -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$evidence_rel" "$REPO" "$CMD_TIMEOUT" 2>&1)"
+    ledger_out="$("$GATE_PYTHON" -X utf8 -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$evidence_rel" "$REPO" "$CMD_TIMEOUT" 2>&1)"
     if [[ $? -eq 0 ]]; then
         pass "绕过台账核验全部通过"
     else
