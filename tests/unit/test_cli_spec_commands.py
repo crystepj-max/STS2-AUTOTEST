@@ -85,9 +85,14 @@ class TestReviewCmd:
         d.mkdir()
         args = Namespace(command="review", spec_dir=str(d), project=None, output=None, output_dir=None)
         rc = review_cmd(args)
-        assert rc == 0
+        # 2026-10-14 #103 起：一个可执行规格都没有 ⇒ 不再算通过（本 PR 的 #116 行为变更）。
+        # 原先这里断言 rc == 0 与旧文案 "No spec files"，是 review_cmd 改成
+        # `return 0 if all_passed and (cases or suites) else 1` 后遗留的旧期望，
+        # 与本 PR 新增的 test_review_only_unparsed_files_is_not_a_false_pass 相互矛盾。
+        assert rc == 1
         captured = capsys.readouterr()
-        assert "No spec files" in captured.out
+        assert "No executable spec files found" in captured.out
+        assert "No executable specs" in captured.out
 
     def test_review_writes_report_and_revised_drafts(self, tmp_path) -> None:
         specs = tmp_path / "specs"
