@@ -175,6 +175,44 @@ class TestCLICommands:
         assert saved.status == "QUEUED"
         assert saved.request.argv[-2:] == ["--internal-run-id", run_id]
 
+    @pytest.mark.parametrize(
+        ("outcome", "expected"),
+        [
+            ("blocked", "BLOCKED_ENVIRONMENT"),
+            ("product_failure", "FAILED_PRODUCT"),
+            ("success", "PASSED"),
+        ],
+    )
+    def test_detached_suite_classifies_startup_separately_from_product_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, expected: str
+    ) -> None:
+        from sts2_autotest.cli.main import SessionStartBlocked
+        from sts2_autotest.core.run_service import RunRequest, RunStore
+
+        run_root = tmp_path / "runs"
+        monkeypatch.setenv("STS2_AUTOTEST_RUN_ROOT", str(run_root))
+        record = RunStore(run_root).create(RunRequest(suite="smoke"), run_id="run-suite")
+        args = _create_parser().parse_args(
+            ["run", "--suite", "smoke", "--internal-run-id", record.run_id]
+        )
+
+        def fake_foreground(_args):
+            if outcome == "blocked":
+                raise SessionStartBlocked(
+                    "ADAPTER_HEALTH_CHECK_FAILED: Game not running or mod not loaded"
+                )
+            return 1 if outcome == "product_failure" else 0
+
+        monkeypatch.setattr("sts2_autotest.cli.main._run_cmd_foreground", fake_foreground)
+        assert run_cmd(args) == (0 if outcome == "success" else 1)
+        saved = RunStore(run_root).load(record.run_id)
+        assert saved is not None
+        assert saved.status == expected
+        if outcome == "blocked":
+            assert saved.result["reason"] == "ADAPTER_HEALTH_CHECK_FAILED"
+            assert "Game not running" in (saved.message or "")
+            assert "Game not running" in saved.result["detail"]
+
     def test_journey_run_uses_common_journey_entrypoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
         args = _create_parser().parse_args(
             ["run", "--journey", "first_battle", "--character-id", "IRONCLAD"]

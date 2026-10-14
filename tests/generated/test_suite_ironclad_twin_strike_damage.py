@@ -41,7 +41,7 @@ def test_suite_ironclad_twin_strike_damage(autotest, _session_loop):
             "first_failed_case_id": first_failed['case_id'] if first_failed else None,
             "cases": suite_results,
         }
-        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8')
+        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8', newline='\n')
     # Given (TC-IRONCLAD-TWIN-STRIKE-DAMAGE): 已安装并可连接 STS2-Agent（HTTP `http://127.0.0.1:8080`），且调试动作已启用（`STS2_ADAPTER__AGENT__DEBUG_ACTIONS=true`）
     # Given (TC-IRONCLAD-TWIN-STRIKE-DAMAGE): 本用例权威运行路径为 Agent + debug：`give_card` 注入依赖适配器调试能力，STS2-Cli-Mod（`sts2` CLI）无该命令通道，不作为本用例通过路径
     # Given (TC-IRONCLAD-TWIN-STRIKE-DAMAGE): 游戏可被启动并加载到主菜单
