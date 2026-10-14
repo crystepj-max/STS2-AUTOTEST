@@ -533,9 +533,11 @@ class TestOrchestrator:
         → available_actions non-empty (MVP uses stub adapter).
         """
         logger.info("Starting test session...")
+        self.start_failure_reason: str | None = None
 
         # Checkpoint 0: process-level mutex lock
         if self._lock_manager is not None and not self._lock_manager.acquire_lock(timeout=0):
+            self.start_failure_reason = "SESSION_BUSY: another session holds the game lock"
             logger.error("Another session is running — lock file held: %s", self._lock_path)
             return False
 
@@ -543,6 +545,7 @@ class TestOrchestrator:
         health = await self.adapter.health_check()
         if not health.healthy:
             await self._record_adapter_result(False)
+            self.start_failure_reason = f"ADAPTER_HEALTH_CHECK_FAILED: {health.message}"
             logger.error("Adapter health check failed: %s", health.message)
             self.evidence.on_session_end({
                 "total": 0, "passed": 0, "failed": 0,
@@ -556,6 +559,7 @@ class TestOrchestrator:
         # Checkpoint 2: state readable and known (with validation)
         state = await self._get_state_validated()
         if state.screen == GameScreen.UNKNOWN:
+            self.start_failure_reason = "GAME_STATE_UNKNOWN: cannot read game state"
             logger.error("Game state is UNKNOWN — cannot proceed")
             self._release_lock_if_held()
             return False
@@ -571,6 +575,7 @@ class TestOrchestrator:
             if state.screen == GameScreen.MAIN_MENU:
                 logger.info("Auto-reset succeeded — now at MAIN_MENU")
             else:
+                self.start_failure_reason = "MAIN_MENU_UNREACHABLE: auto-reset failed"
                 logger.error(
                     "Auto-reset did not reach MAIN_MENU (currently %s) — aborting session",
                     state.screen.value,
@@ -580,6 +585,7 @@ class TestOrchestrator:
 
         # Checkpoint 4: game is actionable
         if not await self.wait_until_actionable(timeout=self._game_startup_timeout):
+            self.start_failure_reason = "GAME_NOT_ACTIONABLE: startup timeout"
             logger.error("Game did not become actionable before timeout")
             self._release_lock_if_held()
             return False
@@ -607,6 +613,7 @@ class TestOrchestrator:
                     if post_abandon.screen == GameScreen.MAIN_MENU:
                         state = post_abandon
                         if not await self.wait_until_actionable(timeout=self._game_startup_timeout):
+                            self.start_failure_reason = "GAME_NOT_ACTIONABLE: after abandon_run"
                             logger.error("Game not actionable after abandon_run")
                             self._release_lock_if_held()
                             return False

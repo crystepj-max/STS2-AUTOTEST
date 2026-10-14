@@ -602,7 +602,7 @@ class TestRunTest:
             stderr="",
         )
 
-        result = run_tests_in_dir(tmp_path, timeout=60)
+        result = run_tests_in_dir(tmp_path, timeout=60, output_dir=tmp_path / "reports")
 
         cmd = mock_run.call_args.args[0]
         assert cmd[0] == sys.executable

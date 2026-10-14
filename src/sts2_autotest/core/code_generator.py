@@ -451,7 +451,7 @@ class CodeGenerator:
         lines.append("            \"first_failed_case_id\": first_failed['case_id'] if first_failed else None,")
         lines.append("            \"cases\": suite_results,")
         lines.append("        }")
-        lines.append("        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8')")
+        lines.append("        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8', newline='\\n')")
 
         included_specs = [specs[case_id] for case_id in suite.includes if case_id in specs]
         if not included_specs:
@@ -520,7 +520,7 @@ class CodeGenerator:
         out_file = path / f"test_{func_name}.py"
 
         code = self.generate_case_test(spec)
-        out_file.write_text(code, encoding="utf-8")
+        out_file.write_text(code, encoding="utf-8", newline="\n")
         return str(out_file)
 
     def _generate_skipped_test(

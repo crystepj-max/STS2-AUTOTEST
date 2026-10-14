@@ -41,7 +41,7 @@ def test_suite_first_battle_smoke(autotest, _session_loop):
             "first_failed_case_id": first_failed['case_id'] if first_failed else None,
             "cases": suite_results,
         }
-        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8')
+        summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8', newline='\n')
     # Given (TC-PREPARE-NEW-RUN): 已安装并可连接 STS2-Cli-Mod
     # Given (TC-PREPARE-NEW-RUN): 游戏可被启动
     # Given (TC-PREPARE-NEW-RUN): 如存在旧 run，框架应负责回收并回到可重新开局状态

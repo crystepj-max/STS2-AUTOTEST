@@ -370,7 +370,7 @@ class EvidencePackager:
 
         tmp = report_path.with_suffix(".md.tmp")
         try:
-            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
             os.replace(str(tmp), str(report_path))
         except OSError:
             try:
@@ -448,7 +448,7 @@ class EvidencePackager:
         if summary is not None:
             junit_xml = _generate_junit_xml(summary)
             try:
-                junit_path.write_text(junit_xml, encoding="utf-8")
+                junit_path.write_text(junit_xml, encoding="utf-8", newline="\n")
             except OSError:
                 logger.warning("Failed to write JUnit XML for %s", pack_id)
 
@@ -530,7 +530,7 @@ class EvidencePackager:
 
         tmp = markdown_path.with_suffix(".md.tmp")
         try:
-            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
             os.replace(str(tmp), str(markdown_path))
         except OSError:
             try:
@@ -561,6 +561,7 @@ class EvidencePackager:
             tmp.write_text(
                 json.dumps(data, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
+                newline="\n",
             )
             os.replace(str(tmp), str(path))
         except OSError:

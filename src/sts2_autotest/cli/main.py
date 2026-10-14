@@ -286,6 +286,10 @@ def _run_orchestrator(
 
 
 
+class SessionStartBlocked(RuntimeError):
+    """会话在执行测试用例前未能满足启动条件。"""
+
+
 def _run_orchestrator_with_adapter(
     adapter: GameAdapterProtocol,
     case_ids: list[str],
@@ -346,7 +350,11 @@ def _run_orchestrator_with_adapter(
     try:
         summary = loop.run_until_complete(orch.run_all(case_ids))
         if summary.session_id == "failed-start":
-            print("[autotest] ERROR: Failed to start session — adapter not ready.")
+            # 兜底值表示启动前检查未通过但没有可细分的原因；仍属环境阻塞。
+            reason = orch.start_failure_reason or "SESSION_START_PRECHECK_FAILED"
+            if run_id:
+                raise SessionStartBlocked(reason)
+            print(f"[autotest] ERROR: Failed to start session — {reason}")
             return 1
         print(f"[autotest] {summary.passed} passed, {summary.failed} failed, "
               f"{summary.crashed} crashed, {summary.skipped} skipped")
@@ -517,12 +525,12 @@ def _write_review_artifacts(
     root = Path(output_dir)
     revised_dir = root / "revised"
     revised_dir.mkdir(parents=True, exist_ok=True)
-    (root / "review-report.md").write_text(report_markdown + "\n", encoding="utf-8")
+    (root / "review-report.md").write_text(report_markdown + "\n", encoding="utf-8", newline="\n")
 
     source_map: dict[str, dict[str, Any]] = {}
     for draft in drafts:
         draft_path = revised_dir / f"{draft.spec_id}.md"
-        draft_path.write_text(draft.markdown_content, encoding="utf-8")
+        draft_path.write_text(draft.markdown_content, encoding="utf-8", newline="\n")
         source_map[draft.spec_id] = {
             "original_path": draft.original_path,
             "revised_path": str(draft_path),
@@ -531,6 +539,7 @@ def _write_review_artifacts(
     (revised_dir / ".source-map.json").write_text(
         json.dumps(source_map, indent=2, ensure_ascii=False),
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -693,7 +702,7 @@ def compile_cmd(args: Any) -> int:
     for suite in suites:
         suite_code = generator.generate_suite_test(suite, specs_by_id)
         suite_path = os.path.join(output_dir, f"test_{suite.id.lower().replace('-', '_')}.py")
-        with open(suite_path, "w", encoding="utf-8") as f:
+        with open(suite_path, "w", encoding="utf-8", newline="\n") as f:
             f.write(suite_code)
         generated.append(suite_path)
         print(f"  [GENERATED] {suite_path}")
@@ -979,6 +988,22 @@ def run_cmd(args: Any) -> int:
         )
         return rc
     except RunCancelled:
+        return 1
+    except SessionStartBlocked as exc:
+        reason = str(exc)
+        complete_record(
+            store,
+            internal_run_id,
+            exit_code=1,
+            result={
+                "status": "BLOCKED_ENVIRONMENT",
+                "blocked": True,
+                "reason": reason.split(":", 1)[0],
+                "detail": reason,
+            },
+            message=reason,
+        )
+        print(f"[autotest] persistent run blocked: {reason}")
         return 1
     except Exception as exc:
         complete_record(
@@ -1519,6 +1544,7 @@ def _report_from_store(evidence_dir: Path, run_id: str, store_run: Path) -> int:
         (out_dir / RUN_RESULT_FILENAME).write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
+            newline="\n",
         )
     except OSError as exc:
         print(f"[autotest] Failed to persist synthesized run-result.json: {exc}")
@@ -1660,6 +1686,7 @@ def _write_json_output(path: Path, payload: dict[str, Any]) -> None:
     tmp_file.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
+        newline="\n",
     )
     os.replace(str(tmp_file), str(path))
 
