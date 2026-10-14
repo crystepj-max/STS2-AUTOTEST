@@ -157,7 +157,7 @@ class MarkdownParser:
         )
 
     def discover_specs(
-        self, spec_dir: str
+        self, spec_dir: str, *, skipped: list[tuple[str, str]] | None = None
     ) -> tuple[list[TestSpec], list[SuiteSpec]]:
         """Scan a directory recursively for ``.md`` spec files, parse them, and split into cases/suites."""
         cases: list[TestSpec] = []
@@ -174,8 +174,10 @@ class MarkdownParser:
                     cases.append(self.parse_case(text, source_path=str(f)))
                 elif level == "suite":
                     suites.append(self.parse_suite(text, source_path=str(f)))
-            except (ParsingError, UnicodeDecodeError, PermissionError):
-                continue  # skip files that don't match the spec format or can't be read
+            except (ParsingError, UnicodeDecodeError, PermissionError) as exc:
+                if skipped is not None:
+                    skipped.append((str(f), str(exc)))
+                continue  # 调用方可通过 skipped 查看未解析文件及具体原因
         return cases, suites
 
     def _parse_section_text(self, markdown: str, name: str) -> str:

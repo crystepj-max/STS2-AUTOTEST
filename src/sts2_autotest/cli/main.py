@@ -596,11 +596,8 @@ def review_cmd(args: Any) -> int:
         return 1
 
     parser = MarkdownParser()
-    cases, suites = parser.discover_specs(spec_dir)
-
-    if not cases and not suites:
-        print(f"[autotest] No spec files found in {spec_dir}")
-        return 0
+    skipped: list[tuple[str, str]] = []
+    cases, suites = parser.discover_specs(spec_dir, skipped=skipped)
 
     reviewer = SpecReviewer()
     all_passed = True
@@ -611,6 +608,13 @@ def review_cmd(args: Any) -> int:
         output_lines.append(line)
 
     _out(f"[autotest] Reviewing {len(cases)} case(s), {len(suites)} suite(s) in {spec_dir}\n")
+    if skipped:
+        _out(f"[autotest] WARNING: {len(skipped)} Markdown file(s) not parsed or reviewed:")
+        for path, reason in skipped:
+            _out(f"  [SKIPPED] {path}: {reason}")
+        _out("  Unparsed files are not automatic acceptance evidence.\n")
+    if not cases and not suites:
+        _out(f"[autotest] No executable spec files found in {spec_dir}")
 
     for spec in cases:
         report = reviewer.review(spec)
@@ -634,7 +638,8 @@ def review_cmd(args: Any) -> int:
             for issue in report.issues:
                 _out(f"         - [{issue.category.value}] {issue.location}: {issue.description}")
 
-    _out(f"\n[autotest] Review complete. {'All passed' if all_passed else 'Some issues found'}.")
+    conclusion = "No executable specs" if not cases and not suites else ("All parsed specs passed" if all_passed else "Some parsed specs have issues")
+    _out(f"\n[autotest] Review complete. {conclusion}.")
 
     output = "\n".join(output_lines)
     output_path = getattr(args, "output", None)
@@ -648,7 +653,7 @@ def review_cmd(args: Any) -> int:
     if isinstance(output_dir, str) and output_dir:
         _write_review_artifacts(output_dir, output, revised_drafts)
 
-    return 0 if all_passed else 1
+    return 0 if all_passed and (cases or suites) else 1
 
 
 def compile_cmd(args: Any) -> int:

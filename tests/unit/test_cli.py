@@ -17,6 +17,7 @@ from sts2_autotest.cli.main import (
     progress_cmd,
     queue_cmd,
     report_cmd,
+    review_cmd,
     run_cmd,
     visual_qa_cmd,
 )
@@ -116,6 +117,32 @@ class TestCLIParser:
         assert args.low_brightness_threshold == DEFAULT_LOW_BRIGHTNESS_THRESHOLD
         assert args.high_brightness_threshold == DEFAULT_HIGH_BRIGHTNESS_THRESHOLD
         assert args.output == "/tmp/visual-qa.json"
+
+
+class TestReviewSkipVisibility:
+    def test_review_displays_skipped_files_and_keeps_valid_specs(self, tmp_path, capsys) -> None:
+        spec_dir = tmp_path / "specs"
+        spec_dir.mkdir()
+        (spec_dir / "TC-OK.md").write_text(
+            "# TC-OK 测试\n\n## Metadata\n- id: TC-OK\n- level: case\n",
+            encoding="utf-8",
+        )
+        (spec_dir / "CHECKLIST.md").write_text("# 人工清单\n", encoding="utf-8")
+        args = _create_parser().parse_args(["review", "--spec-dir", str(spec_dir)])
+        review_cmd(args)
+        out = capsys.readouterr().out
+        assert "[SKIPPED]" in out
+        assert "CHECKLIST.md" in out
+        assert "No level found: no Metadata section" in out
+        assert "Reviewing 1 case(s)" in out
+
+    def test_review_only_unparsed_files_is_not_a_false_pass(self, tmp_path, capsys) -> None:
+        (tmp_path / "CHECKLIST.md").write_text("# 人工清单\n", encoding="utf-8")
+        args = _create_parser().parse_args(["review", "--spec-dir", str(tmp_path)])
+        assert review_cmd(args) == 1
+        out = capsys.readouterr().out
+        assert "CHECKLIST.md" in out
+        assert "No executable specs" in out
 
 
 class TestCLICommands:
