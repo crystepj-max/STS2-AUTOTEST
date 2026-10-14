@@ -77,7 +77,7 @@ bash scripts/check-env-gitignore.sh
 bash scripts/check-issue23-evidence.sh
 ```
 
-验证基线（2026-07-17 实测）：`tests/unit/` 1552 个测试全部通过；`lint-imports` 契约通过。若当前环境无法执行某条命令，可接受用户、CI 或其他来源的外部证据，但必须明确写明。
+验证基线按平台区分，不把 macOS 结果当作 Windows 达标线。2026-07-17 macOS 实测：`tests/unit/` 1552 个测试全部通过，`lint-imports` 契约通过。2026-10-12～13 开发者 Windows 11 两轮实测：1971 passed / 72 failed / 3 skipped（修复前快照；失败集一致），`mypy --strict` 13 errors in 5 files，`lint-imports` 通过；这些是本机观察，不代表 GitHub Windows runner 的可清退基线。跨平台已登记条目见 `.github/pytest-baseline.json`，只有对应平台 CI 实证后才能清退；新增失败不得直接加白。若当前环境无法执行某条命令，可接受用户、CI 或其他来源的外部证据，但必须明确写明。
 
 ## 架构与模块划分
 

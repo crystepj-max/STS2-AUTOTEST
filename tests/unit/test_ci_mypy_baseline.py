@@ -35,7 +35,9 @@ def test_run_mypy_uses_config_file_and_explicit_bin(monkeypatch) -> None:
     check_mypy_baseline._run_mypy(Path("."), "/fixed/bin/mypy", Path("/cfg/mypy-policy.ini"), timeout=10.0)
 
     assert recorded[0][0] == "/fixed/bin/mypy"
-    assert recorded[0][1:3] == ["--config-file", "/cfg/mypy-policy.ini"]
+    # 生产侧是 str(config_file)，POSIX 字面量在 Windows 上会被 Path 规范化成分隔符形式，
+    # 断言按同一规范化比较，否则本机必红（#111 家族）。
+    assert recorded[0][1:3] == ["--config-file", str(Path("/cfg/mypy-policy.ini"))]
     assert recorded[0][3] == "src/sts2_autotest"
 
 
@@ -74,14 +76,14 @@ def test_main_passes_config_and_separate_bins(monkeypatch, tmp_path) -> None:
 
     assert rc == 0
     # 基线用 baseline venv 的 mypy + 同一 policy 配置；当前用 current venv 的 mypy
-    assert commands[0][0] == "/venv-baseline/bin/mypy"
+    assert commands[0][0] == str(Path("/venv-baseline/bin/mypy").resolve())
     assert commands[0][1:3] == ["--config-file", str(config_file)]
-    assert commands[1][0] == "/venv-current/bin/mypy"
+    assert commands[1][0] == str(Path("/venv-current/bin/mypy").resolve())
     assert commands[1][1:3] == ["--config-file", str(config_file)]
 
 
 def test_resolve_tool_bin_prefers_explicit() -> None:
-    assert check_mypy_baseline._resolve_tool_bin("/explicit/mypy", "mypy") == "/explicit/mypy"
+    assert check_mypy_baseline._resolve_tool_bin("/explicit/mypy", "mypy") == str(Path("/explicit/mypy").resolve())
 
 
 def _run_main_with_findings(
