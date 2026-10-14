@@ -286,6 +286,10 @@ def _run_orchestrator(
 
 
 
+class SessionStartBlocked(RuntimeError):
+    """会话在执行测试用例前未能满足启动条件。"""
+
+
 def _run_orchestrator_with_adapter(
     adapter: GameAdapterProtocol,
     case_ids: list[str],
@@ -346,7 +350,11 @@ def _run_orchestrator_with_adapter(
     try:
         summary = loop.run_until_complete(orch.run_all(case_ids))
         if summary.session_id == "failed-start":
-            print("[autotest] ERROR: Failed to start session — adapter not ready.")
+            # 兜底值表示启动前检查未通过但没有可细分的原因；仍属环境阻塞。
+            reason = orch.start_failure_reason or "SESSION_START_PRECHECK_FAILED"
+            if run_id:
+                raise SessionStartBlocked(reason)
+            print(f"[autotest] ERROR: Failed to start session — {reason}")
             return 1
         print(f"[autotest] {summary.passed} passed, {summary.failed} failed, "
               f"{summary.crashed} crashed, {summary.skipped} skipped")
@@ -979,6 +987,22 @@ def run_cmd(args: Any) -> int:
         )
         return rc
     except RunCancelled:
+        return 1
+    except SessionStartBlocked as exc:
+        reason = str(exc)
+        complete_record(
+            store,
+            internal_run_id,
+            exit_code=1,
+            result={
+                "status": "BLOCKED_ENVIRONMENT",
+                "blocked": True,
+                "reason": reason.split(":", 1)[0],
+                "detail": reason,
+            },
+            message=reason,
+        )
+        print(f"[autotest] persistent run blocked: {reason}")
         return 1
     except Exception as exc:
         complete_record(
