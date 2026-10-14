@@ -111,6 +111,7 @@ def test_git_error_not_treated_as_untracked(tmp_path: Path) -> None:
 
     env = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
     env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+    env["CHECK_ENV_GITIGNORE_GIT"] = str(fake_git)
 
     proc = psutil.Popen(
         ["bash", "scripts/check-env-gitignore.sh"],
@@ -172,6 +173,7 @@ def test_script_self_limits_when_git_stuck(tmp_path: Path) -> None:
 
     env = {k: v for k, v in os.environ.items() if k != "LC_ALL"}
     env["PATH"] = str(fake_bin) + os.pathsep + env.get("PATH", "")
+    env["CHECK_ENV_GITIGNORE_GIT"] = str(fake_git)
     env["CHECK_ENV_GITIGNORE_CMD_TIMEOUT"] = "2"
 
     proc = psutil.Popen(

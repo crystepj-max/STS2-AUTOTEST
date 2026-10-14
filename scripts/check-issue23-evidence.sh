@@ -34,6 +34,8 @@ CMD_TIMEOUT="${CHECK_ISSUE23_CMD_TIMEOUT:-15}"
 # （psutil 依赖的安装位置），Windows venv（.venv/Scripts/python.exe）与
 # Unix venv（.venv/bin/python3）均识别；可用 CHECK_ISSUE23_PYTHON 显式指定；
 # psutil 缺失时明确失败而非静默挂起。
+# 约束：凡有中文输出的内嵌 python 调用一律带 -X utf8 —— Windows 默认代码页是 GBK，
+# 不加时中文行会以 GBK 字节写进日志，审阅者读到的 FAIL 行随之不可辨。
 GATE_PYTHON="${CHECK_ISSUE23_PYTHON:-}"
 if [[ -z "$GATE_PYTHON" ]]; then
     if [[ -x "$REPO_ROOT/.venv/Scripts/python.exe" ]]; then
@@ -53,7 +55,7 @@ cd "$REPO_ROOT"
 # 超时 → 终止整棵进程树（AGENTS.md 防僵尸/防遗留）并返回 142（128+SIGTERM 惯例）；
 # 正常结束 → 返回命令退出码。
 run_timeout() {
-    "$GATE_PYTHON" - "$CMD_TIMEOUT" "$@" <<'PY'
+    "$GATE_PYTHON" -X utf8 - "$CMD_TIMEOUT" "$@" <<'PY'
 import os, signal
 
 try:
@@ -165,7 +167,7 @@ PY
 # 输出必须剥 CR：Windows 上 Python 的文本 stdout 会把 \n 写成 \r\n，带着 CR 与
 # 仓库文本比较会得到「打印完全相同却判不一致」的假失败。
 json_field() {
-    printf '%s' "$1" | "$GATE_PYTHON" -c "import json,sys; d=json.load(sys.stdin); print($2)" | tr -d '\r'
+    printf '%s' "$1" | "$GATE_PYTHON" -X utf8 -c "import json,sys; d=json.load(sys.stdin); print($2)" | tr -d '\r'
 }
 
 # 批量提取：一次解释器进程内按顺序求值多条表达式，各输出一行。
@@ -174,7 +176,7 @@ json_field() {
 json_fields() {
     local payload="$1"
     shift
-    printf '%s' "$payload" | "$GATE_PYTHON" -c '
+    printf '%s' "$payload" | "$GATE_PYTHON" -X utf8 -c '
 import fnmatch, json, sys
 
 d = json.load(sys.stdin)
@@ -286,7 +288,7 @@ else
                 # -z NUL 分隔解析，空格路径不拆、不引号化；git status 失败须显式失败）
                 # 注意：bash 命令替换会吞掉 NUL 字节（-z 输出条目被拼接），
                 # 必须直接管道给 python 解析；git 退出码经 PIPESTATUS 捕获
-                untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -c '
+                untracked_env="$(run_timeout git status --porcelain -z --untracked-files=all | "$GATE_PYTHON" -X utf8 -c '
 import sys
 out = []
 for entry in sys.stdin.buffer.read().split(b"\0"):
@@ -488,7 +490,7 @@ else
 fi
 
 # --- 4. 治理文档 Markdown 相对链接 ---
-broken_links="$("$GATE_PYTHON" - "$GOV_DOC" <<'PY'
+broken_links="$("$GATE_PYTHON" -X utf8 - "$GOV_DOC" <<'PY'
 import re, sys, pathlib, urllib.parse
 doc = pathlib.Path(sys.argv[1])
 base = doc.parent
@@ -863,7 +865,7 @@ PY
     # 外层再套 run_timeout 会把「多次调用累计耗时」误判为超时（网络稍慢即误报）
     # git show HEAD:<path> 需要仓库相对路径
     evidence_rel="${EVIDENCE_DIR#"$REPO_ROOT"/}"
-    ledger_out="$("$GATE_PYTHON" -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$evidence_rel" "$REPO" "$CMD_TIMEOUT" 2>&1)"
+    ledger_out="$("$GATE_PYTHON" -X utf8 -c "$ledger_code" "$EVIDENCE_JSON" "$EVIDENCE_DIR" "$evidence_rel" "$REPO" "$CMD_TIMEOUT" 2>&1)"
     if [[ $? -eq 0 ]]; then
         pass "绕过台账核验全部通过"
     else
