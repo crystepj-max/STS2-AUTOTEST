@@ -85,6 +85,15 @@ _bmad-output/
 
 # Codex local config
 .agents/
+# 仅跟踪本仓共享的报告技能包；其他本地 Agent 配置继续忽略
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/test-report-html/
+!.agents/skills/test-report-html/**
+.agents/skills/test-report-html/**/.env
+.agents/skills/test-report-html/**/.env.*
 
 # Editor local config
 .vscode/

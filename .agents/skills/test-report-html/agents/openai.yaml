@@ -1,0 +1,3 @@
+display_name: HTML 测试报告
+short_description: 生成标准化 HTML 测试报告，含案例、步骤、凭证展示。
+default_prompt: 使用 test-report-html skill 生成 HTML 测试报告。
